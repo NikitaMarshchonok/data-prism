@@ -6,6 +6,7 @@ from src.kpi_generator import generate_dynamic_kpis  # ✅ Кастомные KP
 import plotly.figure_factory as ff
 from pandas.api.types import is_numeric_dtype
 from src.ai_summary import generate_ai_summary_openai
+from src.ml_predictor import predict_target
 
 
 import os
@@ -120,11 +121,9 @@ def generate_sparklines(df):
     return sparklines
 
 
-def generate_dashboard_data():
-    latest_file = 'data/uploads/latest_uploaded.csv'
-    df, _ = load_data(latest_file)
+def generate_dashboard_data(df, target_column=None):
     if df is None:
-        return {}, [], [], ""
+        return {}, [], [], "", {}, "", None
 
 
 
@@ -413,8 +412,20 @@ def generate_dashboard_data():
     # 🧠 Генерация AI Summary
     ai_summary = generate_ai_summary_openai(df)
 
+    # 🎯 ML-предсказание
+    try:
+        ml_result = predict_target(df)
+        ml_card = {
+            "target": ml_result.get("target_col", "Не определена"),
+            "metric": ml_result.get("metric", "Нет метрики"),
+            "plot": ml_result.get("feature_importance_plot", None)
+        }
+    except Exception as e:
+        ml_card = None
+        print(f"❌ Ошибка при ML-предсказании: {e}")
 
 
-    return kpis, top_charts, tables, summary, sparklines, ai_summary
+
+    return kpis, top_charts, tables, summary, sparklines, ai_summary, ml_card
 
 

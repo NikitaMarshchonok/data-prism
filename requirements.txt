@@ -12,3 +12,6 @@ openai
 python-dotenv
 markdown
 gpt4free
+scikit-learn
+matplotlib
+xgboost

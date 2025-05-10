@@ -191,6 +191,37 @@
 </div>
 {% endif %}
 
+<h1>📊 BI-Дэшборд по данным</h1>
+
+<!-- 🎯 Dropdown для выбора целевой переменной -->
+<form method="POST" action="/dashboard" style="margin-bottom: 20px;">
+    <label for="target_column" style="color: white; font-weight: bold;">
+        🎯 Выберите целевую переменную:
+    </label>
+    <select id="target_column" name="target_column" onchange="this.form.submit()" style="margin-left: 10px; padding: 5px; font-size: 14px;">
+        {% for col in selectable_columns %}
+            <option value="{{ col }}" {% if col == selected_target %}selected{% endif %}>{{ col }}</option>
+        {% endfor %}
+    </select>
+</form>
+
+
+
+
+<!-- 🎯 ML-предсказание -->
+{% if ml_card %}
+<div style="background-color: #1e2a3b; padding: 20px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+    <h2 style="color: #00cec9;">🎯 ML-предсказание</h2>
+    <p><strong>Целевая переменная:</strong> {{ ml_card.target }}</p>
+    <p><strong>Метрика модели:</strong> {{ ml_card.metric }}</p>
+    {% if ml_card.plot %}
+        <img src="{{ ml_card.plot }}" style="max-width: 100%; border-radius: 10px; margin-top: 10px;">
+    {% else %}
+        <p>❌ Нет графика важности признаков.</p>
+    {% endif %}
+</div>
+{% endif %}
+
 
 <!-- 🔹 KPI -->
 <div id="kpi" class="kpi-container">

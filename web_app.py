@@ -146,11 +146,27 @@ def download_pdf():
 
 # ✅ Маршрут: BI-дэшборд
 @app.route('/dashboard')
+@app.route('/dashboard', methods=['GET', 'POST'])
 def show_dashboard():
+    from src.data_loader import load_data
     from src.dashboard_generator import generate_dashboard_data
 
+    # Загружаем данные
+    df, _ = load_data('data/uploads/latest_uploaded.csv')
+    if df is None:
+        return "<h2>❌ Ошибка загрузки данных</h2>"
+
+    # Получаем список подходящих колонок для целевой переменной
+    selectable_columns = [col for col in df.columns if df[col].nunique() >= 2]
+
+    # Обработка выбора пользователя
+    selected_target = request.form.get('target_column')
+    if not selected_target or selected_target not in df.columns:
+        selected_target = selectable_columns[0] if selectable_columns else None
+
     try:
-        kpis, top_charts, tables, summary, sparklines, ai_summary = generate_dashboard_data()
+        # Генерация данных для дашборда
+        kpis, top_charts, tables, summary, sparklines, ai_summary, ml_card = generate_dashboard_data(df, selected_target)
 
         return render_template(
             'dashboard.html',
@@ -159,7 +175,10 @@ def show_dashboard():
             tables=tables,
             summary=summary,
             sparklines=sparklines,
-            ai_summary=ai_summary
+            ai_summary=ai_summary,
+            ml_card=ml_card,
+            selectable_columns=selectable_columns,
+            selected_target=selected_target
         )
     except Exception as e:
         return f"<h2>❌ Ошибка при загрузке дашборда:</h2><pre>{e}</pre>"
