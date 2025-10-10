@@ -22,23 +22,23 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ### 🔹 General Dashboard Overview
 
-https://github.com/NikitaMarshchonok/data-prism/blob/c5583592b4699a1f7363331a420ba2cad5e9e622/5.png
+
 
 ---
 
 ### 🔹 Graphs: Distribution & Category Frequencies
 
-https://github.com/NikitaMarshchonok/data-prism/blob/c5583592b4699a1f7363331a420ba2cad5e9e622/6.png
+
 
 ---
 
 ### 🔹 Correlation Matrix and Raw Data Table
 
-https://github.com/NikitaMarshchonok/data-prism/blob/c5583592b4699a1f7363331a420ba2cad5e9e622/3.png
+
 ---
 
 ### 🔹 Gauge Indicators
-https://github.com/NikitaMarshchonok/data-prism/blob/c5583592b4699a1f7363331a420ba2cad5e9e622/4.png
+
 
 ---
 
@@ -88,4 +88,5 @@ New features, performance optimizations, and visual enhancements will be added o
 - [ ] Improve mobile layout and responsiveness
 
 Stay tuned for updates! 🚀
+
 
