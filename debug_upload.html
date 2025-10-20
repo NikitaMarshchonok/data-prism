@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VibeDash Debug Upload</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 40px; 
+            background: #1a1a1a; 
+            color: white; 
+            line-height: 1.6;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        .form-group { margin: 20px 0; }
+        input, textarea, button { 
+            padding: 12px; 
+            margin: 8px 0; 
+            border-radius: 8px; 
+            border: 1px solid #555;
+            font-size: 14px;
+        }
+        input[type="file"] { 
+            background: #333; 
+            color: white; 
+            border: 2px dashed #555;
+            padding: 20px;
+            text-align: center;
+        }
+        textarea { 
+            width: 100%; 
+            background: #333; 
+            color: white; 
+            min-height: 100px;
+            resize: vertical;
+        }
+        button { 
+            background: #0066cc; 
+            color: white; 
+            border: none; 
+            cursor: pointer; 
+            font-weight: bold;
+            padding: 15px 30px;
+        }
+        button:hover { background: #0052a3; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        .status { 
+            margin: 15px 0; 
+            padding: 15px; 
+            border-radius: 8px; 
+            font-weight: bold;
+        }
+        .success { background: #2d5a2d; }
+        .error { background: #5a2d2d; }
+        .info { background: #2d4a5a; }
+        .warning { background: #5a4a2d; }
+        .debug { 
+            margin: 20px 0; 
+            padding: 15px; 
+            background: #333; 
+            border-radius: 8px; 
+            font-family: 'Courier New', monospace; 
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .file-info {
+            background: #2d4a2d;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        h1 { color: #4ade80; text-align: center; }
+        h2 { color: #60a5fa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 VibeDash Upload Debug Tool</h1>
+        
+        <div id="status" class="status info">
+            Ready to test file upload...
+        </div>
+        
+        <form id="testForm" method="POST" action="http://localhost:5001/vibedash/preview" enctype="multipart/form-data">
+            <div class="form-group">
+                <h2>📁 Step 1: Select CSV File</h2>
+                <input type="file" id="datafile" name="datafile" accept=".csv" required>
+                <div id="fileInfo"></div>
+            </div>
+            
+            <div class="form-group">
+                <h2>💭 Step 2: Describe what you want</h2>
+                <textarea id="prompt" name="prompt" required 
+                          placeholder="For example: Create a sales dashboard with main KPIs, top 10 categories by revenue, monthly trends and region filters">Create a sales dashboard with main KPIs, top categories, and trends</textarea>
+            </div>
+            
+            <div class="form-group">
+                <h2>🚀 Step 3: Submit</h2>
+                <button type="submit" id="submitBtn">Upload & Generate Dashboard</button>
+                <div id="loadingIndicator" style="display: none; margin-top: 10px; text-align: center;">
+                    <div style="font-size: 24px; animation: spin 1s linear infinite;">⏳</div>
+                    <div>Processing your request...</div>
+                </div>
+            </div>
+        </form>
+        
+        <div class="debug">
+            <strong>🔍 Debug Console:</strong><br>
+            <div id="debugContent">Waiting for form interaction...</div>
+        </div>
+        
+        <div class="form-group">
+            <h2>📋 Test Files Available:</h2>
+            <ul>
+                <li><code>data/demo_sales.csv</code> - Small test file (1KB)</li>
+                <li><code>data/large_test_data.csv</code> - Large test file (24MB)</li>
+                <li>Or upload your own CSV file</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        const form = document.getElementById('testForm');
+        const fileInput = document.getElementById('datafile');
+        const promptInput = document.getElementById('prompt');
+        const submitBtn = document.getElementById('submitBtn');
+        const statusDiv = document.getElementById('status');
+        const debugDiv = document.getElementById('debugContent');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        
+        function updateStatus(message, type = 'info') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+        
+        function addDebug(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            debugDiv.innerHTML += `<span style="color: #888;">[${timestamp}]</span> ${message}<br>`;
+            debugDiv.scrollTop = debugDiv.scrollHeight;
+        }
+        
+        // File selection handler
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
+                addDebug(`✅ File selected: ${file.name} (${fileSizeMB} MB)`);
+                
+                const fileInfoDiv = document.getElementById('fileInfo');
+                fileInfoDiv.innerHTML = `
+                    <div class="file-info">
+                        <strong>Selected File:</strong> ${file.name}<br>
+                        <strong>Size:</strong> ${fileSizeMB} MB<br>
+                        <strong>Type:</strong> ${file.type || 'text/csv'}
+                    </div>
+                `;
+                
+                updateStatus(`File selected: ${file.name}`, 'success');
+            } else {
+                addDebug('❌ No file selected');
+                document.getElementById('fileInfo').innerHTML = '';
+                updateStatus('No file selected', 'error');
+            }
+        });
+        
+        // Form submission handler
+        form.addEventListener('submit', function(e) {
+            addDebug('🚀 Form submit event triggered');
+            
+            // Validation
+            if (fileInput.files.length === 0) {
+                e.preventDefault();
+                addDebug('❌ Validation failed: No file selected');
+                updateStatus('Please select a file first!', 'error');
+                return false;
+            }
+            
+            if (!promptInput.value.trim()) {
+                e.preventDefault();
+                addDebug('❌ Validation failed: No prompt provided');
+                updateStatus('Please provide a description!', 'error');
+                return false;
+            }
+            
+            addDebug('✅ Form validation passed');
+            addDebug(`📤 Submitting to: ${form.action}`);
+            addDebug(`📁 File: ${fileInput.files[0].name}`);
+            addDebug(`💭 Prompt: ${promptInput.value.substring(0, 50)}...`);
+            
+            // Show loading state
+            submitBtn.disabled = true;
+            submitBtn.textContent = '⏳ Uploading...';
+            loadingIndicator.style.display = 'block';
+            updateStatus('Uploading file to server...', 'info');
+            
+            addDebug('🔄 Form submission allowed - browser will handle the request');
+        });
+        
+        // Initial setup
+        addDebug('🔧 Debug tool initialized');
+        addDebug(`🌐 Target URL: ${form.action}`);
+        addDebug(`📝 Form method: ${form.method}`);
+        addDebug(`📦 Form enctype: ${form.enctype}`);
+        addDebug('👆 Ready for testing - select a file and submit!');
+        
+        // Add CSS for spinner animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>

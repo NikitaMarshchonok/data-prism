@@ -1,0 +1,120 @@
+/* VibeDash Custom Styles */
+
+/* Chart containers */
+.chart-container {
+    min-height: 400px;
+}
+
+/* Plotly chart styling */
+.plotly-graph-div {
+    background: transparent !important;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #374151;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #6B7280;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #9CA3AF;
+}
+
+/* Table styling */
+table {
+    border-collapse: collapse;
+}
+
+th, td {
+    border-bottom: 1px solid #4B5563;
+}
+
+tr:hover {
+    background-color: #374151;
+}
+
+/* Button hover effects */
+button:hover {
+    transform: translateY(-1px);
+    transition: transform 0.2s ease;
+}
+
+/* Card hover effects */
+.bg-gray-800:hover {
+    transform: translateY(-2px);
+    transition: transform 0.2s ease;
+}
+
+/* Loading animation */
+@keyframes pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+.loading {
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Status indicators */
+.status-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-online {
+    background-color: #10B981;
+}
+
+.status-offline {
+    background-color: #F59E0B;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .container {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
+    .grid-cols-1.md\\:grid-cols-2.lg\\:grid-cols-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+/* Print styles for export */
+@media print {
+    body {
+        background: white !important;
+        color: black !important;
+    }
+    
+    .bg-gray-900 {
+        background: white !important;
+    }
+    
+    .text-white {
+        color: black !important;
+    }
+    
+    .bg-gray-800 {
+        background: #f8f9fa !important;
+        border: 1px solid #dee2e6 !important;
+    }
+}
