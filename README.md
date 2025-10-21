@@ -1,4 +1,4 @@
-# 📊 Data Prism
+#  Data Prism
 
 **Data Prism** is a universal tool for automated data analysis and visualization. 
 Upload a dataset (CSV, Excel, JSON, or Parquet) and get an interactive BI dashboard with key metrics,
@@ -6,7 +6,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ---
 
-## 🚀 Features
+##  Features
 
 - 📁 Supports: `.csv`, `.xlsx`, `.tsv`, `.json`, `.parquet`
 - 📊 Interactive dashboard: KPI cards, histograms, frequency charts, time trends
@@ -42,7 +42,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ---
 
-## 🛠️ Tech Stack
+##  Tech Stack
 
 - **Python**, **Flask**, **Pandas**
 - **Plotly**, **Matplotlib**, **DataTables.js**, **Bootstrap 5**
@@ -57,7 +57,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ---
 
-## 🧪 Installation & Run
+##  Installation & Run
 
 ```bash
 # Clone the repository
@@ -74,7 +74,7 @@ python app.py
 
 ---
 
-## 🔄 Project Status
+##  Project Status
 
 This project is actively maintained and will be continuously improved.  
 New features, performance optimizations, and visual enhancements will be added over time.
@@ -88,6 +88,7 @@ New features, performance optimizations, and visual enhancements will be added o
 - [ ] Improve mobile layout and responsiveness
 
 Stay tuned for updates! 🚀
+
 
 
 
