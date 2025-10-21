@@ -18,26 +18,26 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ---
 
-## 📷 Screenshots
+##  Screenshots
 
-### 🔹 General Dashboard Overview
-
-
-
----
-
-### 🔹 Graphs: Distribution & Category Frequencies
+###  General Dashboard Overview
 
 
 
 ---
 
-### 🔹 Correlation Matrix and Raw Data Table
+###  Graphs: Distribution & Category Frequencies
+
 
 
 ---
 
-### 🔹 Gauge Indicators
+###  Correlation Matrix and Raw Data Table
+
+
+---
+
+###  Gauge Indicators
 
 
 ---
@@ -88,5 +88,6 @@ New features, performance optimizations, and visual enhancements will be added o
 - [ ] Improve mobile layout and responsiveness
 
 Stay tuned for updates! 🚀
+
 
 
