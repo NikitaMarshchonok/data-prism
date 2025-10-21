@@ -8,13 +8,13 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ##  Features
 
-- 📁 Supports: `.csv`, `.xlsx`, `.tsv`, `.json`, `.parquet`
-- 📊 Interactive dashboard: KPI cards, histograms, frequency charts, time trends
-- 🧠 AI Summary: automatic insights using LLMs
-- 📉 Missing values, correlation matrix, outlier detection (IQR)
-- 🧾 PDF export of full analytics report
-- ⚡ Handles large files (up to 100,000 rows)
-- 🔍 Filtering, sorting, and search-enabled data tables
+-  Supports: `.csv`, `.xlsx`, `.tsv`, `.json`, `.parquet`
+-  Interactive dashboard: KPI cards, histograms, frequency charts, time trends
+-  AI Summary: automatic insights using LLMs
+-  Missing values, correlation matrix, outlier detection (IQR)
+-  PDF export of full analytics report
+-  Handles large files (up to 100,000 rows)
+-  Filtering, sorting, and search-enabled data tables
 
 ---
 
@@ -79,7 +79,7 @@ python app.py
 This project is actively maintained and will be continuously improved.  
 New features, performance optimizations, and visual enhancements will be added over time.
 
-### 🛠 Planned Features
+###  Planned Features
 
 - [ ] Export filtered data to Excel
 - [ ] Add AutoML prediction block
@@ -87,7 +87,11 @@ New features, performance optimizations, and visual enhancements will be added o
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness
 
-Stay tuned for updates! 🚀
+Stay tuned for updates! 
+
+
+
+
 
 
 
