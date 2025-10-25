@@ -74,10 +74,13 @@ python app.py
 
 ---
 
+
+
 ##  Project Status
 
 This project is actively maintained and will be continuously improved.  
 New features, performance optimizations, and visual enhancements will be added over time.
+
 
 ###  Planned Features
 
@@ -88,6 +91,7 @@ New features, performance optimizations, and visual enhancements will be added o
 - [ ] Improve mobile layout and responsiveness
 
 Stay tuned for updates! 
+
 
 
 
