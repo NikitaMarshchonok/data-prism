@@ -11,7 +11,8 @@ from src.data_analyzer import (
     describe_column_types,
     generate_description_for_column,
     detect_time_columns,
-    convert_time_columns
+    convert_time_columns,
+    analyze_data_quality
 )
 from src.visualizer import plot_histogram_interactive, plot_time_trend
 from src.report_generator import generate_report
@@ -71,6 +72,7 @@ def upload_file():
             # 📊 Анализ
             stats, numeric_cols = analyze_data(data)
             missing_data = analyze_missing_values(data)
+            data_quality = analyze_data_quality(data)
             column_overview = describe_column_types(data)
             corr_chart = plot_correlation_heatmap(data) if len(numeric_cols) >= 2 else None
 
@@ -104,6 +106,7 @@ def upload_file():
                 column_overview=column_overview,
                 column_descriptions=column_descriptions,
                 time_trends=time_trends,
+                data_quality=data_quality,
                 output_file=HTML_REPORT
             )
 

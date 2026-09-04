@@ -208,3 +208,120 @@ def convert_time_columns(df):
                 print(f"⚠️ Не удалось преобразовать колонку '{col}' в datetime: {e}")
     return df, time_cols
 
+
+def analyze_data_quality(data):
+    """Оценивает качество датасета и возвращает понятные рекомендации.
+
+    Итоговая оценка находится в диапазоне от 0 до 100. Она учитывает
+    пропуски, дублирующиеся строки, постоянные столбцы и числовые выбросы,
+    найденные методом межквартильного размаха (IQR).
+    """
+    row_count, column_count = data.shape
+    total_cells = row_count * column_count
+
+    if row_count == 0 or column_count == 0:
+        return {
+            "score": 0,
+            "status": "Нет данных",
+            "missing_cells": 0,
+            "missing_percent": 0.0,
+            "duplicate_rows": 0,
+            "duplicate_percent": 0.0,
+            "constant_columns": [],
+            "outliers": {},
+            "outlier_cells": 0,
+            "recommendations": [
+                "Загрузите непустой набор данных, чтобы выполнить аудит качества."
+            ],
+        }
+
+    missing_cells = int(data.isna().sum().sum())
+    missing_percent = 100 * missing_cells / total_cells
+
+    try:
+        duplicate_rows = int(data.duplicated().sum())
+    except TypeError:
+        # JSON может содержать списки и словари, которые нельзя хешировать.
+        comparable_data = data.map(repr) if hasattr(data, "map") else data.applymap(repr)
+        duplicate_rows = int(comparable_data.duplicated().sum())
+    duplicate_percent = 100 * duplicate_rows / row_count
+
+    constant_columns = [
+        str(column)
+        for column in data.columns
+        if data[column].nunique(dropna=False) <= 1
+    ]
+
+    outliers = {}
+    numeric_data = data.select_dtypes(include="number")
+    numeric_cells = int(numeric_data.notna().sum().sum())
+    outlier_cells = 0
+    for column in numeric_data.columns:
+        series = numeric_data[column].dropna()
+        if series.empty:
+            continue
+
+        first_quartile = series.quantile(0.25)
+        third_quartile = series.quantile(0.75)
+        iqr = third_quartile - first_quartile
+        if iqr <= 0:
+            continue
+
+        lower_bound = first_quartile - 1.5 * iqr
+        upper_bound = third_quartile + 1.5 * iqr
+        count = int(((series < lower_bound) | (series > upper_bound)).sum())
+        if count:
+            outliers[str(column)] = count
+            outlier_cells += count
+
+    constant_percent = 100 * len(constant_columns) / column_count
+    outlier_percent = 100 * outlier_cells / numeric_cells if numeric_cells else 0.0
+    penalty = (
+        min(40.0, missing_percent * 0.4)
+        + min(25.0, duplicate_percent * 0.25)
+        + min(15.0, constant_percent * 0.15)
+        + min(20.0, outlier_percent * 0.2)
+    )
+    score = max(0, round(100 - penalty))
+
+    if score >= 90:
+        status = "Отличное"
+    elif score >= 75:
+        status = "Хорошее"
+    elif score >= 50:
+        status = "Требует внимания"
+    else:
+        status = "Низкое"
+
+    recommendations = []
+    if missing_cells:
+        recommendations.append(
+            "Проверьте пропуски: заполните их или исключите строки и столбцы, где это оправдано."
+        )
+    if duplicate_rows:
+        recommendations.append(
+            "Проверьте дублирующиеся строки и удалите повторы, если они не несут отдельного смысла."
+        )
+    if constant_columns:
+        recommendations.append(
+            "Удалите постоянные столбцы: они не добавляют информации для анализа и моделей."
+        )
+    if outlier_cells:
+        recommendations.append(
+            "Изучите числовые выбросы: это могут быть ошибки ввода или важные редкие наблюдения."
+        )
+    if not recommendations:
+        recommendations.append("Критичных проблем качества не обнаружено.")
+
+    return {
+        "score": score,
+        "status": status,
+        "missing_cells": missing_cells,
+        "missing_percent": round(missing_percent, 2),
+        "duplicate_rows": duplicate_rows,
+        "duplicate_percent": round(duplicate_percent, 2),
+        "constant_columns": constant_columns,
+        "outliers": outliers,
+        "outlier_cells": outlier_cells,
+        "recommendations": recommendations,
+    }
