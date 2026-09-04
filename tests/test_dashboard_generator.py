@@ -12,7 +12,20 @@ class DashboardGeneratorTests(unittest.TestCase):
         "src.dashboard_generator.predict_target",
         return_value={
             "target_col": "target",
+            "task_type": "classification",
+            "model_name": "LogisticRegression",
             "metric": "Accuracy: 100%",
+            "model_comparison": [
+                {
+                    "model_name": "LogisticRegression",
+                    "mean_score": 0.95,
+                    "std_score": 0.02,
+                    "status": "ok",
+                    "selected": True,
+                }
+            ],
+            "cv_folds": 5,
+            "cv_metric": "balanced accuracy; higher is better",
             "feature_importance_plot": None,
         },
     )
@@ -24,9 +37,13 @@ class DashboardGeneratorTests(unittest.TestCase):
             }
         )
 
-        generate_dashboard_data(data, target_column="target")
+        result = generate_dashboard_data(data, target_column="target")
 
         predict_target.assert_called_once_with(data, "target")
+        ml_card = result[-1]
+        self.assertEqual(ml_card["model_name"], "LogisticRegression")
+        self.assertEqual(ml_card["cv_folds"], 5)
+        self.assertEqual(len(ml_card["model_comparison"]), 1)
 
 
 if __name__ == "__main__":

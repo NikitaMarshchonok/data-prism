@@ -28,6 +28,16 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertIn("customer_id", result["dropped_features"])
         self.assertIn("copied_target", result["dropped_features"])
         self.assertGreater(result["train_rows"], result["test_rows"])
+        self.assertGreaterEqual(result["cv_folds"], 2)
+        self.assertEqual(len(result["model_comparison"]), 2)
+        self.assertEqual(
+            sum(candidate["selected"] for candidate in result["model_comparison"]),
+            1,
+        )
+        self.assertIn(
+            result["model_name"],
+            {"LogisticRegression", "RandomForestClassifier"},
+        )
         self.assertTrue(result["feature_importance_plot"].startswith("data:image/png;base64,"))
 
     def test_regression_reports_baseline_and_multiple_metrics(self):
@@ -50,6 +60,23 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertIn("r2", result["metrics"])
         self.assertIn("baseline_mae", result["metrics"])
         self.assertGreater(result["metrics"]["mae_improvement"], 0)
+        self.assertGreaterEqual(result["cv_folds"], 2)
+        self.assertEqual(len(result["model_comparison"]), 2)
+        self.assertIn(result["model_name"], {"Ridge", "RandomForestRegressor"})
+
+    def test_rare_class_returns_explanatory_error(self):
+        data = pd.DataFrame(
+            {
+                "feature": list(range(12)),
+                "target": ["rare"] + ["common"] * 11,
+            }
+        )
+
+        result = predict_target(data, "target")
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["model_comparison"], [])
+        self.assertIn("минимум 3 наблюдения", result["metric"])
 
     def test_too_small_dataset_returns_explanatory_error(self):
         data = pd.DataFrame({"feature": [1, 2, 3], "target": [0, 1, 0]})

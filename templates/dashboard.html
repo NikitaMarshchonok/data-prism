@@ -220,6 +220,42 @@
         <p><strong>Модель:</strong> {{ ml_card.model_name }}</p>
     {% endif %}
     <p><strong>Метрика модели:</strong> {{ ml_card.metric }}</p>
+    {% if ml_card.model_comparison %}
+        <h3 style="color: #74b9ff; margin-top: 20px;">Сравнение моделей</h3>
+        <p style="color: #b2bec3;">
+            {{ ml_card.cv_folds }}-fold cross-validation только на обучающей выборке;
+            метрика: {{ ml_card.cv_metric }}.
+        </p>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; margin: 12px 0 18px;">
+                <thead>
+                    <tr style="text-align: left; color: #dfe6e9;">
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Модель</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Среднее</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Ст. отклонение</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Результат</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for candidate in ml_card.model_comparison %}
+                    <tr style="color: #b2bec3;">
+                        <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">{{ candidate.model_name }}</td>
+                        {% if candidate.status == "ok" %}
+                            <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">{{ "%.4f"|format(candidate.mean_score) }}</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">{{ "%.4f"|format(candidate.std_score) }}</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">
+                                {% if candidate.selected %}✅ выбрана{% else %}оценена{% endif %}
+                            </td>
+                        {% else %}
+                            <td colspan="2" style="padding: 8px; border-bottom: 1px solid #2d3b4f;">Ошибка оценки</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">не выбрана</td>
+                        {% endif %}
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% endif %}
     {% if ml_card.evaluation_notes %}
         <ul style="color: #b2bec3; margin-top: 10px;">
         {% for note in ml_card.evaluation_notes %}

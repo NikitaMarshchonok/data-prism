@@ -12,6 +12,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -20,9 +21,9 @@ from sklearn.metrics import (
     mean_squared_error,
     r2_score,
 )
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 
 RANDOM_STATE = 42
@@ -53,8 +54,15 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
 
     y = modelling_data[target_col]
     task_type = _infer_task_type(y)
-    if task_type == "classification" and y.nunique(dropna=True) < 2:
-        return _error_report("Целевая переменная содержит только один класс.", target_col)
+    if task_type == "classification":
+        class_counts = y.value_counts()
+        if len(class_counts) < 2:
+            return _error_report("Целевая переменная содержит только один класс.", target_col)
+        if int(class_counts.min()) < 3:
+            return _error_report(
+                "Для честного разделения и кросс-валидации нужно минимум 3 наблюдения в каждом классе.",
+                target_col,
+            )
     if task_type == "regression":
         y = pd.to_numeric(y, errors="coerce")
         valid_target = y.notna()
@@ -69,11 +77,16 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
 
     numeric_columns = list(X.select_dtypes(include=[np.number]).columns)
     categorical_columns = [column for column in X.columns if column not in numeric_columns]
-    preprocessor = _build_preprocessor(numeric_columns, categorical_columns)
-
     try:
         X_train, X_test, y_train, y_test, split_notes = _split_data(X, y, task_type)
-        model = _build_model(task_type)
+        model, model_comparison, cv_folds, cv_metric = _select_model_with_cv(
+            X_train,
+            y_train,
+            task_type,
+            numeric_columns,
+            categorical_columns,
+        )
+        preprocessor = _build_preprocessor(numeric_columns, categorical_columns)
         pipeline = Pipeline([("preprocessor", preprocessor), ("model", model)])
         pipeline.fit(X_train, y_train)
         predictions = pipeline.predict(X_test)
@@ -90,9 +103,22 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
     feature_importance_plot, top_features = _feature_importance(pipeline)
     evaluation_notes = [
         split_notes,
+        (
+            f"Model family selected with {cv_folds}-fold cross-validation on the "
+            f"training partition only ({cv_metric})."
+        ),
+        "The holdout test partition was used once after model selection.",
         baseline_text,
         "Preprocessing was fitted on training rows only.",
     ]
+    if task_type == "classification" and metrics["accuracy_lift"] <= 0:
+        evaluation_notes.append(
+            "Warning: the selected model did not beat the most-frequent holdout baseline on accuracy."
+        )
+    if task_type == "regression" and metrics["mae_improvement"] <= 0:
+        evaluation_notes.append(
+            "Warning: the selected model did not beat the mean holdout baseline on MAE."
+        )
     if dropped_features:
         evaluation_notes.append(
             "Excluded potential leakage/identifier/no-signal features: "
@@ -106,6 +132,9 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
         "model_name": type(model).__name__,
         "metric": metric_text,
         "metrics": metrics,
+        "model_comparison": model_comparison,
+        "cv_folds": cv_folds,
+        "cv_metric": cv_metric,
         "feature_importance_plot": feature_importance_plot,
         "top_features": top_features,
         "train_rows": int(len(X_train)),
@@ -174,7 +203,12 @@ def _prepare_features(X: pd.DataFrame, target: pd.Series) -> Tuple[pd.DataFrame,
 def _build_preprocessor(numeric_columns: List[Any], categorical_columns: List[Any]):
     transformers = []
     if numeric_columns:
-        numeric_pipeline = Pipeline([("imputer", SimpleImputer(strategy="median"))])
+        numeric_pipeline = Pipeline(
+            [
+                ("imputer", SimpleImputer(strategy="median")),
+                ("scaler", StandardScaler(with_mean=False)),
+            ]
+        )
         transformers.append(("numeric", numeric_pipeline, numeric_columns))
     if categorical_columns:
         categorical_pipeline = Pipeline(
@@ -193,19 +227,109 @@ def _build_preprocessor(numeric_columns: List[Any], categorical_columns: List[An
     return ColumnTransformer(transformers=transformers, remainder="drop")
 
 
-def _build_model(task_type: str):
+def _candidate_models(task_type: str):
     if task_type == "classification":
-        return RandomForestClassifier(
-            n_estimators=200,
+        return [
+            LogisticRegression(
+                max_iter=1000,
+                class_weight="balanced",
+                random_state=RANDOM_STATE,
+            ),
+            RandomForestClassifier(
+                n_estimators=120,
+                random_state=RANDOM_STATE,
+                class_weight="balanced",
+                n_jobs=-1,
+            ),
+        ]
+    return [
+        Ridge(alpha=1.0, solver="lsqr"),
+        RandomForestRegressor(
+            n_estimators=120,
             random_state=RANDOM_STATE,
-            class_weight="balanced",
             n_jobs=-1,
+        ),
+    ]
+
+
+def _select_model_with_cv(
+    X_train,
+    y_train,
+    task_type: str,
+    numeric_columns: List[Any],
+    categorical_columns: List[Any],
+):
+    if task_type == "classification":
+        cv_folds = min(5, int(y_train.value_counts().min()))
+        if cv_folds < 2:
+            raise ValueError("Недостаточно примеров каждого класса в обучающей выборке.")
+        splitter = StratifiedKFold(
+            n_splits=cv_folds,
+            shuffle=True,
+            random_state=RANDOM_STATE,
         )
-    return RandomForestRegressor(
-        n_estimators=200,
-        random_state=RANDOM_STATE,
-        n_jobs=-1,
-    )
+        scoring = "balanced_accuracy"
+        metric_label = "balanced accuracy; higher is better"
+    else:
+        cv_folds = min(5, len(X_train))
+        if cv_folds < 2:
+            raise ValueError("Недостаточно строк для кросс-валидации.")
+        splitter = KFold(n_splits=cv_folds, shuffle=True, random_state=RANDOM_STATE)
+        scoring = "neg_mean_absolute_error"
+        metric_label = "MAE; lower is better"
+
+    comparison = []
+    successful_candidates = []
+    for model in _candidate_models(task_type):
+        pipeline = Pipeline(
+            [
+                ("preprocessor", _build_preprocessor(numeric_columns, categorical_columns)),
+                ("model", model),
+            ]
+        )
+        model_name = type(model).__name__
+        try:
+            raw_scores = cross_val_score(
+                pipeline,
+                X_train,
+                y_train,
+                cv=splitter,
+                scoring=scoring,
+                n_jobs=1,
+                error_score="raise",
+            )
+        except (TypeError, ValueError) as error:
+            comparison.append(
+                {
+                    "model_name": model_name,
+                    "mean_score": None,
+                    "std_score": None,
+                    "status": "error",
+                    "error": str(error),
+                    "selected": False,
+                }
+            )
+            continue
+
+        raw_mean = float(np.mean(raw_scores))
+        display_scores = raw_scores if task_type == "classification" else -raw_scores
+        entry = {
+            "model_name": model_name,
+            "mean_score": round(float(np.mean(display_scores)), 6),
+            "std_score": round(float(np.std(display_scores)), 6),
+            "status": "ok",
+            "error": None,
+            "selected": False,
+        }
+        comparison.append(entry)
+        successful_candidates.append((raw_mean, model, entry))
+
+    if not successful_candidates:
+        raise ValueError("Все модели завершили кросс-валидацию с ошибкой.")
+
+    _, selected_model, selected_entry = max(successful_candidates, key=lambda item: item[0])
+    selected_entry["selected"] = True
+    return selected_model, comparison, cv_folds, metric_label
 
 
 def _split_data(X, y, task_type: str):
@@ -215,9 +339,15 @@ def _split_data(X, y, task_type: str):
     stratified = False
     if task_type == "classification":
         class_counts = y.value_counts()
-        if class_counts.min() >= 2 and test_count >= len(class_counts):
-            stratify = y
-            stratified = True
+        class_count = len(class_counts)
+        maximum_test_count = len(X) - (2 * class_count)
+        if maximum_test_count < class_count:
+            raise ValueError(
+                "Недостаточно строк, чтобы сохранить классы в train, test и кросс-валидации."
+            )
+        test_count = min(max(test_count, class_count), maximum_test_count)
+        stratify = y
+        stratified = True
 
     X_train, X_test, y_train, y_test = train_test_split(
         X,
@@ -288,7 +418,21 @@ def _feature_importance(pipeline: Pipeline):
         str(name).replace("numeric__", "").replace("categorical__", "")
         for name in preprocessor.get_feature_names_out()
     ]
-    importances = np.asarray(model.feature_importances_)
+    if hasattr(model, "feature_importances_"):
+        importances = np.asarray(model.feature_importances_)
+        x_label = "Relative importance"
+    elif hasattr(model, "coef_"):
+        coefficients = np.asarray(model.coef_)
+        importances = np.abs(coefficients)
+        if importances.ndim > 1:
+            importances = importances.mean(axis=0)
+        importances = importances.ravel()
+        x_label = "Absolute coefficient magnitude"
+    else:
+        return None, []
+
+    if len(feature_names) != len(importances):
+        return None, []
     order = np.argsort(importances)[::-1][:10]
     top_features = [
         {"feature": feature_names[index], "importance": round(float(importances[index]), 6)}
@@ -302,7 +446,7 @@ def _feature_importance(pipeline: Pipeline):
         [item["importance"] for item in display_items],
     )
     ax.set_title("Feature importance")
-    ax.set_xlabel("Relative importance")
+    ax.set_xlabel(x_label)
     fig.tight_layout()
 
     image = io.BytesIO()
@@ -321,6 +465,9 @@ def _error_report(message: str, target_col: Optional[Any] = None) -> Dict[str, A
         "model_name": None,
         "metric": f"⚠️ {message}",
         "metrics": {},
+        "model_comparison": [],
+        "cv_folds": 0,
+        "cv_metric": None,
         "feature_importance_plot": None,
         "top_features": [],
         "train_rows": 0,
