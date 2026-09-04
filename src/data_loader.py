@@ -1,6 +1,18 @@
 # src/data_loader.py
-import pandas as pd
 import os
+
+import pandas as pd
+
+
+SUPPORTED_DATA_EXTENSIONS = frozenset({'.csv', '.tsv', '.xlsx', '.xls', '.json', '.parquet'})
+
+
+def is_supported_data_file(filename):
+    """Возвращает True, если расширение файла поддерживается загрузчиком."""
+    if not filename:
+        return False
+    return os.path.splitext(filename)[1].lower() in SUPPORTED_DATA_EXTENSIONS
+
 
 def load_data(file_path, max_rows=100000):
     """
@@ -15,10 +27,14 @@ def load_data(file_path, max_rows=100000):
     truncated = False
 
     try:
+        if not isinstance(max_rows, int) or max_rows <= 0:
+            raise ValueError("max_rows должен быть положительным целым числом.")
+
+        read_limit = max_rows + 1
         if ext in ['.xlsx', '.xls']:
-            df = pd.read_excel(file_path)
+            df = pd.read_excel(file_path, nrows=read_limit)
         elif ext == '.tsv':
-            df = pd.read_csv(file_path, sep='\t')
+            df = pd.read_csv(file_path, sep='\t', nrows=read_limit)
         elif ext == '.json':
             try:
                 df = pd.read_json(file_path)
@@ -29,7 +45,7 @@ def load_data(file_path, max_rows=100000):
         elif ext == '.csv':
             for enc in ['utf-8', 'ISO-8859-1', 'windows-1252']:
                 try:
-                    df = pd.read_csv(file_path, encoding=enc)
+                    df = pd.read_csv(file_path, encoding=enc, nrows=read_limit)
                     break
                 except Exception:
                     continue
@@ -38,13 +54,16 @@ def load_data(file_path, max_rows=100000):
         else:
             raise ValueError(f"❌ Формат файла '{ext}' не поддерживается.")
 
-        if df is not None and len(df) > max_rows:
-            df = df.iloc[:max_rows]
+        if df is None or df.shape[1] == 0:
+            raise ValueError("❌ Файл не содержит доступных для анализа столбцов.")
+
+        if len(df) > max_rows:
+            df = df.iloc[:max_rows].copy()
             truncated = True
 
         print(f"✅ Файл '{filename}' успешно загружен. Строк: {df.shape[0]}, Колонок: {df.shape[1]}")
         if truncated:
-            print("⚠️ Данные были обрезаны до 100,000 строк для оптимальной загрузки.")
+            print(f"⚠️ Данные были обрезаны до {max_rows:,} строк для оптимальной загрузки.")
 
         return df, truncated
 

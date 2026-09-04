@@ -414,7 +414,7 @@ def generate_dashboard_data(df, target_column=None):
 
     # 🎯 ML-предсказание
     try:
-        ml_result = predict_target(df)
+        ml_result = predict_target(df, target_column)
         ml_card = {
             "target": ml_result.get("target_col", "Не определена"),
             "metric": ml_result.get("metric", "Нет метрики"),
@@ -427,5 +427,4 @@ def generate_dashboard_data(df, target_column=None):
 
 
     return kpis, top_charts, tables, summary, sparklines, ai_summary, ml_card
-
 

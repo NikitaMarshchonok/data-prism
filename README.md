@@ -68,8 +68,17 @@ cd data-prism
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the Flask app
-python app.py
+# Configure a persistent session key (required outside local development)
+export FLASK_SECRET_KEY="replace-with-a-long-random-value"
+
+# Optional: upload limit in megabytes (default: 100)
+export MAX_UPLOAD_MB=100
+
+# Optional for local development only
+export FLASK_DEBUG=true
+
+# Run the Flask web app
+python web_app.py
 
 ```
 

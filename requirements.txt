@@ -1,4 +1,6 @@
 pandas
+openpyxl
+xlrd
 numpy
 matplotlib
 seaborn
