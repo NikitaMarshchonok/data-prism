@@ -1,4 +1,4 @@
-# 📊 Data Prism
+#  Data Prism
 
 **Data Prism** is a universal tool for automated data analysis and visualization. 
 Upload a dataset (CSV, Excel, JSON, or Parquet) and get an interactive BI dashboard with key metrics,
@@ -6,44 +6,37 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ---
 
-## 🚀 Features
-
-- 📁 Supports: `.csv`, `.xlsx`, `.tsv`, `.json`, `.parquet`
-- 📊 Interactive dashboard: KPI cards, histograms, frequency charts, time trends
-- 🧠 AI Summary: automatic insights using LLMs
-- 📉 Missing values, correlation matrix, outlier detection (IQR)
-- 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
-- 🧾 PDF export of full analytics report
-- ⚡ Handles large files (up to 100,000 rows)
-- 🔍 Filtering, sorting, and search-enabled data tables
-
----
-
-## 📷 Screenshots
-
-### 🔹 General Dashboard Overview
+##  Features
 
 
 
 ---
 
-### 🔹 Graphs: Distribution & Category Frequencies
+##  Screenshots
+
+###  General Dashboard Overview
 
 
 
 ---
 
-### 🔹 Correlation Matrix and Raw Data Table
+###  Graphs: Distribution & Category Frequencies
 
-
----
-
-### 🔹 Gauge Indicators
 
 
 ---
 
-## 🛠️ Tech Stack
+###  Correlation Matrix and Raw Data Table
+
+
+---
+
+###  Gauge Indicators
+
+
+---
+
+##  Tech Stack
 
 - **Python**, **Flask**, **Pandas**
 - **Plotly**, **Matplotlib**, **DataTables.js**, **Bootstrap 5**
@@ -58,7 +51,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ---
 
-## 🧪 Installation & Run
+##  Installation & Run
 
 ```bash
 # Clone the repository
@@ -84,12 +77,15 @@ python web_app.py
 
 ---
 
-## 🔄 Project Status
+
+
+##  Project Status
 
 This project is actively maintained and will be continuously improved.  
 New features, performance optimizations, and visual enhancements will be added over time.
 
-### 🛠 Planned Features
+
+###  Planned Features
 
 - [ ] Export filtered data to Excel
 - [ ] Add AutoML prediction block
@@ -97,6 +93,13 @@ New features, performance optimizations, and visual enhancements will be added o
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness
 
-Stay tuned for updates! 🚀
+Stay tuned for updates! 
+
+
+
+
+
+
+
 
 
