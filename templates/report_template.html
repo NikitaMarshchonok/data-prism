@@ -53,6 +53,30 @@
             font-weight: 600;
             margin-bottom: 30px;
         }
+        .quality-summary {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 14px;
+            margin: 20px 0;
+        }
+        .quality-card {
+            background: #fff;
+            border-left: 4px solid #0066cc;
+            border-radius: 6px;
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+        .quality-card strong {
+            display: block;
+            color: #0066cc;
+            font-size: 24px;
+            margin-bottom: 4px;
+        }
+        .recommendations {
+            background: #eef6ff;
+            border-radius: 6px;
+            padding: 14px 20px;
+        }
     </style>
 </head>
 <body>
@@ -62,6 +86,51 @@
     <div>
         <a href="/download-pdf" class="download-button">📄 Скачать отчет в PDF</a>
     </div>
+
+    {% if data_quality %}
+    <div class="section">
+        <h2>🛡️ Качество данных: {{ data_quality.score }}/100 — {{ data_quality.status }}</h2>
+        <div class="quality-summary">
+            <div class="quality-card">
+                <strong>{{ data_quality.missing_percent }}%</strong>
+                Пропущено ячеек: {{ data_quality.missing_cells }}
+            </div>
+            <div class="quality-card">
+                <strong>{{ data_quality.duplicate_percent }}%</strong>
+                Строк-дубликатов: {{ data_quality.duplicate_rows }}
+            </div>
+            <div class="quality-card">
+                <strong>{{ data_quality.constant_columns | length }}</strong>
+                Постоянных столбцов
+            </div>
+            <div class="quality-card">
+                <strong>{{ data_quality.outlier_cells }}</strong>
+                Числовых выбросов по IQR
+            </div>
+        </div>
+
+        {% if data_quality.constant_columns %}
+        <p><b>Постоянные столбцы:</b> {{ data_quality.constant_columns | join(', ') }}</p>
+        {% endif %}
+
+        {% if data_quality.outliers %}
+        <p><b>Выбросы по столбцам:</b>
+            {% for column, count in data_quality.outliers.items() %}
+                {{ column }} — {{ count }}{% if not loop.last %}; {% endif %}
+            {% endfor %}
+        </p>
+        {% endif %}
+
+        <div class="recommendations">
+            <b>Рекомендации</b>
+            <ul>
+                {% for recommendation in data_quality.recommendations %}
+                <li>{{ recommendation }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+    </div>
+    {% endif %}
 
     {% if column_overview %}
     <div class="section">

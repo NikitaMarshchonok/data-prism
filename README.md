@@ -8,13 +8,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ##  Features
 
--  Supports: `.csv`, `.xlsx`, `.tsv`, `.json`, `.parquet`
--  Interactive dashboard: KPI cards, histograms, frequency charts, time trends
--  AI Summary: automatic insights using LLMs
--  Missing values, correlation matrix, outlier detection (IQR)
--  PDF export of full analytics report
--  Handles large files (up to 100,000 rows)
--  Filtering, sorting, and search-enabled data tables
+
 
 ---
 
@@ -67,8 +61,17 @@ cd data-prism
 # Install dependencies
 pip install -r requirements.txt
 
-# Run the Flask app
-python app.py
+# Configure a persistent session key (required outside local development)
+export FLASK_SECRET_KEY="replace-with-a-long-random-value"
+
+# Optional: upload limit in megabytes (default: 100)
+export MAX_UPLOAD_MB=100
+
+# Optional for local development only
+export FLASK_DEBUG=true
+
+# Run the Flask web app
+python web_app.py
 
 ```
 

@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VibeDash Preview - {{ viz_spec.title }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash.css') }}">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-blue-400">{{ viz_spec.title }}</h1>
+                <p class="text-gray-300 mt-1">File: {{ filename }} | Records: {{ dashboard_data.df_shape[0] if dashboard_data.df_shape else 'N/A' }}</p>
+            </div>
+            <div class="flex space-x-4">
+                <a href="{{ url_for('vibedash.chat') }}?session_id={{ session_id }}" 
+                   class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors">
+                    🤖 AI Chat
+                </a>
+                <a href="{{ url_for('vibedash.export', session_id=session_id) }}" 
+                   class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">
+                    📁 Export HTML
+                </a>
+                <a href="{{ url_for('vibedash.index') }}" 
+                   class="px-6 py-2 bg-gray-600 hover:bg-gray-700 text-white font-semibold rounded-lg transition-colors">
+                    ← Back
+                </a>
+            </div>
+        </div>
+
+        <!-- Original Prompt -->
+        <div class="bg-gray-800 rounded-lg p-4 mb-6">
+            <h3 class="text-lg font-semibold text-blue-300 mb-2">💭 Original Request</h3>
+            <p class="text-gray-300">{{ prompt }}</p>
+        </div>
+
+        <!-- KPIs -->
+        {% if dashboard_data.kpis %}
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold mb-4 text-blue-300">📊 Key Performance Indicators</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {% for kpi in dashboard_data.kpis %}
+                <div class="bg-gray-800 rounded-lg p-6 text-center">
+                    <div class="text-2xl font-bold text-blue-400 mb-1">{{ kpi.value }}</div>
+                    <div class="text-gray-300 text-sm">{{ kpi.title }}</div>
+                    {% if kpi.tooltip %}
+                    <div class="text-gray-500 text-xs mt-1" title="{{ kpi.tooltip }}">{{ kpi.tooltip }}</div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Charts -->
+        {% if dashboard_data.charts %}
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold mb-4 text-blue-300">📈 Charts</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {% for chart in dashboard_data.charts %}
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4 text-white">{{ chart.title }}</h3>
+                    <div class="chart-container">
+                        {{ chart.html | safe }}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Tables -->
+        {% if dashboard_data.tables %}
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold mb-4 text-blue-300">📋 Tables</h2>
+            <div class="space-y-6">
+                {% for table in dashboard_data.tables %}
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h3 class="text-lg font-semibold mb-4 text-white">{{ table.title }}</h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="border-b border-gray-600">
+                                    {% for header in table.headers %}
+                                    <th class="text-left py-2 px-3 text-blue-300">{{ header }}</th>
+                                    {% endfor %}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for row in table.rows %}
+                                <tr class="border-b border-gray-700 hover:bg-gray-700">
+                                    {% for cell in row %}
+                                    <td class="py-2 px-3 text-gray-300">{{ cell }}</td>
+                                    {% endfor %}
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- AI Summary -->
+        {% if dashboard_data.ai_summary %}
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold mb-4 text-blue-300">🤖 AI Analysis</h2>
+            <div class="bg-gray-800 rounded-lg p-6">
+                <div class="prose prose-invert max-w-none">
+                    {{ dashboard_data.ai_summary | safe }}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- VizSpec Details (Debug) -->
+        {% if not export_mode %}
+        <div class="bg-gray-800 rounded-lg p-6">
+            <h3 class="text-lg font-semibold mb-4 text-blue-300">🔧 Specification Details</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <h4 class="font-semibold mb-2 text-white">Metrics ({{ viz_spec.metrics | length }})</h4>
+                    <ul class="text-sm text-gray-300 space-y-1">
+                        {% for metric in viz_spec.metrics %}
+                        <li>• {{ metric.title }}: {{ metric.expr }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div>
+                    <h4 class="font-semibold mb-2 text-white">Charts ({{ viz_spec.charts | length }})</h4>
+                    <ul class="text-sm text-gray-300 space-y-1">
+                        {% for chart in viz_spec.charts %}
+                        <li>• {{ chart.type }}: {{ chart.x }}{% if chart.y %} → {{ chart.y }}{% endif %}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        // Графики уже инициализированы в HTML, ничего не нужно делать
+        console.log('VibeDash dashboard loaded successfully');
+    </script>
+</body>
+</html>

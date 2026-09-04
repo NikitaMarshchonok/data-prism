@@ -10,9 +10,12 @@ def main():
     file_path = 'data/test_data.csv'
 
     # Загрузка данных
-    data = load_data(file_path)
+    data, truncated = load_data(file_path)
     if data is None:
         return
+
+    if truncated:
+        print("Датасет был ограничен для безопасной локальной обработки.")
 
     # Анализ данных
     stats, numeric_cols = analyze_data(data)

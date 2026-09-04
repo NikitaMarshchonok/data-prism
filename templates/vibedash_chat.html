@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VibeDash AI - Data Science Assistant</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash.css') }}">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="flex justify-between items-center mb-8">
+            <div>
+                <h1 class="text-3xl font-bold text-blue-400">🤖 AI Data Science Assistant</h1>
+                <p class="text-gray-300 mt-1">Ask questions about your data and get intelligent analysis</p>
+            </div>
+            <div class="flex space-x-4">
+                <a href="{{ url_for('vibedash.index') }}" 
+                   class="px-6 py-2 bg-gray-600 hover:bg-gray-700 text-white font-semibold rounded-lg transition-colors">
+                    ← Back to Upload
+                </a>
+            </div>
+        </div>
+
+        <!-- Chat Interface -->
+        <div class="max-w-6xl mx-auto">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Chat Panel -->
+                <div class="lg:col-span-1">
+                    <div class="bg-gray-800 rounded-lg p-6 h-96 overflow-y-auto" id="chat-messages">
+                        <div class="space-y-4">
+                            <div class="bg-blue-600 rounded-lg p-3">
+                                <div class="text-sm text-blue-200">AI Assistant</div>
+                                <div class="text-white">Hello! I'm your AI Data Science assistant. Ask me anything about your data:</div>
+                            </div>
+                            
+                            <div class="bg-gray-700 rounded-lg p-3">
+                                <div class="text-sm text-gray-400">💡 Try asking:</div>
+                                <div class="text-sm text-gray-300 mt-1">
+                                    • "What correlations exist in this data?"<br>
+                                    • "Show me trends over time"<br>
+                                    • "Are there any outliers?"<br>
+                                    • "Compare categories"<br>
+                                    • "What's the distribution of values?"
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Input Form -->
+                    <div class="mt-4">
+                        <form id="chat-form" class="flex space-x-2">
+                            <input type="text" id="question-input" 
+                                   placeholder="Ask about your data..." 
+                                   class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <button type="submit" 
+                                    class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">
+                                Ask
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Analysis Results -->
+                <div class="lg:col-span-2">
+                    <div class="bg-gray-800 rounded-lg p-6">
+                        <h2 class="text-xl font-semibold mb-4 text-blue-300">📊 Analysis Results</h2>
+                        <div id="analysis-results" class="space-y-6">
+                            <div class="text-center text-gray-400 py-8">
+                                <div class="text-4xl mb-4">🤖</div>
+                                <div>Ask a question to see AI analysis results</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Questions -->
+        <div class="max-w-6xl mx-auto mt-8">
+            <h2 class="text-xl font-semibold mb-4 text-blue-300">🚀 Quick Questions</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <button onclick="askQuestion('What correlations exist in this data?')" 
+                        class="p-4 bg-blue-600 hover:bg-blue-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">🔗 Correlations</div>
+                    <div class="text-sm text-blue-200 mt-1">Find relationships between variables</div>
+                </button>
+                <button onclick="askQuestion('Show me trends over time')" 
+                        class="p-4 bg-green-600 hover:bg-green-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">📈 Trends</div>
+                    <div class="text-sm text-green-200 mt-1">Analyze time-based patterns</div>
+                </button>
+                <button onclick="askQuestion('Are there any outliers?')" 
+                        class="p-4 bg-red-600 hover:bg-red-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">🔍 Outliers</div>
+                    <div class="text-sm text-red-200 mt-1">Detect unusual values</div>
+                </button>
+                <button onclick="askQuestion('Compare categories')" 
+                        class="p-4 bg-purple-600 hover:bg-purple-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">⚖️ Comparison</div>
+                    <div class="text-sm text-purple-200 mt-1">Compare different groups</div>
+                </button>
+                <button onclick="askQuestion('Build a prediction model')" 
+                        class="p-4 bg-orange-600 hover:bg-orange-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">🔮 Predictions</div>
+                    <div class="text-sm text-orange-200 mt-1">ML models and forecasting</div>
+                </button>
+                <button onclick="askQuestion('Find clusters in the data')" 
+                        class="p-4 bg-teal-600 hover:bg-teal-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">🎯 Clustering</div>
+                    <div class="text-sm text-teal-200 mt-1">Group similar data points</div>
+                </button>
+                <button onclick="askQuestion('Run statistical tests')" 
+                        class="p-4 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">📊 Statistics</div>
+                    <div class="text-sm text-indigo-200 mt-1">Significance tests and analysis</div>
+                </button>
+                <button onclick="askQuestion('What is the distribution of values?')" 
+                        class="p-4 bg-pink-600 hover:bg-pink-700 rounded-lg text-left transition-colors">
+                    <div class="font-semibold">📊 Distribution</div>
+                    <div class="text-sm text-pink-200 mt-1">Analyze data patterns</div>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentSessionId = null;
+        
+        // Get session ID from URL or create new one
+        function getSessionId() {
+            if (!currentSessionId) {
+                const urlParams = new URLSearchParams(window.location.search);
+                currentSessionId = urlParams.get('session_id') || 'chat_' + Date.now();
+            }
+            return currentSessionId;
+        }
+        
+        // Add message to chat
+        function addMessage(content, isUser = false) {
+            const chatMessages = document.getElementById('chat-messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `rounded-lg p-3 ${isUser ? 'bg-gray-700 ml-8' : 'bg-blue-600'}`;
+            
+            if (isUser) {
+                messageDiv.innerHTML = `
+                    <div class="text-sm text-gray-400">You</div>
+                    <div class="text-white">${content}</div>
+                `;
+            } else {
+                messageDiv.innerHTML = `
+                    <div class="text-sm text-blue-200">AI Assistant</div>
+                    <div class="text-white">${content}</div>
+                `;
+            }
+            
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+        
+        // Display analysis results
+        function displayAnalysis(analysis) {
+            const resultsDiv = document.getElementById('analysis-results');
+            
+            let html = `
+                <div class="bg-gray-700 rounded-lg p-4 mb-4">
+                    <h3 class="text-lg font-semibold mb-2 text-white">AI Analysis</h3>
+                    <div class="text-gray-300 whitespace-pre-line">${analysis.answer}</div>
+                </div>
+            `;
+            
+            // Add charts
+            if (analysis.charts && analysis.charts.length > 0) {
+                html += '<div class="space-y-4">';
+                analysis.charts.forEach((chart, index) => {
+                    html += `
+                        <div class="bg-gray-700 rounded-lg p-4">
+                            <h4 class="text-lg font-semibold mb-2 text-white">${chart.title}</h4>
+                            <div class="chart-container" id="chart-${index}">
+                                <div class="text-center text-gray-400 py-8">
+                                    <div class="animate-spin text-2xl mb-2">📊</div>
+                                    <div>Loading chart...</div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+            }
+            
+            // Add insights
+            if (analysis.insights && analysis.insights.length > 0) {
+                html += `
+                    <div class="bg-gray-700 rounded-lg p-4 mt-4">
+                        <h4 class="text-lg font-semibold mb-2 text-white">💡 Key Insights</h4>
+                        <ul class="text-gray-300 space-y-1">
+                `;
+                analysis.insights.forEach(insight => {
+                    html += `<li>• ${insight}</li>`;
+                });
+                html += '</ul></div>';
+            }
+            
+            resultsDiv.innerHTML = html;
+            
+            // Re-render Plotly charts
+            setTimeout(() => {
+                if (analysis.charts && analysis.charts.length > 0) {
+                    analysis.charts.forEach((chart, index) => {
+                        const container = document.getElementById(`chart-${index}`);
+                        if (container && chart.html) {
+                            try {
+                                // Заменяем содержимое контейнера на HTML графика
+                                container.innerHTML = chart.html;
+                                
+                                // Принудительно инициализируем Plotly графики после вставки HTML
+                                setTimeout(() => {
+                                    const plotlyDivs = container.querySelectorAll('.plotly-graph-div');
+                                    plotlyDivs.forEach(div => {
+                                        if (typeof Plotly !== 'undefined' && div.id) {
+                                            try {
+                                                // Проверяем, есть ли уже график
+                                                if (!div.data || div.data.length === 0) {
+                                                    // Если нет данных, пытаемся найти скрипт с данными
+                                                    const script = div.parentElement.querySelector('script');
+                                                    if (script) {
+                                                        // Выполняем скрипт инициализации
+                                                        eval(script.textContent);
+                                                    }
+                                                }
+                                                console.log('Chart initialized:', div.id);
+                                            } catch (e) {
+                                                console.log('Chart initialization failed:', e);
+                                            }
+                                        }
+                                    });
+                                }, 500);
+                                
+                                console.log('Chart loaded in chat:', chart.title);
+                                
+                                // Дополнительная проверка через 1 секунду
+                                setTimeout(() => {
+                                    const plotlyDivs = container.querySelectorAll('.plotly-graph-div');
+                                    plotlyDivs.forEach(div => {
+                                        if (typeof Plotly !== 'undefined' && div.id) {
+                                            try {
+                                                // Принудительно перерисовываем график
+                                                Plotly.redraw(div);
+                                                console.log('Chart redrawn:', div.id);
+                                            } catch (e) {
+                                                console.log('Chart redraw failed:', e);
+                                            }
+                                        }
+                                    });
+                                }, 1000);
+                            } catch (e) {
+                                console.log('Chart rendering error:', e);
+                                container.innerHTML = `
+                                    <div class="text-center text-red-400 py-8">
+                                        <div class="text-2xl mb-2">❌</div>
+                                        <div>Error rendering chart</div>
+                                        <div class="text-sm mt-2">${chart.title}</div>
+                                    </div>
+                                `;
+                            }
+                        }
+                    });
+                }
+            }, 300);
+        }
+        
+        // Ask question function
+        function askQuestion(question) {
+            if (!question.trim()) return;
+            
+            // Add user message
+            addMessage(question, true);
+            
+            // Show loading
+            const resultsDiv = document.getElementById('analysis-results');
+            resultsDiv.innerHTML = `
+                <div class="text-center text-gray-400 py-8">
+                    <div class="animate-spin text-4xl mb-4">🤖</div>
+                    <div>Analyzing your data...</div>
+                </div>
+            `;
+            
+            // Send request
+            fetch('/vibedash/api/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    question: question,
+                    session_id: getSessionId()
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    displayAnalysis(data.analysis);
+                    addMessage('Analysis complete! Check the results panel.', false);
+                } else {
+                    addMessage(`Error: ${data.error}`, false);
+                    resultsDiv.innerHTML = `
+                        <div class="text-center text-red-400 py-8">
+                            <div class="text-4xl mb-4">❌</div>
+                            <div>Analysis failed: ${data.error}</div>
+                        </div>
+                    `;
+                }
+            })
+            .catch(error => {
+                addMessage(`Error: ${error.message}`, false);
+                resultsDiv.innerHTML = `
+                    <div class="text-center text-red-400 py-8">
+                        <div class="text-4xl mb-4">❌</div>
+                        <div>Network error occurred</div>
+                    </div>
+                `;
+            });
+        }
+        
+        // Form submission
+        document.getElementById('chat-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const input = document.getElementById('question-input');
+            const question = input.value.trim();
+            if (question) {
+                askQuestion(question);
+                input.value = '';
+            }
+        });
+        
+        // Enter key support
+        document.getElementById('question-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('chat-form').dispatchEvent(new Event('submit'));
+            }
+        });
+    </script>
+</body>
+</html>

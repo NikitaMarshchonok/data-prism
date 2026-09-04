@@ -1,4 +1,6 @@
 pandas
+openpyxl
+xlrd
 numpy
 matplotlib
 seaborn
@@ -15,3 +17,6 @@ gpt4free
 scikit-learn
 matplotlib
 xgboost
+pydantic
+requests
+scipy

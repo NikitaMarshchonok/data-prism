@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VibeDash - Data Prism v2</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash.css') }}">
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-blue-400 mb-2">VibeDash</h1>
+            <p class="text-gray-300 text-lg">Data Prism v2 - Prompt → Dashboard</p>
+            {% if ollama_available %}
+                <div class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-green-900 text-green-300 mt-2">
+                    <span class="w-2 h-2 bg-green-400 rounded-full mr-2"></span>
+                    Ollama Available
+                </div>
+            {% else %}
+                <div class="inline-flex items-center px-3 py-1 rounded-full text-sm bg-yellow-900 text-yellow-300 mt-2">
+                    <span class="w-2 h-2 bg-yellow-400 rounded-full mr-2"></span>
+                    Ollama Unavailable (using heuristics)
+                </div>
+            {% endif %}
+        </div>
+
+        <!-- Main Form -->
+        <div class="max-w-4xl mx-auto">
+            <form method="POST" action="{{ url_for('vibedash.preview') }}" enctype="multipart/form-data" class="space-y-6">
+                <!-- File Upload -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4 text-blue-300">📁 Upload CSV File</h2>
+                    <div class="flex items-center space-x-4">
+                        <input type="file" name="datafile" id="datafile" accept=".csv" required
+                               class="block w-full text-sm text-gray-300 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700">
+                    </div>
+                    <p id="file-selected-name" class="mt-2 text-sm text-gray-400">No file selected</p>
+                </div>
+
+                <!-- Prompt Input -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4 text-blue-300">💭 Describe what you want to see</h2>
+                    <textarea name="prompt" rows="4" required
+                              placeholder="For example: 'Create a sales dashboard with main KPIs, top 10 categories by revenue, monthly trends and region filters'"
+                              class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"></textarea>
+                </div>
+
+                <!-- Preset Prompts -->
+                <div class="bg-gray-800 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold mb-4 text-blue-300">🚀 Quick Templates</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <button type="button" onclick="setPrompt('{{ preset_prompts.sales }}')"
+                                class="p-4 bg-blue-600 hover:bg-blue-700 rounded-lg text-left transition-colors">
+                            <div class="font-semibold">💰 Sales</div>
+                            <div class="text-sm text-blue-200 mt-1">KPIs, categories, trends, regions</div>
+                        </button>
+                        <button type="button" onclick="setPrompt('{{ preset_prompts.finance }}')"
+                                class="p-4 bg-green-600 hover:bg-green-700 rounded-lg text-left transition-colors">
+                            <div class="font-semibold">💼 Finance</div>
+                            <div class="text-sm text-green-200 mt-1">Revenue, expenses, delta, trends</div>
+                        </button>
+                        <button type="button" onclick="setPrompt('{{ preset_prompts.real_estate }}')"
+                                class="p-4 bg-purple-600 hover:bg-purple-700 rounded-lg text-left transition-colors">
+                            <div class="font-semibold">🏠 Real Estate</div>
+                            <div class="text-sm text-purple-200 mt-1">Prices, rooms, cities, streets</div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Submit Button -->
+                <div class="text-center space-y-4">
+                    <button type="submit" id="submit-btn"
+                            class="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">
+                        🎯 Create Dashboard
+                    </button>
+                    <div id="loading-indicator" class="hidden text-blue-400">
+                        <div class="animate-spin text-2xl mb-2">⏳</div>
+                        <div>Processing your request...</div>
+                    </div>
+                    <div class="text-gray-400 text-sm">or</div>
+                    <a href="{{ url_for('vibedash.chat') }}" 
+                       class="inline-block px-8 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors">
+                        🤖 AI Data Science Chat
+                    </a>
+                </div>
+            </form>
+        </div>
+
+        <!-- Features -->
+        <div class="max-w-4xl mx-auto mt-12">
+            <h2 class="text-2xl font-semibold text-center mb-8 text-blue-300">✨ VibeDash Features</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <div class="bg-gray-800 rounded-lg p-6 text-center">
+                    <div class="text-3xl mb-3">🤖</div>
+                    <h3 class="font-semibold mb-2">AI Analysis</h3>
+                    <p class="text-gray-400 text-sm">Automatic prompt parsing and dashboard specification generation</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6 text-center">
+                    <div class="text-3xl mb-3">📊</div>
+                    <h3 class="font-semibold mb-2">Interactive Charts</h3>
+                    <p class="text-gray-400 text-sm">Plotly charts with zoom and filter capabilities</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6 text-center">
+                    <div class="text-3xl mb-3">📁</div>
+                    <h3 class="font-semibold mb-2">HTML Export</h3>
+                    <p class="text-gray-400 text-sm">Self-contained file for offline viewing and sharing</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6 text-center">
+                    <div class="text-3xl mb-3">🎯</div>
+                    <h3 class="font-semibold mb-2">KPI Metrics</h3>
+                    <p class="text-gray-400 text-sm">Automatic calculation of key performance indicators</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6 text-center">
+                    <div class="text-3xl mb-3">🔍</div>
+                    <h3 class="font-semibold mb-2">Smart Filters</h3>
+                    <p class="text-gray-400 text-sm">Automatic filter detection based on data</p>
+                </div>
+                <div class="bg-gray-800 rounded-lg p-6 text-center">
+                    <div class="text-3xl mb-3">💡</div>
+                    <h3 class="font-semibold mb-2">AI Comments</h3>
+                    <p class="text-gray-400 text-sm">Automatic comments for charts and metrics</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function setPrompt(prompt) {
+            document.querySelector('textarea[name="prompt"]').value = prompt;
+        }
+
+        // Простой JavaScript без блокировки формы
+        document.addEventListener('DOMContentLoaded', function() {
+            const fileInput = document.querySelector('input[type="file"]');
+            const fileInfo = document.getElementById('file-selected-name');
+            
+            fileInput.addEventListener('change', function(e) {
+                if (e.target.files.length > 0) {
+                    fileInfo.textContent = `Selected: ${e.target.files[0].name}`;
+                    fileInfo.className = 'text-green-400 text-sm mt-2';
+                } else {
+                    fileInfo.textContent = '';
+                }
+            });
+        });
+    </script>
+</body>
+</html>

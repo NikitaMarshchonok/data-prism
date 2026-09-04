@@ -2,7 +2,7 @@ from jinja2 import Environment, FileSystemLoader
 
 def generate_report(stats, interactive_charts, missing_data=None, corr_chart=None,
                     categorical_data=None, column_overview=None, column_descriptions=None,
-                    time_trends=None,# ✅ добавлено
+                    time_trends=None, data_quality=None,
                     template_path='templates',
                     template_file='report_template.html',
                     output_file='final_report.html'):
@@ -18,7 +18,8 @@ def generate_report(stats, interactive_charts, missing_data=None, corr_chart=Non
         categorical_data=categorical_data,
         column_overview=column_overview,
         time_trends=time_trends,
-        column_descriptions=column_descriptions
+        column_descriptions=column_descriptions,
+        data_quality=data_quality
     )
 
     with open(output_file, 'w', encoding='utf-8') as f:
