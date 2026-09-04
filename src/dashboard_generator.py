@@ -417,8 +417,11 @@ def generate_dashboard_data(df, target_column=None):
         ml_result = predict_target(df, target_column)
         ml_card = {
             "target": ml_result.get("target_col", "Не определена"),
+            "task_type": ml_result.get("task_type"),
+            "model_name": ml_result.get("model_name"),
             "metric": ml_result.get("metric", "Нет метрики"),
-            "plot": ml_result.get("feature_importance_plot", None)
+            "plot": ml_result.get("feature_importance_plot", None),
+            "evaluation_notes": ml_result.get("evaluation_notes", []),
         }
     except Exception as e:
         ml_card = None
@@ -427,4 +430,3 @@ def generate_dashboard_data(df, target_column=None):
 
 
     return kpis, top_charts, tables, summary, sparklines, ai_summary, ml_card
-
