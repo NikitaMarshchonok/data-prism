@@ -17,8 +17,8 @@ class Metric(BaseModel):
 
 class Chart(BaseModel):
     """Спецификация графика"""
-    type: Literal["bar", "line", "area", "scatter", "hist", "pie"]
-    x: str
+    type: Literal["bar", "line", "area", "scatter", "hist", "pie", "gauge"]
+    x: Optional[str] = None  # Опционально для gauge charts
     y: Optional[Union[str, List[str]]] = None
     agg: Optional[str] = None   # "sum", "mean", "count", "max", "min"
     top: Optional[int] = None   # для топ-N записей
@@ -79,9 +79,21 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
     elif any(word in prompt for word in ["недвижим", "real estate", "property", "квартир"]):
         title = "Анализ недвижимости"
     
-    # Ищем числовые колонки для метрик
-    numeric_cols = [col for col in df_columns if _is_numeric_column(col)]
-    categorical_cols = [col for col in df_columns if not _is_numeric_column(col)]
+    # Ищем числовые колонки для метрик (более точная проверка)
+    numeric_cols = []
+    categorical_cols = []
+    
+    for col in df_columns:
+        if _is_numeric_column(col):
+            # Дополнительная проверка - исключаем явно строковые ID
+            if not ("customer" in col.lower() and "id" in col.lower()) and \
+               not ("user" in col.lower() and "id" in col.lower()) and \
+               not ("product" in col.lower() and "id" in col.lower()):
+                numeric_cols.append(col)
+            else:
+                categorical_cols.append(col)
+        else:
+            categorical_cols.append(col)
     
     metrics = []
     charts = []
@@ -174,6 +186,23 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
                 title="Correlation Analysis"
             ))
     
+    # Добавляем gauge charts для KPI
+    if numeric_cols:
+        # Gauge для первой числовой колонки
+        charts.append(Chart(
+            type="gauge",
+            y=numeric_cols[0],
+            agg="mean",
+            title=f"Performance Gauge: {numeric_cols[0]}"
+        ))
+        
+        # Gauge для количества записей
+        charts.append(Chart(
+            type="gauge",
+            agg="count",
+            title="Data Completeness"
+        ))
+    
     # Фильтры
     if categorical_cols:
         filters.append(Filter(field=categorical_cols[0], values=None))
@@ -196,7 +225,15 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
 
 def _is_numeric_column(col_name: str) -> bool:
     """Проверяет, является ли колонка числовой по названию"""
-    numeric_keywords = ["id", "count", "number", "amount", "price", "cost", "revenue", "sales", "age", "year", "month", "day", "value", "score", "rate", "percent", "ratio"]
+    # Исключаем ID колонки, которые обычно содержат строки
+    if "id" in col_name.lower() and "customer" in col_name.lower():
+        return False
+    if "id" in col_name.lower() and "user" in col_name.lower():
+        return False
+    if "id" in col_name.lower() and "product" in col_name.lower():
+        return False
+    
+    numeric_keywords = ["count", "number", "amount", "price", "cost", "revenue", "sales", "age", "year", "month", "day", "value", "score", "rate", "percent", "ratio", "total", "sum", "avg", "mean", "max", "min"]
     return any(keyword in col_name.lower() for keyword in numeric_keywords) or col_name.isdigit()
 
 
@@ -221,7 +258,7 @@ def _improve_with_ollama(prompt: str, spec: VizSpec, df_columns: List[str]) -> O
         }}
         """
         
-        response = ollama_generate(system_prompt, prompt)
+        response = ollama_generate("llama3.1:8b", system_prompt, prompt)
         if response:
             # Парсим JSON ответ
             data = json.loads(response)
