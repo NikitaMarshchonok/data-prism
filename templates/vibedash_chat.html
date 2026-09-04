@@ -128,6 +128,12 @@
 
     <script>
         let currentSessionId = null;
+
+        function escapeHtml(value) {
+            const element = document.createElement('div');
+            element.textContent = value == null ? '' : String(value);
+            return element.innerHTML;
+        }
         
         // Get session ID from URL or create new one
         function getSessionId() {
@@ -147,12 +153,12 @@
             if (isUser) {
                 messageDiv.innerHTML = `
                     <div class="text-sm text-gray-400">You</div>
-                    <div class="text-white">${content}</div>
+                    <div class="text-white">${escapeHtml(content)}</div>
                 `;
             } else {
                 messageDiv.innerHTML = `
                     <div class="text-sm text-blue-200">AI Assistant</div>
-                    <div class="text-white">${content}</div>
+                    <div class="text-white">${escapeHtml(content)}</div>
                 `;
             }
             
@@ -167,7 +173,7 @@
             let html = `
                 <div class="bg-gray-700 rounded-lg p-4 mb-4">
                     <h3 class="text-lg font-semibold mb-2 text-white">AI Analysis</h3>
-                    <div class="text-gray-300 whitespace-pre-line">${analysis.answer}</div>
+                    <div class="text-gray-300 whitespace-pre-line">${escapeHtml(analysis.answer)}</div>
                 </div>
             `;
             
@@ -177,7 +183,7 @@
                 analysis.charts.forEach((chart, index) => {
                     html += `
                         <div class="bg-gray-700 rounded-lg p-4">
-                            <h4 class="text-lg font-semibold mb-2 text-white">${chart.title}</h4>
+                            <h4 class="text-lg font-semibold mb-2 text-white">${escapeHtml(chart.title)}</h4>
                             <div class="chart-container" id="chart-${index}">
                                 <div class="text-center text-gray-400 py-8">
                                     <div class="animate-spin text-2xl mb-2">📊</div>
@@ -192,15 +198,45 @@
             
             // Add insights
             if (analysis.insights && analysis.insights.length > 0) {
-                html += `
-                    <div class="bg-gray-700 rounded-lg p-4 mt-4">
-                        <h4 class="text-lg font-semibold mb-2 text-white">💡 Key Insights</h4>
-                        <ul class="text-gray-300 space-y-1">
-                `;
+                html += '<div class="space-y-4 mt-4">';
                 analysis.insights.forEach(insight => {
-                    html += `<li>• ${insight}</li>`;
+                    if (typeof insight === 'string') {
+                        // Старый формат - просто строка
+                        html += `
+                            <div class="bg-gray-700 rounded-lg p-4">
+                                <h4 class="text-lg font-semibold mb-2 text-white">💡 Key Insights</h4>
+                                <div class="text-gray-300">${escapeHtml(insight)}</div>
+                            </div>
+                        `;
+                    } else if (insight.type === 'evidence') {
+                        const evidence = Array.isArray(insight.evidence)
+                            ? insight.evidence.map(item => `<li>• ${escapeHtml(item)}</li>`).join('')
+                            : '';
+                        html += `
+                            <div class="bg-gradient-to-r from-blue-900 to-purple-900 rounded-lg p-6 border-l-4 border-blue-400">
+                                <div class="flex items-center mb-4">
+                                    <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center mr-3">
+                                        <span class="text-white text-lg">🔎</span>
+                                    </div>
+                                    <h4 class="text-xl font-bold text-blue-300">${escapeHtml(insight.title)}</h4>
+                                </div>
+                                <div class="text-gray-200 leading-relaxed">${escapeHtml(insight.statement)}</div>
+                                <ul class="text-gray-400 text-sm mt-3 space-y-1">${evidence}</ul>
+                                <div class="text-blue-200 text-sm mt-3"><strong>Recommended next step:</strong> ${escapeHtml(insight.recommendation)}</div>
+                                <div class="text-gray-500 text-xs mt-3 uppercase">${escapeHtml(insight.confidence)} support · n=${escapeHtml(insight.sample_size)}</div>
+                            </div>
+                        `;
+                    } else {
+                        // Другие типы инсайтов
+                        html += `
+                            <div class="bg-gray-700 rounded-lg p-4">
+                                <h4 class="text-lg font-semibold mb-2 text-white">💡 Key Insights</h4>
+                                <div class="text-gray-300">${escapeHtml(insight.content || '')}</div>
+                            </div>
+                        `;
+                    }
                 });
-                html += '</ul></div>';
+                html += '</div>';
             }
             
             resultsDiv.innerHTML = html;

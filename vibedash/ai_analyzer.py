@@ -9,6 +9,9 @@ from typing import Dict, List, Any, Tuple
 import re
 import os
 import json
+import numpy as np
+
+from .insight_engine import EvidenceBasedInsightEngine
 
 
 class DataScienceAI:
@@ -33,26 +36,34 @@ class DataScienceAI:
         # Определяем тип анализа
         analysis_type = self._detect_analysis_type(question)
         
+        # Получаем основной анализ
         if analysis_type == "correlation":
-            return self._analyze_correlations(question)
+            result = self._analyze_correlations(question)
         elif analysis_type == "trend":
-            return self._analyze_trends(question)
+            result = self._analyze_trends(question)
         elif analysis_type == "distribution":
-            return self._analyze_distributions(question)
+            result = self._analyze_distributions(question)
         elif analysis_type == "outliers":
-            return self._analyze_outliers(question)
+            result = self._analyze_outliers(question)
         elif analysis_type == "summary":
-            return self._analyze_summary(question)
+            result = self._analyze_summary(question)
         elif analysis_type == "comparison":
-            return self._analyze_comparisons(question)
+            result = self._analyze_comparisons(question)
         elif analysis_type == "prediction":
-            return self._analyze_predictions(question)
+            result = self._analyze_predictions(question)
         elif analysis_type == "clustering":
-            return self._analyze_clustering(question)
+            result = self._analyze_clustering(question)
         elif analysis_type == "statistical":
-            return self._analyze_statistical_tests(question)
+            result = self._analyze_statistical_tests(question)
         else:
-            return self._general_analysis(question)
+            result = self._general_analysis(question)
+
+        # Добавляем рассчитанные выводы с проверяемыми доказательствами.
+        if "insights" not in result:
+            result["insights"] = []
+        result["insights"].extend(EvidenceBasedInsightEngine(self.df).generate())
+
+        return result
     
     def _detect_analysis_type(self, question: str) -> str:
         """Определяет тип анализа по вопросу"""
@@ -137,7 +148,7 @@ class DataScienceAI:
             "answer": answer,
             "charts": [{
                 "title": "Correlation Matrix",
-                "html": self._create_chart_html(fig, f"chart_{hash(question)}_0")
+                "html": self._create_chart_html(fig, f"chart_{hash(question)}_0", "Correlation Matrix")
             }],
             "insights": insights
         }
@@ -193,7 +204,7 @@ class DataScienceAI:
                 
                 charts.append({
                     "title": f"Trend: {col}",
-                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0")
+                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0", f"Trend Analysis: {col}")
                 })
                 
                 # Анализируем тренд
@@ -251,7 +262,7 @@ class DataScienceAI:
                 
                 charts.append({
                     "title": f"Distribution: {col}",
-                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0")
+                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0", f"Distribution Analysis: {col}")
                 })
                 
                 # Анализируем распределение
@@ -312,7 +323,7 @@ class DataScienceAI:
                 
                 charts.append({
                     "title": f"Outliers: {col}",
-                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0")
+                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0", f"Outlier Detection: {col}")
                 })
                 
                 # Находим выбросы по IQR
@@ -461,7 +472,7 @@ class DataScienceAI:
             
             charts.append({
                 "title": f"Comparison: {num_col} by {cat_col}",
-                "html": self._create_chart_html(fig, f"chart_{hash(question)}_0")
+                "html": self._create_chart_html(fig, f"chart_{hash(question)}_0", f"Comparison: {num_col} by {cat_col}")
             })
             
             # Статистика по категориям
@@ -891,7 +902,7 @@ class DataScienceAI:
                 
                 charts.append({
                     "title": f"Distribution: {col}",
-                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0")
+                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0", f"Distribution Analysis: {col}")
                 })
             
             # Формируем ответ
@@ -922,7 +933,6 @@ class DataScienceAI:
                 "insights": []
             }
     
-    def _create_chart_html(self, fig, div_id):
-        """Создает HTML для графика"""
-        # Просто генерируем HTML с Plotly.js - это самый надежный способ
-        return fig.to_html(full_html=False, include_plotlyjs=True, div_id=div_id)
+    def _create_chart_html(self, fig, div_id, chart_title=""):
+        """Создает HTML графика без недоказуемых шаблонных комментариев."""
+        return fig.to_html(full_html=False, include_plotlyjs=False, div_id=div_id)

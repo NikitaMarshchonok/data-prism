@@ -213,7 +213,20 @@
 <div style="background-color: #1e2a3b; padding: 20px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
     <h2 style="color: #00cec9;">🎯 ML-предсказание</h2>
     <p><strong>Целевая переменная:</strong> {{ ml_card.target }}</p>
+    {% if ml_card.task_type %}
+        <p><strong>Тип задачи:</strong> {{ ml_card.task_type }}</p>
+    {% endif %}
+    {% if ml_card.model_name %}
+        <p><strong>Модель:</strong> {{ ml_card.model_name }}</p>
+    {% endif %}
     <p><strong>Метрика модели:</strong> {{ ml_card.metric }}</p>
+    {% if ml_card.evaluation_notes %}
+        <ul style="color: #b2bec3; margin-top: 10px;">
+        {% for note in ml_card.evaluation_notes %}
+            <li>{{ note }}</li>
+        {% endfor %}
+        </ul>
+    {% endif %}
     {% if ml_card.plot %}
         <img src="{{ ml_card.plot }}" style="max-width: 100%; border-radius: 10px; margin-top: 10px;">
     {% else %}

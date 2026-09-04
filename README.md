@@ -8,6 +8,16 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ##  Features
 
+- 📁 Supports: `.csv`, `.xlsx`, `.tsv`, `.json`, `.parquet`
+- 📊 Interactive dashboard: KPI cards, histograms, frequency charts, time trends
+- 🧠 AI Summary: automatic insights using LLMs
+- 🔎 Evidence-based insights with metrics, support levels, and recommended next steps
+- 🧪 Leakage-safe ML evaluation with holdout metrics and naive baseline comparison
+- 📉 Missing values, correlation matrix, outlier detection (IQR)
+- 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
+- 🧾 PDF export of full analytics report
+- ⚡ Handles large files (up to 100,000 rows)
+- 🔍 Filtering, sorting, and search-enabled data tables
 
 
 ---
@@ -88,7 +98,8 @@ New features, performance optimizations, and visual enhancements will be added o
 ###  Planned Features
 
 - [ ] Export filtered data to Excel
-- [ ] Add AutoML prediction block
+- [x] Add leakage-safe baseline ML evaluation block
+- [ ] Compare multiple model families with cross-validation
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness

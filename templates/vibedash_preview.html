@@ -17,10 +17,6 @@
                 <p class="text-gray-300 mt-1">File: {{ filename }} | Records: {{ dashboard_data.df_shape[0] if dashboard_data.df_shape else 'N/A' }}</p>
             </div>
             <div class="flex space-x-4">
-                <a href="{{ url_for('vibedash.chat') }}?session_id={{ session_id }}" 
-                   class="px-6 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-lg transition-colors">
-                    🤖 AI Chat
-                </a>
                 <a href="{{ url_for('vibedash.export', session_id=session_id) }}" 
                    class="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg transition-colors">
                     📁 Export HTML
@@ -51,6 +47,31 @@
                     <div class="text-gray-500 text-xs mt-1" title="{{ kpi.tooltip }}">{{ kpi.tooltip }}</div>
                     {% endif %}
                 </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Evidence-based Insights -->
+        {% if dashboard_data.insights %}
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold mb-2 text-blue-300">🔎 Evidence-based Insights</h2>
+            <p class="text-gray-400 mb-4">Every conclusion below is backed by calculated dataset evidence.</p>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {% for insight in dashboard_data.insights %}
+                <article class="bg-gray-800 rounded-lg p-6 border-l-4 {% if insight.severity == 'critical' %}border-red-500{% elif insight.severity == 'warning' %}border-yellow-500{% else %}border-blue-500{% endif %}">
+                    <div class="flex justify-between gap-4 mb-2">
+                        <h3 class="text-lg font-semibold text-white">{{ insight.title }}</h3>
+                        <span class="text-xs uppercase tracking-wide text-gray-400">{{ insight.confidence }} support</span>
+                    </div>
+                    <p class="text-gray-200 mb-3">{{ insight.statement }}</p>
+                    <ul class="text-sm text-gray-400 space-y-1 mb-3">
+                        {% for item in insight.evidence %}
+                        <li>• {{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                    <p class="text-sm text-blue-200"><strong>Recommended next step:</strong> {{ insight.recommendation }}</p>
+                </article>
                 {% endfor %}
             </div>
         </div>
@@ -113,7 +134,7 @@
             <h2 class="text-2xl font-semibold mb-4 text-blue-300">🤖 AI Analysis</h2>
             <div class="bg-gray-800 rounded-lg p-6">
                 <div class="prose prose-invert max-w-none">
-                    {{ dashboard_data.ai_summary | safe }}
+                    <div class="whitespace-pre-line">{{ dashboard_data.ai_summary }}</div>
                 </div>
             </div>
         </div>
