@@ -8,6 +8,15 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 
 ##  Features
 
+- 📁 Supports: `.csv`, `.xlsx`, `.tsv`, `.json`, `.parquet`
+- 📊 Interactive dashboard: KPI cards, histograms, frequency charts, time trends
+- 🧠 AI Summary: automatic insights using LLMs
+- 🔎 Evidence-based insights with metrics, support levels, and recommended next steps
+- 📉 Missing values, correlation matrix, outlier detection (IQR)
+- 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
+- 🧾 PDF export of full analytics report
+- ⚡ Handles large files (up to 100,000 rows)
+- 🔍 Filtering, sorting, and search-enabled data tables
 
 
 ---

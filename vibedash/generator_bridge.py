@@ -5,15 +5,15 @@ import ast
 import operator
 import re
 from functools import reduce
+from html import escape
 from numbers import Number
 from typing import Any, Dict, List
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import plotly.figure_factory as ff
 from .spec import VizSpec, Metric, Chart, Filter
-from .advanced_ai_analyzer import AdvancedAIAnalyzer
+from .insight_engine import EvidenceBasedInsightEngine
 
 
 MAX_DSL_LENGTH = 1000
@@ -156,7 +156,9 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
             "kpis": [],
             "charts": [],
             "tables": [],
-            "ai_summary": "Нет данных для анализа"
+            "ai_summary": "Нет данных для анализа",
+            "insights": [],
+            "df_shape": (0, 0) if df is None else df.shape,
         }
     
     # Применяем фильтры
@@ -173,12 +175,17 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
     
     # AI summary
     ai_summary = _generate_ai_summary(filtered_df, viz_spec)
+
+    # Доказательные выводы рассчитываются детерминированно, без LLM.
+    insights = EvidenceBasedInsightEngine(filtered_df).generate()
     
     return {
         "kpis": kpis,
         "charts": charts,
         "tables": tables,
-        "ai_summary": ai_summary
+        "ai_summary": ai_summary,
+        "insights": insights,
+        "df_shape": filtered_df.shape,
     }
 
 
@@ -327,14 +334,14 @@ def _generate_charts(df: pd.DataFrame, charts: List[Chart]) -> List[Dict[str, st
             print(f"⚠️ Ошибка в графике {chart.title}: {e}")
             chart_list.append({
                 "title": chart.title or f"График: {chart.type}",
-                "html": f"<div>Ошибка создания графика: {str(e)}</div>"
+                "html": f"<div>Ошибка создания графика: {escape(str(e))}</div>"
             })
     
     return chart_list
 
 
 def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
-    """Создает HTML для графика с продвинутым AI анализом"""
+    """Создает HTML графика; аналитические выводы формируются отдельно."""
     
     if chart.type == "bar":
         if chart.agg and chart.y:
@@ -458,49 +465,8 @@ def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
         margin=dict(t=40, b=30, l=0, r=0)
     )
 
-    # Генерируем HTML с Plotly.js
-    chart_html = fig.to_html(full_html=False, include_plotlyjs=True)
-    
-    # Добавляем продвинутый AI анализ
-    try:
-        ai_analyzer = AdvancedAIAnalyzer(df)
-
-        # Извлекаем данные из графика для анализа
-        chart_data = {}
-        if hasattr(fig, 'data') and fig.data:
-            first_trace = fig.data[0]
-            if hasattr(first_trace, 'x'):
-                chart_data['x'] = first_trace.x
-            if hasattr(first_trace, 'y'):
-                chart_data['y'] = first_trace.y
-            if hasattr(first_trace, 'z'):
-                chart_data['z'] = first_trace.z
-            if hasattr(first_trace, 'value'):
-                chart_data['value'] = first_trace.value
-
-        # Генерируем AI анализ
-        ai_analysis = ai_analyzer.analyze_chart(chart_data, chart.type, chart.title)
-
-        # Объединяем HTML графика с AI анализом
-        return f"""
-        <div class="chart-with-ai-analysis">
-            {chart_html}
-            <div class="ai-analysis mt-6 p-6 bg-gradient-to-r from-blue-900 to-purple-900 rounded-lg border-l-4 border-blue-400">
-                <div class="flex items-center mb-4">
-                    <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center mr-3">
-                        <span class="text-white text-lg">🧠</span>
-                    </div>
-                    <h4 class="text-xl font-bold text-blue-300">Professional Data Science Analysis</h4>
-                </div>
-                <div class="text-gray-200 whitespace-pre-line leading-relaxed text-sm">
-                    {ai_analysis}
-                </div>
-            </div>
-        </div>
-        """
-    except Exception as e:
-        # Fallback на простой HTML если AI анализ не работает
-        return chart_html
+    # Plotly загружается один раз шаблоном страницы.
+    return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
 def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]]:
@@ -562,4 +528,4 @@ def _generate_ai_summary(df: pd.DataFrame, viz_spec: VizSpec) -> str:
     if viz_spec.comments:
         summary_parts.extend(viz_spec.comments)
     
-    return "<br>".join(summary_parts)
+    return "\n".join(summary_parts)
