@@ -1,4 +1,5 @@
 import os
+import re
 import secrets
 import uuid
 
@@ -21,6 +22,12 @@ from src.data_analyzer import (
 from src.visualizer import plot_histogram_interactive, plot_time_trend
 from src.report_generator import generate_report
 from src.pdf_exporter import export_report_to_pdf
+from src.data_drift import (
+    compare_to_baseline,
+    create_baseline_profile,
+    load_baseline_profile,
+    save_baseline_profile,
+)
 from markupsafe import Markup
 import markdown as md
 
@@ -28,6 +35,7 @@ import markdown as md
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'uploads')
 REPORT_FOLDER = os.path.join(BASE_DIR, 'reports')
+BASELINE_FOLDER = os.path.join(BASE_DIR, 'data', 'baselines')
 IMAGE_FOLDER = 'images'
 
 # ✅ Создаём папки, если их нет
@@ -38,6 +46,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY') or secrets.token_hex(32)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['REPORT_FOLDER'] = REPORT_FOLDER
+app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_UPLOAD_MB', '100')) * 1024 * 1024
 
 # Регистрируем VibeDash Blueprint
@@ -85,6 +94,13 @@ def save_uploaded_dataset(uploaded_file):
     return data, truncated, dataset_id, dataset_filename
 
 
+def baseline_profile_path(filename):
+    """Resolve only server-generated baseline profile names."""
+    if not isinstance(filename, str) or not re.fullmatch(r'[0-9a-f]{32}\.json', filename):
+        raise ValueError('Некорректная ссылка на baseline-профиль.')
+    return os.path.join(app.config['BASELINE_FOLDER'], filename)
+
+
 @app.errorhandler(413)
 def upload_too_large(_error):
     max_upload_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
@@ -111,6 +127,7 @@ def upload_file():
             report_filename = f'{dataset_id}.html'
             report_path = os.path.join(app.config['REPORT_FOLDER'], report_filename)
             session['dataset_filename'] = dataset_filename
+            session['dataset_name'] = secure_filename(file.filename or dataset_filename)
             session['report_filename'] = report_filename
             session['dataset_truncated'] = truncated
 
@@ -223,6 +240,46 @@ def show_dashboard():
     if df is None:
         return "<h2>❌ Ошибка загрузки данных</h2>", 404
 
+    # Явно фиксируем текущий датасет как эталон.
+    # Последующие загрузки его не перезаписывают.
+    if request.method == 'POST' and request.form.get('dashboard_action') == 'set_drift_baseline':
+        baseline_filename = session.get('baseline_profile_filename')
+        if not baseline_filename:
+            baseline_filename = f'{uuid.uuid4().hex}.json'
+        try:
+            baseline_profile = create_baseline_profile(
+                df,
+                dataset_name=session.get('dataset_name', dataset_filename),
+            )
+            save_baseline_profile(
+                baseline_profile,
+                baseline_profile_path(baseline_filename),
+            )
+            session['baseline_profile_filename'] = baseline_filename
+        except (OSError, ValueError):
+            app.logger.exception('Не удалось сохранить baseline-профиль')
+            return (
+                'Не удалось сохранить baseline-профиль текущего датасета.',
+                400,
+            )
+        return redirect(url_for('show_dashboard'))
+
+    drift_report = None
+    drift_error = None
+    baseline_filename = session.get('baseline_profile_filename')
+    if baseline_filename:
+        try:
+            baseline_profile = load_baseline_profile(baseline_profile_path(baseline_filename))
+            drift_report = compare_to_baseline(df, baseline_profile)
+        except (OSError, ValueError):
+            app.logger.exception(
+                'Не удалось сравнить датасет с baseline-профилем'
+            )
+            drift_error = (
+                'Baseline-профиль недоступен или повреждён. '
+                'Сохраните новый эталон.'
+            )
+
     # Получаем список подходящих колонок для целевой переменной
     selectable_columns = [col for col in df.columns if df[col].nunique() >= 2]
 
@@ -244,6 +301,9 @@ def show_dashboard():
             sparklines=sparklines,
             ai_summary=ai_summary,
             ml_card=ml_card,
+            drift_report=drift_report,
+            drift_error=drift_error,
+            baseline_configured=bool(baseline_filename),
             selectable_columns=selectable_columns,
             selected_target=selected_target
         )
