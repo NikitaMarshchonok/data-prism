@@ -74,7 +74,7 @@ class DriftStoreTests(unittest.TestCase):
     def test_history_and_alerts_are_isolated_by_scope(self):
         first_store = DriftStore(self.database_path, "scope-a")
         second_store = DriftStore(self.database_path, "scope-b")
-        first_store.record_run(make_report("critical"), batch_id="batch-1")
+        recorded = first_store.record_run(make_report("critical"), batch_id="batch-1")
         first_alert = first_store.list_alerts()[0]
 
         self.assertEqual(len(first_store.list_runs()), 1)
@@ -82,6 +82,8 @@ class DriftStoreTests(unittest.TestCase):
         self.assertEqual(second_store.list_alerts(), [])
         self.assertFalse(second_store.acknowledge_alert(first_alert["id"]))
         self.assertEqual(len(first_store.list_alerts()), 1)
+        self.assertEqual(first_store.get_run(recorded["run_id"])["status"], "critical")
+        self.assertIsNone(second_store.get_run(recorded["run_id"]))
 
     def test_retention_removes_old_runs_and_their_alerts(self):
         store = DriftStore(self.database_path, "scope-a", retention=2)
