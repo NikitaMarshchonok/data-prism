@@ -292,6 +292,39 @@
             maximum absolute error: {{ ml_card.diagnostics.residual_summary.max_absolute_error }}.
         </p>
     {% endif %}
+    {% if ml_card.reliability %}
+        <h3 style="color: #74b9ff; margin-top: 20px;">Надёжность оценки</h3>
+        <p style="color: {% if ml_card.reliability.status == 'warning' %}#ffeaa7{% else %}#b2bec3{% endif %};">
+            {{ ml_card.reliability.summary }}
+        </p>
+        {% if ml_card.reliability.feature_stability %}
+            <p style="color: #b2bec3;"><strong>Наибольшие различия train/holdout:</strong>
+                {% for item in ml_card.reliability.feature_stability[:3] %}
+                    {{ item.feature }}={{ "%.3f"|format(item.distance) }} ({{ item.severity }}){% if not loop.last %}; {% endif %}
+                {% endfor %}
+            </p>
+        {% endif %}
+        {% if ml_card.reliability.subgroup_performance %}
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
+                    <thead><tr style="text-align: left; color: #dfe6e9;">
+                        <th style="padding: 8px;">Подгруппа</th><th style="padding: 8px;">Метрика</th>
+                        <th style="padding: 8px;">Gap</th><th style="padding: 8px;">Худшая группа</th>
+                    </tr></thead>
+                    <tbody>{% for item in ml_card.reliability.subgroup_performance %}
+                        <tr style="color: #b2bec3; border-top: 1px solid #2d3b4f;">
+                            <td style="padding: 8px;">{{ item.feature }}</td><td style="padding: 8px;">{{ item.metric }}</td>
+                            <td style="padding: 8px;">{{ "%.3f"|format(item.absolute_gap) }}</td>
+                            <td style="padding: 8px;">{{ item.worst_group }}</td>
+                        </tr>
+                    {% endfor %}</tbody>
+                </table>
+            </div>
+        {% endif %}
+        <p style="color: #ffeaa7; font-size: 0.85rem;">
+            Random holdout stability is not production drift monitoring. Subgroup gaps are not, by themselves, proof of unfairness.
+        </p>
+    {% endif %}
     {% if ml_card.evaluation_notes %}
         <ul style="color: #b2bec3; margin-top: 10px;">
         {% for note in ml_card.evaluation_notes %}
