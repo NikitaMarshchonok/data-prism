@@ -16,6 +16,7 @@ class WebUploadTests(unittest.TestCase):
         self.upload_folder = Path(self.temporary_directory.name) / "uploads"
         self.report_folder = Path(self.temporary_directory.name) / "reports"
         self.baseline_folder = Path(self.temporary_directory.name) / "baselines"
+        self.drift_store_path = Path(self.temporary_directory.name) / "drift.sqlite3"
         self.upload_folder.mkdir()
         self.report_folder.mkdir()
         self.previous_config = {
@@ -23,6 +24,8 @@ class WebUploadTests(unittest.TestCase):
             "UPLOAD_FOLDER": web_app.app.config["UPLOAD_FOLDER"],
             "REPORT_FOLDER": web_app.app.config["REPORT_FOLDER"],
             "BASELINE_FOLDER": web_app.app.config["BASELINE_FOLDER"],
+            "DRIFT_STORE_PATH": web_app.app.config["DRIFT_STORE_PATH"],
+            "DRIFT_HISTORY_RETENTION": web_app.app.config["DRIFT_HISTORY_RETENTION"],
             "MAX_CONTENT_LENGTH": web_app.app.config["MAX_CONTENT_LENGTH"],
         }
         web_app.app.config.update(
@@ -30,6 +33,8 @@ class WebUploadTests(unittest.TestCase):
             UPLOAD_FOLDER=str(self.upload_folder),
             REPORT_FOLDER=str(self.report_folder),
             BASELINE_FOLDER=str(self.baseline_folder),
+            DRIFT_STORE_PATH=str(self.drift_store_path),
+            DRIFT_HISTORY_RETENTION=100,
         )
 
     def tearDown(self):
@@ -147,15 +152,63 @@ class WebUploadTests(unittest.TestCase):
         with web_app.app.test_client() as client:
             with client.session_transaction() as current_session:
                 current_session["dataset_filename"] = "current.csv"
+                current_session["dataset_name"] = "current.csv"
                 current_session["baseline_profile_filename"] = baseline_filename
 
             response = client.get("/dashboard")
+            duplicate_response = client.get("/dashboard")
+            with client.session_transaction() as current_session:
+                scope_id = current_session["monitoring_scope_id"]
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(duplicate_response.status_code, 200)
         html = response.get_data(as_text=True)
         self.assertIn("Мониторинг data drift", html)
         self.assertIn("Статус: critical", html)
         self.assertIn("amount", html)
+        self.assertIn("Активные drift alerts", html)
+        self.assertIn("Последние drift-проверки", html)
+        store = web_app.DriftStore(self.drift_store_path, scope_id)
+        self.assertEqual(len(store.list_runs()), 1)
+        self.assertEqual(len(store.list_alerts()), 1)
+
+    @patch("src.dashboard_generator.generate_dashboard_data")
+    @patch("src.data_loader.load_data")
+    def test_dashboard_acknowledges_only_current_scope_alert(
+        self,
+        load_data,
+        generate_dashboard_data,
+    ):
+        baseline_data = pd.DataFrame({"amount": list(range(100))})
+        current_data = pd.DataFrame({"amount": list(range(1000, 1100))})
+        baseline_filename = f"{'b' * 32}.json"
+        web_app.save_baseline_profile(
+            web_app.create_baseline_profile(baseline_data),
+            web_app.baseline_profile_path(baseline_filename),
+        )
+        load_data.return_value = current_data, False
+        generate_dashboard_data.return_value = ({}, [], [], "summary", {}, "", None)
+
+        with web_app.app.test_client() as client:
+            with client.session_transaction() as current_session:
+                current_session["dataset_filename"] = "current.csv"
+                current_session["baseline_profile_filename"] = baseline_filename
+            client.get("/dashboard")
+            with client.session_transaction() as current_session:
+                scope_id = current_session["monitoring_scope_id"]
+            store = web_app.DriftStore(self.drift_store_path, scope_id)
+            alert_id = store.list_alerts()[0]["id"]
+
+            response = client.post(
+                "/dashboard",
+                data={
+                    "dashboard_action": "acknowledge_drift_alert",
+                    "alert_id": str(alert_id),
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(store.list_alerts(), [])
 
     def test_upload_larger_than_configured_limit_is_rejected(self):
         web_app.app.config["MAX_CONTENT_LENGTH"] = 256

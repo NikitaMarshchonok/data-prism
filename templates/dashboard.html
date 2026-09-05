@@ -221,6 +221,10 @@
         </button>
     </form>
 
+    {% if drift_store_error %}
+        <p style="color: #ff7675;">{{ drift_store_error }}</p>
+    {% endif %}
+
     {% if drift_error %}
         <p style="color: #ff7675;">{{ drift_error }}</p>
     {% elif drift_report %}
@@ -269,10 +273,48 @@
         {% endif %}
         <p style="color: #ffeaa7; font-size: 0.85rem;">
             PSI/TV-пороги служат для первичного контроля и должны быть откалиброваны под бизнес-контекст.
-            Этот этап не запускает проверки по расписанию и пока не хранит историю drift-событий.
+            Проверки пока не запускаются по расписанию, а alerts не отправляются во внешние каналы.
         </p>
     {% else %}
         <p style="color: #ffeaa7;">Baseline пока не задан — сравнение drift ещё не выполняется.</p>
+    {% endif %}
+
+    {% if drift_alerts %}
+        <h3 style="color: #ff7675; margin-top: 22px;">Активные drift alerts</h3>
+        {% for alert in drift_alerts %}
+            <div style="border-left: 4px solid {% if alert.severity == 'critical' %}#d63031{% else %}#fdcb6e{% endif %}; background: #172235; padding: 12px; margin: 10px 0;">
+                <strong>{{ alert.title }}</strong>
+                <p style="color: #b2bec3; margin: 7px 0;">{{ alert.message }}</p>
+                <small style="color: #95a5a6;">{{ alert.created_at }}</small>
+                <form method="POST" action="/dashboard" style="display: inline; margin-left: 12px;">
+                    <input type="hidden" name="dashboard_action" value="acknowledge_drift_alert">
+                    <input type="hidden" name="alert_id" value="{{ alert.id }}">
+                    <button type="submit" style="padding: 5px 9px; border: 0; border-radius: 5px; background: #636e72; color: white; cursor: pointer;">
+                        Подтвердить
+                    </button>
+                </form>
+            </div>
+        {% endfor %}
+    {% endif %}
+
+    {% if drift_history %}
+        <h3 style="color: #74b9ff; margin-top: 22px;">Последние drift-проверки</h3>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+                <thead><tr style="text-align: left; color: #dfe6e9;">
+                    <th style="padding: 8px;">Время</th><th style="padding: 8px;">Датасет</th>
+                    <th style="padding: 8px;">Статус</th><th style="padding: 8px;">Результат</th>
+                </tr></thead>
+                <tbody>{% for run in drift_history %}
+                    <tr style="color: #b2bec3; border-top: 1px solid #2d3b4f;">
+                        <td style="padding: 8px;">{{ run.checked_at }}</td>
+                        <td style="padding: 8px;">{{ run.dataset_name or run.batch_id }}</td>
+                        <td style="padding: 8px; color: {% if run.status == 'critical' %}#ff7675{% elif run.status == 'warning' %}#ffeaa7{% else %}#55efc4{% endif %};">{{ run.status }}</td>
+                        <td style="padding: 8px;">{{ run.summary }}</td>
+                    </tr>
+                {% endfor %}</tbody>
+            </table>
+        </div>
     {% endif %}
 </div>
 

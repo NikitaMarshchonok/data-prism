@@ -18,6 +18,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 - 🔬 Holdout permutation importance, per-class metrics, calibration, and residual diagnostics
 - 🧯 Train/holdout stability checks and sufficiently supported subgroup performance diagnostics
 - 🛰️ Persistent aggregate baselines with PSI, categorical drift, missingness, and schema-change monitoring
+- 🚨 Session-isolated drift history with deduplicated in-app alerts and configurable retention
 - 📉 Missing values, correlation matrix, outlier detection (IQR)
 - 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
 - 🧾 PDF export of full analytics report
@@ -85,6 +86,9 @@ export MAX_UPLOAD_MB=100
 # Optional for local development only
 export FLASK_DEBUG=true
 
+# Optional: number of drift runs retained per browser session (default: 100)
+export DRIFT_HISTORY_RETENTION=100
+
 # Run the Flask web app
 python web_app.py
 
@@ -110,7 +114,8 @@ New features, performance optimizations, and visual enhancements will be added o
 - [x] Add model diagnostics and holdout explainability
 - [x] Add split-stability and subgroup reliability diagnostics
 - [x] Add persistent baseline-to-current data drift monitoring
-- [ ] Add scheduled drift runs, history, and alert delivery
+- [x] Add persistent drift history and in-app alert events
+- [ ] Add scheduled drift runs and external alert delivery
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness
