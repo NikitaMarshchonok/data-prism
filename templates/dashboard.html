@@ -256,6 +256,42 @@
             </table>
         </div>
     {% endif %}
+    {% if ml_card.diagnostics.type == "classification" %}
+        <h3 style="color: #74b9ff; margin-top: 20px;">Диагностика по классам</h3>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
+                <thead><tr style="text-align: left; color: #dfe6e9;">
+                    <th style="padding: 8px;">Класс</th><th style="padding: 8px;">Precision</th>
+                    <th style="padding: 8px;">Recall</th><th style="padding: 8px;">F1</th>
+                    <th style="padding: 8px;">Support</th>
+                </tr></thead>
+                <tbody>{% for item in ml_card.diagnostics.per_class_metrics %}
+                    <tr style="color: #b2bec3; border-top: 1px solid #2d3b4f;">
+                        <td style="padding: 8px;">{{ item.label }}</td>
+                        <td style="padding: 8px;">{{ "%.3f"|format(item.precision) }}</td>
+                        <td style="padding: 8px;">{{ "%.3f"|format(item.recall) }}</td>
+                        <td style="padding: 8px;">{{ "%.3f"|format(item.f1) }}</td>
+                        <td style="padding: 8px;">{{ item.support }}</td>
+                    </tr>
+                {% endfor %}</tbody>
+            </table>
+        </div>
+        {% if ml_card.diagnostics.probability_metrics %}
+            <p style="color: #b2bec3;"><strong>Probability diagnostics:</strong>
+                {% for name, value in ml_card.diagnostics.probability_metrics.items() %}
+                    {{ name }}={{ value }}{% if not loop.last %}; {% endif %}
+                {% endfor %}
+            </p>
+        {% endif %}
+    {% elif ml_card.diagnostics.type == "regression" %}
+        <h3 style="color: #74b9ff; margin-top: 20px;">Диагностика ошибок</h3>
+        <p style="color: #b2bec3;">
+            Mean error: {{ ml_card.diagnostics.residual_summary.mean_error }};
+            median absolute error: {{ ml_card.diagnostics.residual_summary.median_absolute_error }};
+            P90 absolute error: {{ ml_card.diagnostics.residual_summary.p90_absolute_error }};
+            maximum absolute error: {{ ml_card.diagnostics.residual_summary.max_absolute_error }}.
+        </p>
+    {% endif %}
     {% if ml_card.evaluation_notes %}
         <ul style="color: #b2bec3; margin-top: 10px;">
         {% for note in ml_card.evaluation_notes %}
@@ -264,6 +300,9 @@
         </ul>
     {% endif %}
     {% if ml_card.plot %}
+        {% if ml_card.feature_importance_method %}
+            <p style="color: #b2bec3;"><strong>Explainability:</strong> {{ ml_card.feature_importance_method }}</p>
+        {% endif %}
         <img src="{{ ml_card.plot }}" style="max-width: 100%; border-radius: 10px; margin-top: 10px;">
     {% else %}
         <p>❌ Нет графика важности признаков.</p>

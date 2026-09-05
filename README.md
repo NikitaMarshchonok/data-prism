@@ -15,6 +15,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 - 🧪 Statistical validation with effect sizes, confidence intervals, and FDR correction
 - 🧭 Multivariate anomaly scoring and quality-validated exploratory segmentation
 - 🧪 Leakage-safe ML evaluation with holdout metrics and naive baseline comparison
+- 🔬 Holdout permutation importance, per-class metrics, calibration, and residual diagnostics
 - 📉 Missing values, correlation matrix, outlier detection (IQR)
 - 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
 - 🧾 PDF export of full analytics report
@@ -104,6 +105,7 @@ New features, performance optimizations, and visual enhancements will be added o
 - [x] Compare multiple model families with cross-validation
 - [x] Add auditable statistical hypothesis validation
 - [x] Add anomaly detection and validated segmentation
+- [x] Add model diagnostics and holdout explainability
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness

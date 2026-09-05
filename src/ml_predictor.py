@@ -12,14 +12,19 @@ from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.impute import SimpleImputer
+from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
+    brier_score_loss,
+    confusion_matrix,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
+    precision_recall_fscore_support,
     r2_score,
+    roc_auc_score,
 )
 from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
@@ -100,16 +105,32 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
     else:
         metrics, metric_text, baseline_text = _regression_metrics(y_train, y_test, predictions)
 
-    feature_importance_plot, top_features = _feature_importance(pipeline)
+    diagnostics = _model_diagnostics(
+        pipeline,
+        X_test,
+        y_test,
+        predictions,
+        task_type,
+    )
+    feature_importance_plot, top_features = _permutation_feature_importance(
+        pipeline,
+        X_test,
+        y_test,
+        task_type,
+    )
     evaluation_notes = [
         split_notes,
         (
             f"Model family selected with {cv_folds}-fold cross-validation on the "
             f"training partition only ({cv_metric})."
         ),
-        "The holdout test partition was used once after model selection.",
+        (
+            "The holdout partition was reserved until model selection, then used for final metrics "
+            "and permutation diagnostics."
+        ),
         baseline_text,
         "Preprocessing was fitted on training rows only.",
+        "Feature importance uses holdout permutation tests and is descriptive, not causal.",
     ]
     if task_type == "classification" and metrics["accuracy_lift"] <= 0:
         evaluation_notes.append(
@@ -132,11 +153,13 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
         "model_name": type(model).__name__,
         "metric": metric_text,
         "metrics": metrics,
+        "diagnostics": diagnostics,
         "model_comparison": model_comparison,
         "cv_folds": cv_folds,
         "cv_metric": cv_metric,
         "feature_importance_plot": feature_importance_plot,
         "top_features": top_features,
+        "feature_importance_method": "holdout permutation importance",
         "train_rows": int(len(X_train)),
         "test_rows": int(len(X_test)),
         "dropped_features": dropped_features,
@@ -411,31 +434,131 @@ def _regression_metrics(y_train, y_test, predictions):
     return metrics, metric_text, baseline_text
 
 
-def _feature_importance(pipeline: Pipeline):
-    model = pipeline.named_steps["model"]
-    preprocessor = pipeline.named_steps["preprocessor"]
-    feature_names = [
-        str(name).replace("numeric__", "").replace("categorical__", "")
-        for name in preprocessor.get_feature_names_out()
-    ]
-    if hasattr(model, "feature_importances_"):
-        importances = np.asarray(model.feature_importances_)
-        x_label = "Relative importance"
-    elif hasattr(model, "coef_"):
-        coefficients = np.asarray(model.coef_)
-        importances = np.abs(coefficients)
-        if importances.ndim > 1:
-            importances = importances.mean(axis=0)
-        importances = importances.ravel()
-        x_label = "Absolute coefficient magnitude"
-    else:
-        return None, []
+def _model_diagnostics(pipeline, X_test, y_test, predictions, task_type: str):
+    if task_type == "regression":
+        residuals = np.asarray(y_test, dtype=float) - np.asarray(predictions, dtype=float)
+        absolute_errors = np.abs(residuals)
+        return {
+            "type": "regression",
+            "residual_summary": {
+                "mean_error": round(float(np.mean(residuals)), 6),
+                "residual_std": round(float(np.std(residuals)), 6),
+                "median_absolute_error": round(float(np.median(absolute_errors)), 6),
+                "p90_absolute_error": round(float(np.percentile(absolute_errors, 90)), 6),
+                "max_absolute_error": round(float(np.max(absolute_errors)), 6),
+            },
+            "notes": [
+                "Mean error near zero reduces evidence of aggregate bias but does not rule out subgroup bias.",
+                "The 90th-percentile absolute error describes a typical high-error case on this holdout.",
+            ],
+        }
 
-    if len(feature_names) != len(importances):
-        return None, []
+    model = pipeline.named_steps["model"]
+    labels = list(model.classes_)
+    matrix = confusion_matrix(y_test, predictions, labels=labels)
+    precision, recall, f1, support = precision_recall_fscore_support(
+        y_test,
+        predictions,
+        labels=labels,
+        zero_division=0,
+    )
+    per_class = [
+        {
+            "label": str(label),
+            "precision": round(float(precision[index]), 6),
+            "recall": round(float(recall[index]), 6),
+            "f1": round(float(f1[index]), 6),
+            "support": int(support[index]),
+        }
+        for index, label in enumerate(labels)
+    ]
+    probability_metrics = {}
+    if hasattr(pipeline, "predict_proba"):
+        probabilities = pipeline.predict_proba(X_test)
+        confidence = np.max(probabilities, axis=1)
+        correctness = np.asarray(predictions) == np.asarray(y_test)
+        probability_metrics["expected_calibration_error"] = round(
+            _expected_calibration_error(confidence, correctness), 6
+        )
+        try:
+            if len(labels) == 2:
+                binary_target = (np.asarray(y_test) == labels[1]).astype(int)
+                probability_metrics["roc_auc"] = round(
+                    float(roc_auc_score(binary_target, probabilities[:, 1])), 6
+                )
+                probability_metrics["brier_score"] = round(
+                    float(brier_score_loss(binary_target, probabilities[:, 1])), 6
+                )
+            else:
+                probability_metrics["roc_auc_ovr_weighted"] = round(
+                    float(
+                        roc_auc_score(
+                            y_test,
+                            probabilities,
+                            labels=labels,
+                            multi_class="ovr",
+                            average="weighted",
+                        )
+                    ),
+                    6,
+                )
+        except ValueError:
+            probability_metrics["probability_note"] = (
+                "Probability metrics require every evaluated class in the holdout."
+            )
+
+    return {
+        "type": "classification",
+        "confusion_matrix": {
+            "labels": [str(label) for label in labels],
+            "values": matrix.astype(int).tolist(),
+        },
+        "per_class_metrics": per_class,
+        "probability_metrics": probability_metrics,
+        "notes": [
+            "Per-class recall exposes failures hidden by aggregate accuracy.",
+            "Calibration and discrimination are different; both should be reviewed before deployment.",
+        ],
+    }
+
+
+def _expected_calibration_error(confidence, correctness, bins: int = 10) -> float:
+    boundaries = np.linspace(0.0, 1.0, bins + 1)
+    total = len(confidence)
+    error = 0.0
+    for index in range(bins):
+        lower, upper = boundaries[index], boundaries[index + 1]
+        mask = (confidence >= lower) & (
+            confidence <= upper if index == bins - 1 else confidence < upper
+        )
+        if not np.any(mask):
+            continue
+        error += float(mask.mean()) * abs(
+            float(np.mean(correctness[mask])) - float(np.mean(confidence[mask]))
+        )
+    return error if total else 0.0
+
+
+def _permutation_feature_importance(pipeline, X_test, y_test, task_type: str):
+    scoring = "balanced_accuracy" if task_type == "classification" else "neg_mean_absolute_error"
+    result = permutation_importance(
+        pipeline,
+        X_test,
+        y_test,
+        scoring=scoring,
+        n_repeats=8,
+        random_state=RANDOM_STATE,
+        n_jobs=1,
+    )
+    feature_names = [str(column) for column in X_test.columns]
+    importances = np.asarray(result.importances_mean)
     order = np.argsort(importances)[::-1][:10]
     top_features = [
-        {"feature": feature_names[index], "importance": round(float(importances[index]), 6)}
+        {
+            "feature": feature_names[index],
+            "importance": round(float(importances[index]), 6),
+            "importance_std": round(float(result.importances_std[index]), 6),
+        }
         for index in order
     ]
 
@@ -444,9 +567,11 @@ def _feature_importance(pipeline: Pipeline):
     ax.barh(
         [item["feature"] for item in display_items],
         [item["importance"] for item in display_items],
+        xerr=[item["importance_std"] for item in display_items],
     )
-    ax.set_title("Feature importance")
-    ax.set_xlabel(x_label)
+    ax.axvline(0, color="black", linewidth=0.8)
+    ax.set_title("Holdout permutation importance")
+    ax.set_xlabel("Decrease in evaluation score after permutation")
     fig.tight_layout()
 
     image = io.BytesIO()
@@ -465,11 +590,13 @@ def _error_report(message: str, target_col: Optional[Any] = None) -> Dict[str, A
         "model_name": None,
         "metric": f"⚠️ {message}",
         "metrics": {},
+        "diagnostics": {},
         "model_comparison": [],
         "cv_folds": 0,
         "cv_metric": None,
         "feature_importance_plot": None,
         "top_features": [],
+        "feature_importance_method": None,
         "train_rows": 0,
         "test_rows": 0,
         "dropped_features": [],
