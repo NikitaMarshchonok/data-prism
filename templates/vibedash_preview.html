@@ -77,6 +77,59 @@
         </div>
         {% endif %}
 
+        <!-- Statistical Validation -->
+        {% if dashboard_data.statistical_validation and dashboard_data.statistical_validation.tests %}
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold mb-2 text-blue-300">🧪 Statistical Validation</h2>
+            <p class="text-gray-300 mb-1">{{ dashboard_data.statistical_validation.summary }}</p>
+            <p class="text-gray-500 text-sm mb-4">
+                Correction: {{ dashboard_data.statistical_validation.correction }}.
+                Confidence intervals and effect sizes are reported alongside p-values.
+            </p>
+            <div class="space-y-4">
+                {% for test in dashboard_data.statistical_validation.tests %}
+                <article class="bg-gray-800 rounded-lg p-6 border-l-4 {% if test.significant %}border-green-500{% else %}border-gray-500{% endif %}">
+                    <div class="flex flex-wrap justify-between gap-3 mb-2">
+                        <h3 class="text-lg font-semibold text-white">{{ test.title }}</h3>
+                        <span class="text-xs uppercase tracking-wide {% if test.significant %}text-green-300{% else %}text-gray-400{% endif %}">
+                            {% if test.significant %}FDR significant{% else %}inconclusive{% endif %}
+                        </span>
+                    </div>
+                    <p class="text-gray-200 mb-3">{{ test.interpretation }}</p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm mb-3">
+                        <div class="bg-gray-900 rounded p-3">
+                            <div class="text-gray-500">Adjusted p-value</div>
+                            <div class="text-blue-300 font-semibold">{{ "%.4g"|format(test.adjusted_p_value) }}</div>
+                        </div>
+                        <div class="bg-gray-900 rounded p-3">
+                            <div class="text-gray-500">Effect size</div>
+                            <div class="text-blue-300 font-semibold">
+                                {{ test.effect_size.name }} = {{ "%.3f"|format(test.effect_size.value) }}
+                                ({{ test.effect_size.magnitude }})
+                            </div>
+                        </div>
+                        <div class="bg-gray-900 rounded p-3">
+                            <div class="text-gray-500">95% confidence interval</div>
+                            <div class="text-blue-300 font-semibold">
+                                [{{ "%.3f"|format(test.confidence_interval.lower) }},
+                                {{ "%.3f"|format(test.confidence_interval.upper) }}]
+                            </div>
+                        </div>
+                    </div>
+                    <p class="text-gray-500 text-xs">
+                        {{ test.method }} · n={{ test.sample_size }} · raw p={{ "%.4g"|format(test.raw_p_value) }}
+                    </p>
+                    {% if test.limitations %}
+                    <p class="text-yellow-200 text-xs mt-2">
+                        <strong>Limitation:</strong> {{ test.limitations[0] }}
+                    </p>
+                    {% endif %}
+                </article>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Charts -->
         {% if dashboard_data.charts %}
         <div class="mb-8">

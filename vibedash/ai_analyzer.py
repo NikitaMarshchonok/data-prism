@@ -12,6 +12,7 @@ import json
 import numpy as np
 
 from .insight_engine import EvidenceBasedInsightEngine
+from .statistical_engine import StatisticalValidationEngine
 
 
 class DataScienceAI:
@@ -797,142 +798,46 @@ class DataScienceAI:
             }
     
     def _analyze_statistical_tests(self, question: str) -> Dict[str, Any]:
-        """Статистические тесты и значимость"""
-        numeric_cols = self.df.select_dtypes(include='number').columns
-        categorical_cols = self.df.select_dtypes(include='object').columns
-        
-        if len(numeric_cols) == 0:
+        """Run auditable tests with effect sizes, intervals and FDR control."""
+        engine = StatisticalValidationEngine(self.df)
+        report = engine.analyze()
+        if not report["tests"]:
             return {
-                "answer": "❌ Нет числовых колонок для статистических тестов",
+                "answer": f"🧪 **Statistical Validation**\n\n{report['summary']}",
                 "charts": [],
-                "insights": []
+                "insights": [],
+                "statistical_validation": report,
             }
-        
-        try:
-            from scipy import stats
-            import numpy as np
-            
-            results = []
-            charts = []
-            
-            # 1. Тест на нормальность (Shapiro-Wilk)
-            if len(numeric_cols) > 0:
-                col = numeric_cols[0]
-                data = self.df[col].dropna()
-                
-                if len(data) >= 3 and len(data) <= 5000:  # Ограничения теста
-                    stat, p_value = stats.shapiro(data)
-                    results.append(f"**Тест нормальности ({col}):** p-value = {p_value:.4f}")
-                    
-                    if p_value > 0.05:
-                        results.append(f"✅ Данные {col} распределены нормально (p > 0.05)")
-                    else:
-                        results.append(f"❌ Данные {col} НЕ нормальны (p ≤ 0.05)")
-            
-            # 2. T-test для сравнения групп
-            if len(numeric_cols) >= 1 and len(categorical_cols) >= 1:
-                num_col = numeric_cols[0]
-                cat_col = categorical_cols[0]
-                
-                # Берем только первые 2 категории
-                unique_cats = self.df[cat_col].value_counts().head(2).index
-                if len(unique_cats) >= 2:
-                    group1 = self.df[self.df[cat_col] == unique_cats[0]][num_col].dropna()
-                    group2 = self.df[self.df[cat_col] == unique_cats[1]][num_col].dropna()
-                    
-                    if len(group1) >= 2 and len(group2) >= 2:
-                        stat, p_value = stats.ttest_ind(group1, group2)
-                        results.append(f"**T-test ({num_col} по {cat_col}):** p-value = {p_value:.4f}")
-                        
-                        if p_value < 0.05:
-                            results.append(f"✅ Значимая разница между группами (p < 0.05)")
-                        else:
-                            results.append(f"❌ Нет значимой разности (p ≥ 0.05)")
-            
-            # 3. Корреляционный тест
-            if len(numeric_cols) >= 2:
-                col1, col2 = numeric_cols[0], numeric_cols[1]
-                data1 = self.df[col1].dropna()
-                data2 = self.df[col2].dropna()
-                
-                # Находим общие индексы
-                common_idx = data1.index.intersection(data2.index)
-                if len(common_idx) >= 3:
-                    corr, p_value = stats.pearsonr(data1[common_idx], data2[common_idx])
-                    results.append(f"**Корреляционный тест ({col1} vs {col2}):** r = {corr:.3f}, p = {p_value:.4f}")
-                    
-                    if p_value < 0.05:
-                        results.append(f"✅ Значимая корреляция (p < 0.05)")
-                    else:
-                        results.append(f"❌ Корреляция не значима (p ≥ 0.05)")
-            
-            # Создаем график распределения
-            if len(numeric_cols) > 0:
-                col = numeric_cols[0]
-                data = self.df[col].dropna()
-                
-                fig = go.Figure()
-                fig.add_trace(go.Histogram(
-                    x=data,
-                    name=f'Distribution of {col}',
-                    nbinsx=30
-                ))
-                
-                # Добавляем нормальное распределение для сравнения
-                mu, sigma = data.mean(), data.std()
-                x_range = np.linspace(data.min(), data.max(), 100)
-                normal_dist = stats.norm.pdf(x_range, mu, sigma) * len(data) * (data.max() - data.min()) / 30
-                
-                fig.add_trace(go.Scatter(
-                    x=x_range,
-                    y=normal_dist,
-                    mode='lines',
-                    name='Normal Distribution',
-                    line=dict(color='red', width=2)
-                ))
-                
-                fig.update_layout(
-                    title=f"Distribution Analysis: {col}",
-                    xaxis_title=col,
-                    yaxis_title="Frequency",
-                    plot_bgcolor='#131c2c',
-                    paper_bgcolor='#131c2c',
-                    font=dict(color='white')
-                )
-                
-                charts.append({
-                    "title": f"Distribution: {col}",
-                    "html": self._create_chart_html(fig, f"chart_{hash(question)}_0", f"Distribution Analysis: {col}")
-                })
-            
-            # Формируем ответ
-            answer = f"📊 **Статистические тесты**\n\n"
-            answer += f"**Проанализировано:** {len(numeric_cols)} числовых колонок\n"
-            answer += f"**Выполнено тестов:** {len(results)//2}\n\n"
-            
-            for result in results:
-                answer += f"{result}\n"
-            
-            insights = [
-                "Статистические тесты помогают проверить гипотезы о данных",
-                "p-value < 0.05 означает статистическую значимость",
-                "Нормальное распределение важно для многих тестов",
-                "Корреляция не означает причинно-следственную связь"
-            ]
-            
-            return {
-                "answer": answer,
-                "charts": charts,
-                "insights": insights
-            }
-            
-        except ImportError:
-            return {
-                "answer": "❌ Для статистических тестов требуется scipy. Установите: pip install scipy",
-                "charts": [],
-                "insights": []
-            }
-    
+
+        answer_lines = [
+            "🧪 **Statistical Validation**",
+            "",
+            report["summary"],
+            f"Correction: {report['correction']}.",
+            "",
+        ]
+        for test in report["tests"]:
+            decision = "FDR significant" if test["significant"] else "inconclusive"
+            answer_lines.extend(
+                [
+                    f"**{test['title']}** — {decision}",
+                    test["interpretation"],
+                    (
+                        f"Method: {test['method']}; n={test['sample_size']}; "
+                        f"raw p={test['raw_p_value']:.4g}; "
+                        f"adjusted p={test['adjusted_p_value']:.4g}."
+                    ),
+                    "",
+                ]
+            )
+
+        return {
+            "answer": "\n".join(answer_lines),
+            "charts": [],
+            "insights": engine.evidence_insights(report),
+            "statistical_validation": report,
+        }
+
     def _create_chart_html(self, fig, div_id, chart_title=""):
         """Создает HTML графика без недоказуемых шаблонных комментариев."""
         return fig.to_html(full_html=False, include_plotlyjs=False, div_id=div_id)

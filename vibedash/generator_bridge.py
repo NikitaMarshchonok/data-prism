@@ -14,6 +14,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from .spec import VizSpec, Metric, Chart, Filter
 from .insight_engine import EvidenceBasedInsightEngine
+from .statistical_engine import StatisticalValidationEngine
 
 
 MAX_DSL_LENGTH = 1000
@@ -158,6 +159,9 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
             "tables": [],
             "ai_summary": "Нет данных для анализа",
             "insights": [],
+            "statistical_validation": StatisticalValidationEngine(
+                pd.DataFrame() if df is None else df
+            ).analyze(),
             "df_shape": (0, 0) if df is None else df.shape,
         }
     
@@ -178,6 +182,7 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
 
     # Доказательные выводы рассчитываются детерминированно, без LLM.
     insights = EvidenceBasedInsightEngine(filtered_df).generate()
+    statistical_validation = StatisticalValidationEngine(filtered_df).analyze()
     
     return {
         "kpis": kpis,
@@ -185,6 +190,7 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
         "tables": tables,
         "ai_summary": ai_summary,
         "insights": insights,
+        "statistical_validation": statistical_validation,
         "df_shape": filtered_df.shape,
     }
 
