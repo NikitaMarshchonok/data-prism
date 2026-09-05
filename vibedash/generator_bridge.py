@@ -15,6 +15,7 @@ import plotly.graph_objects as go
 from .spec import VizSpec, Metric, Chart, Filter
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
+from .anomaly_segmentation_engine import AnomalySegmentationEngine
 
 
 MAX_DSL_LENGTH = 1000
@@ -162,6 +163,9 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
             "statistical_validation": StatisticalValidationEngine(
                 pd.DataFrame() if df is None else df
             ).analyze(),
+            "pattern_analysis": AnomalySegmentationEngine(
+                pd.DataFrame() if df is None else df
+            ).analyze(),
             "df_shape": (0, 0) if df is None else df.shape,
         }
     
@@ -183,6 +187,7 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
     # Доказательные выводы рассчитываются детерминированно, без LLM.
     insights = EvidenceBasedInsightEngine(filtered_df).generate()
     statistical_validation = StatisticalValidationEngine(filtered_df).analyze()
+    pattern_analysis = AnomalySegmentationEngine(filtered_df).analyze()
     
     return {
         "kpis": kpis,
@@ -191,6 +196,7 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
         "ai_summary": ai_summary,
         "insights": insights,
         "statistical_validation": statistical_validation,
+        "pattern_analysis": pattern_analysis,
         "df_shape": filtered_df.shape,
     }
 

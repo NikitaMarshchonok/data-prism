@@ -130,6 +130,72 @@
         </div>
         {% endif %}
 
+        <!-- Multivariate Anomalies and Segmentation -->
+        {% if dashboard_data.pattern_analysis and dashboard_data.pattern_analysis.status == 'ok' %}
+        <div class="mb-8">
+            <h2 class="text-2xl font-semibold mb-2 text-blue-300">🧭 Anomalies &amp; Segments</h2>
+            <p class="text-gray-300 mb-4">{{ dashboard_data.pattern_analysis.anomaly_detection.summary }}</p>
+
+            {% if dashboard_data.pattern_analysis.anomaly_detection.top_anomalies %}
+            <div class="overflow-x-auto mb-6">
+                <table class="w-full text-sm bg-gray-800 rounded-lg">
+                    <thead>
+                        <tr class="border-b border-gray-600 text-blue-300">
+                            <th class="text-left py-3 px-4">Row</th>
+                            <th class="text-left py-3 px-4">Anomaly score</th>
+                            <th class="text-left py-3 px-4">Leading reason</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for anomaly in dashboard_data.pattern_analysis.anomaly_detection.top_anomalies %}
+                        <tr class="border-b border-gray-700">
+                            <td class="py-3 px-4 text-gray-300">{{ anomaly.row_index }}</td>
+                            <td class="py-3 px-4 text-yellow-300">{{ "%.3f"|format(anomaly.anomaly_score) }}</td>
+                            <td class="py-3 px-4 text-gray-300">
+                                {% set reason = anomaly.reasons[0] %}
+                                {{ reason.feature }}={{ "%.3f"|format(reason.value) }};
+                                median={{ "%.3f"|format(reason.median) }};
+                                robust deviation={{ "%+.2f"|format(reason.robust_deviation) }}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if dashboard_data.pattern_analysis.segmentation.status == 'ok' %}
+            <p class="text-gray-300 mb-2">{{ dashboard_data.pattern_analysis.segmentation.summary }}</p>
+            <p class="text-gray-500 text-sm mb-4">
+                Segment labels are exploratory. Flagged anomalies were excluded while fitting centroids.
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {% for segment in dashboard_data.pattern_analysis.segmentation.segments %}
+                <article class="bg-gray-800 rounded-lg p-5 border-l-4 border-purple-500">
+                    <h3 class="text-lg font-semibold text-white mb-1">Segment {{ segment.segment }}</h3>
+                    <p class="text-gray-400 text-sm mb-3">
+                        {{ segment.size }} rows · {{ "%.1f%%"|format(segment.share * 100) }}
+                    </p>
+                    <ul class="text-sm text-gray-300 space-y-2">
+                        {% for feature in segment.distinguishing_features %}
+                        <li>
+                            <strong>{{ feature.feature }}</strong>:
+                            mean {{ "%.3f"|format(feature.segment_mean) }}
+                            (robust difference {{ "%+.2f"|format(feature.robust_difference) }})
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </article>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <p class="text-yellow-200 text-xs mt-4">
+                Candidates require domain review. Do not automatically delete anomalies or operationalize segments.
+            </p>
+        </div>
+        {% endif %}
+
         <!-- Charts -->
         {% if dashboard_data.charts %}
         <div class="mb-8">

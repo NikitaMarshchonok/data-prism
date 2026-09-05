@@ -13,6 +13,7 @@ import numpy as np
 
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
+from .anomaly_segmentation_engine import AnomalySegmentationEngine
 
 
 class DataScienceAI:
@@ -657,146 +658,57 @@ class DataScienceAI:
             }
     
     def _analyze_clustering(self, question: str) -> Dict[str, Any]:
-        """Кластеризация и сегментация данных"""
-        numeric_cols = self.df.select_dtypes(include='number').columns
-        
-        if len(numeric_cols) < 2:
+        """Return validated multivariate anomalies and exploratory segments."""
+        engine = AnomalySegmentationEngine(self.df)
+        report = engine.analyze()
+        if report["status"] != "ok":
             return {
-                "answer": "❌ Недостаточно числовых колонок для кластеризации",
+                "answer": f"🧭 **Anomalies & Segments**\n\n{report['summary']}",
                 "charts": [],
-                "insights": []
+                "insights": [],
+                "pattern_analysis": report,
             }
-        
-        try:
-            from sklearn.cluster import KMeans
-            from sklearn.preprocessing import StandardScaler
-            import numpy as np
-            
-            # Выбираем первые 2 числовые колонки для визуализации
-            X_col = numeric_cols[0]
-            y_col = numeric_cols[1]
-            
-            # Подготавливаем данные
-            df_clean = self.df[[X_col, y_col]].dropna()
-            if len(df_clean) < 10:
-                return {
-                    "answer": "❌ Недостаточно данных для кластеризации (минимум 10 записей)",
-                    "charts": [],
-                    "insights": []
-                }
-            
-            # Нормализуем данные
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(df_clean[[X_col, y_col]])
-            
-            # Определяем оптимальное количество кластеров (метод локтя)
-            max_clusters = min(8, len(df_clean) // 2)
-            if max_clusters < 2:
-                max_clusters = 2
-            
-            inertias = []
-            for k in range(1, max_clusters + 1):
-                kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
-                kmeans.fit(X_scaled)
-                inertias.append(kmeans.inertia_)
-            
-            # Выбираем оптимальное количество кластеров (простая эвристика)
-            optimal_k = 3  # По умолчанию
-            if len(inertias) > 2:
-                # Ищем "локоть" в кривой
-                diffs = np.diff(inertias)
-                if len(diffs) > 1:
-                    optimal_k = np.argmin(diffs) + 2
-            
-            # Финальная кластеризация
-            kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init=10)
-            clusters = kmeans.fit_predict(X_scaled)
-            
-            # Создаем график
-            fig = go.Figure()
-            
-            colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray']
-            
-            for i in range(optimal_k):
-                mask = clusters == i
-                fig.add_trace(go.Scatter(
-                    x=df_clean[mask][X_col],
-                    y=df_clean[mask][y_col],
-                    mode='markers',
-                    name=f'Cluster {i+1}',
-                    marker=dict(color=colors[i % len(colors)], size=8)
-                ))
-            
-            # Центроиды
-            centroids = scaler.inverse_transform(kmeans.cluster_centers_)
-            fig.add_trace(go.Scatter(
-                x=centroids[:, 0],
-                y=centroids[:, 1],
-                mode='markers',
-                name='Centroids',
-                marker=dict(color='black', size=15, symbol='x')
-            ))
-            
-            fig.update_layout(
-                title=f"Clustering Analysis: {X_col} vs {y_col}",
-                xaxis_title=X_col,
-                yaxis_title=y_col,
-                plot_bgcolor='#131c2c',
-                paper_bgcolor='#131c2c',
-                font=dict(color='white')
-            )
-            
-            # Анализируем кластеры
-            cluster_stats = []
-            for i in range(optimal_k):
-                mask = clusters == i
-                cluster_data = df_clean[mask]
-                cluster_stats.append({
-                    'cluster': i+1,
-                    'size': len(cluster_data),
-                    'x_mean': cluster_data[X_col].mean(),
-                    'y_mean': cluster_data[y_col].mean()
-                })
-            
-            # Формируем ответ
-            answer = f"🎯 **Кластерный анализ**\n\n"
-            answer += f"**Количество кластеров:** {optimal_k}\n"
-            answer += f"**Общее количество точек:** {len(df_clean)}\n\n"
-            
-            answer += "**Характеристики кластеров:**\n"
-            for stat in cluster_stats:
-                answer += f"• **Кластер {stat['cluster']}:** {stat['size']} точек, "
-                answer += f"центр ({stat['x_mean']:.2f}, {stat['y_mean']:.2f})\n"
-            
-            insights = [
-                f"Данные разделены на {optimal_k} логических группы",
-                f"Самый большой кластер содержит {max(stat['size'] for stat in cluster_stats)} точек",
-                "Кластеры показывают естественные группировки в данных",
-                "Можно использовать для сегментации клиентов или продуктов"
+
+        anomaly = report["anomaly_detection"]
+        segmentation = report["segmentation"]
+        answer_lines = [
+            "🧭 **Anomalies & Segments**",
+            "",
+            anomaly["summary"],
+        ]
+        if anomaly["top_anomalies"]:
+            answer_lines.extend(["", "**Highest-priority rows:**"])
+            for item in anomaly["top_anomalies"][:5]:
+                reason = item["reasons"][0]
+                answer_lines.append(
+                    f"• Row {item['row_index']}: score={item['anomaly_score']:.3f}; "
+                    f"{reason['feature']} robust deviation={reason['robust_deviation']:+.2f}"
+                )
+
+        answer_lines.extend(["", segmentation["summary"]])
+        if segmentation.get("status") == "ok":
+            answer_lines.append("**Segment profiles:**")
+            for segment in segmentation["segments"]:
+                leading = segment["distinguishing_features"][0]
+                answer_lines.append(
+                    f"• Segment {segment['segment']}: {segment['size']} rows "
+                    f"({segment['share']:.1%}); strongest distinction: "
+                    f"{leading['feature']} ({leading['robust_difference']:+.2f})"
+                )
+
+        answer_lines.extend(
+            [
+                "",
+                "These are review candidates and exploratory segments, not causal or operational conclusions.",
             ]
-            
-            return {
-                "answer": answer,
-                "charts": [{
-                    "title": f"Clustering: {X_col} vs {y_col}",
-                    "html": fig.to_html(full_html=False, include_plotlyjs=True, div_id=f"clustering_chart_{hash(question)}")
-                }],
-                "insights": insights
-            }
-            
-        except ImportError:
-            return {
-                "answer": "❌ Для кластеризации требуется scikit-learn. Установите: pip install scikit-learn",
-                "charts": [],
-                "insights": []
-            }
-        except Exception as e:
-            return {
-                "answer": f"❌ Ошибка при кластеризации: {str(e)}",
-                "charts": [],
-                "insights": []
-            }
-    
+        )
+        return {
+            "answer": "\n".join(answer_lines),
+            "charts": [],
+            "insights": engine.evidence_insights(report),
+            "pattern_analysis": report,
+        }
+
     def _analyze_statistical_tests(self, question: str) -> Dict[str, Any]:
         """Run auditable tests with effect sizes, intervals and FDR control."""
         engine = StatisticalValidationEngine(self.df)
