@@ -146,6 +146,26 @@ class DriftStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_run(self, run_id: str) -> Dict[str, Any] | None:
+        """Return one full report only when it belongs to this scope."""
+        if not isinstance(run_id, str) or not run_id or len(run_id) > 128:
+            raise ValueError("run_id must be a non-empty string of at most 128 characters.")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id, batch_id, dataset_name, baseline_created_at,
+                       checked_at, status, summary, report_json
+                FROM drift_runs
+                WHERE id = ? AND scope_id = ?
+                """,
+                (run_id, self.scope_id),
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["report"] = json.loads(result.pop("report_json"))
+        return result
+
     def list_alerts(
         self,
         *,

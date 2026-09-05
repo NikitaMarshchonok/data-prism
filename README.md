@@ -19,6 +19,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 - 🧯 Train/holdout stability checks and sufficiently supported subgroup performance diagnostics
 - 🛰️ Persistent aggregate baselines with PSI, categorical drift, missingness, and schema-change monitoring
 - 🚨 Session-isolated drift history with deduplicated in-app alerts and configurable retention
+- 🔌 API-key-protected drift baselines, checks, history, full reports, and alert acknowledgement
 - 📉 Missing values, correlation matrix, outlier detection (IQR)
 - 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
 - 🧾 PDF export of full analytics report
@@ -96,6 +97,46 @@ python web_app.py
 
 ---
 
+## Monitoring API
+
+The monitoring API is disabled until a key is configured:
+
+```bash
+export DATA_PRISM_API_KEY="replace-with-a-long-random-value"
+python web_app.py
+```
+
+Create an aggregate baseline profile without retaining the uploaded raw file:
+
+```bash
+curl -X POST http://localhost:5001/api/v1/drift/baselines \
+  -H "X-API-Key: $DATA_PRISM_API_KEY" \
+  -F "datafile=@baseline.csv"
+```
+
+Run a drift check using the returned `baseline_id`:
+
+```bash
+curl -X POST http://localhost:5001/api/v1/drift/checks \
+  -H "X-API-Key: $DATA_PRISM_API_KEY" \
+  -H "Idempotency-Key: batch-2026-09-06" \
+  -F "baseline_id=$BASELINE_ID" \
+  -F "datafile=@current.csv"
+```
+
+Read recent runs and active alerts:
+
+```bash
+curl http://localhost:5001/api/v1/drift/runs -H "X-API-Key: $DATA_PRISM_API_KEY"
+curl http://localhost:5001/api/v1/drift/alerts -H "X-API-Key: $DATA_PRISM_API_KEY"
+```
+
+Bearer authentication is also supported. API-key rotation intentionally creates a new isolated
+monitoring scope. Without an `Idempotency-Key`, identical uploads against the same baseline are
+deduplicated by their SHA-256 content hash.
+
+---
+
 
 
 ##  Project Status
@@ -115,6 +156,7 @@ New features, performance optimizations, and visual enhancements will be added o
 - [x] Add split-stability and subgroup reliability diagnostics
 - [x] Add persistent baseline-to-current data drift monitoring
 - [x] Add persistent drift history and in-app alert events
+- [x] Add authenticated machine-readable drift monitoring API
 - [ ] Add scheduled drift runs and external alert delivery
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs

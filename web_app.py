@@ -52,11 +52,14 @@ app.config['REPORT_FOLDER'] = REPORT_FOLDER
 app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
 app.config['DRIFT_STORE_PATH'] = DRIFT_STORE_PATH
 app.config['DRIFT_HISTORY_RETENTION'] = int(os.getenv('DRIFT_HISTORY_RETENTION', '100'))
+app.config['DATA_PRISM_API_KEY'] = os.getenv('DATA_PRISM_API_KEY')
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_UPLOAD_MB', '100')) * 1024 * 1024
 
 # Регистрируем VibeDash Blueprint
 from vibedash import vibedash_bp
+from src.monitoring_api import monitoring_api_bp
 app.register_blueprint(vibedash_bp)
+app.register_blueprint(monitoring_api_bp)
 
 
 @app.template_filter("markdown")
