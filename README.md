@@ -99,7 +99,7 @@ New features, performance optimizations, and visual enhancements will be added o
 
 - [ ] Export filtered data to Excel
 - [x] Add leakage-safe baseline ML evaluation block
-- [ ] Compare multiple model families with cross-validation
+- [x] Compare multiple model families with cross-validation
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness

@@ -421,6 +421,9 @@ def generate_dashboard_data(df, target_column=None):
             "model_name": ml_result.get("model_name"),
             "metric": ml_result.get("metric", "Нет метрики"),
             "plot": ml_result.get("feature_importance_plot", None),
+            "model_comparison": ml_result.get("model_comparison", []),
+            "cv_folds": ml_result.get("cv_folds", 0),
+            "cv_metric": ml_result.get("cv_metric"),
             "evaluation_notes": ml_result.get("evaluation_notes", []),
         }
     except Exception as e:
