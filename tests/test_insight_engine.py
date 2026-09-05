@@ -87,6 +87,8 @@ class EvidenceBasedInsightEngineTests(unittest.TestCase):
         self.assertEqual(result["df_shape"], (3, 2))
         self.assertTrue(result["insights"])
         self.assertEqual(result["insights"][0]["type"], "evidence")
+        self.assertIn("statistical_validation", result)
+        self.assertEqual(result["statistical_validation"]["status"], "insufficient_data")
 
     def test_chart_errors_escape_untrusted_column_names(self):
         malicious_column = '<img src=x onerror="alert(1)">'
