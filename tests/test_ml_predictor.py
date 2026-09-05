@@ -38,6 +38,11 @@ class ModelEvaluationTests(unittest.TestCase):
             result["model_name"],
             {"LogisticRegression", "RandomForestClassifier"},
         )
+        self.assertEqual(result["diagnostics"]["type"], "classification")
+        self.assertEqual(len(result["diagnostics"]["per_class_metrics"]), 2)
+        self.assertIn("expected_calibration_error", result["diagnostics"]["probability_metrics"])
+        self.assertEqual(result["feature_importance_method"], "holdout permutation importance")
+        self.assertIn("importance_std", result["top_features"][0])
         self.assertTrue(result["feature_importance_plot"].startswith("data:image/png;base64,"))
 
     def test_regression_reports_baseline_and_multiple_metrics(self):
@@ -63,6 +68,8 @@ class ModelEvaluationTests(unittest.TestCase):
         self.assertGreaterEqual(result["cv_folds"], 2)
         self.assertEqual(len(result["model_comparison"]), 2)
         self.assertIn(result["model_name"], {"Ridge", "RandomForestRegressor"})
+        self.assertEqual(result["diagnostics"]["type"], "regression")
+        self.assertGreater(result["diagnostics"]["residual_summary"]["p90_absolute_error"], 0)
 
     def test_rare_class_returns_explanatory_error(self):
         data = pd.DataFrame(
