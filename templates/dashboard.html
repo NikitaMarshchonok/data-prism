@@ -171,6 +171,7 @@
 <!-- 🔹 Навигация -->
 <div class="nav-bar">
     <a href="#kpi">📌 Показатели</a>
+    <a href="#drift">🛰️ Data drift</a>
     <a href="#charts">📈 Графики</a>
     <a href="#tables">📋 Таблицы</a>
 </div>
@@ -204,6 +205,76 @@
         {% endfor %}
     </select>
 </form>
+
+
+<!-- 🛰️ Baseline-to-current data drift -->
+<div id="drift" style="background-color: #1e2a3b; padding: 20px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+    <h2 style="color: #00cec9;">🛰️ Мониторинг data drift</h2>
+    <p style="color: #b2bec3; line-height: 1.5;">
+        Зафиксируйте проверенный датасет как baseline. Следующие загруженные наборы будут сравниваться
+        с его агрегированным профилем; исходные строки в baseline не сохраняются.
+    </p>
+    <form method="POST" action="/dashboard" style="margin: 14px 0 20px;">
+        <input type="hidden" name="dashboard_action" value="set_drift_baseline">
+        <button type="submit" style="padding: 9px 14px; border: 0; border-radius: 7px; background: #0984e3; color: white; cursor: pointer;">
+            {% if baseline_configured %}Обновить baseline текущими данными{% else %}Сохранить текущий датасет как baseline{% endif %}
+        </button>
+    </form>
+
+    {% if drift_error %}
+        <p style="color: #ff7675;">{{ drift_error }}</p>
+    {% elif drift_report %}
+        <p style="color: {% if drift_report.status == 'critical' %}#ff7675{% elif drift_report.status == 'warning' %}#ffeaa7{% else %}#55efc4{% endif %};">
+            <strong>Статус: {{ drift_report.status }}</strong> — {{ drift_report.summary }}
+        </p>
+        <p style="color: #b2bec3;">
+            Baseline: {{ drift_report.baseline_dataset_name or 'без имени' }},
+            {{ drift_report.baseline_rows }} строк; текущий набор: {{ drift_report.current_rows }} строк.
+        </p>
+
+        {% set schema = drift_report.schema_changes %}
+        {% if schema.missing_columns or schema.new_columns or schema.type_changes %}
+            <div style="color: #ffeaa7; margin: 12px 0;">
+                {% if schema.missing_columns %}<p><strong>Удалённые колонки:</strong> {{ schema.missing_columns | join(', ') }}</p>{% endif %}
+                {% if schema.new_columns %}<p><strong>Новые колонки:</strong> {{ schema.new_columns | join(', ') }}</p>{% endif %}
+                {% if schema.type_changes %}
+                    <p><strong>Изменения типов:</strong>
+                    {% for item in schema.type_changes %}
+                        {{ item.feature }} ({{ item.baseline_type }} → {{ item.current_type }}){% if not loop.last %}; {% endif %}
+                    {% endfor %}
+                    </p>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        {% if drift_report.feature_drift %}
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; margin: 12px 0 18px;">
+                    <thead><tr style="text-align: left; color: #dfe6e9;">
+                        <th style="padding: 8px;">Признак</th><th style="padding: 8px;">Метрика</th>
+                        <th style="padding: 8px;">Значение</th><th style="padding: 8px;">Δ пропусков</th>
+                        <th style="padding: 8px;">Уровень</th>
+                    </tr></thead>
+                    <tbody>{% for item in drift_report.feature_drift[:10] %}
+                        <tr style="color: #b2bec3; border-top: 1px solid #2d3b4f;">
+                            <td style="padding: 8px;">{{ item.feature }}</td>
+                            <td style="padding: 8px;">{{ item.metric }}</td>
+                            <td style="padding: 8px;">{{ "%.3f"|format(item.score) }}</td>
+                            <td style="padding: 8px;">{{ "%+.1f%%"|format(item.missing_rate_delta * 100) }}</td>
+                            <td style="padding: 8px; color: {% if item.severity == 'high' %}#ff7675{% elif item.severity == 'moderate' %}#ffeaa7{% else %}#55efc4{% endif %};">{{ item.severity }}</td>
+                        </tr>
+                    {% endfor %}</tbody>
+                </table>
+            </div>
+        {% endif %}
+        <p style="color: #ffeaa7; font-size: 0.85rem;">
+            PSI/TV-пороги служат для первичного контроля и должны быть откалиброваны под бизнес-контекст.
+            Этот этап не запускает проверки по расписанию и пока не хранит историю drift-событий.
+        </p>
+    {% else %}
+        <p style="color: #ffeaa7;">Baseline пока не задан — сравнение drift ещё не выполняется.</p>
+    {% endif %}
+</div>
 
 
 
