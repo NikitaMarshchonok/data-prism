@@ -1,6 +1,7 @@
 import os
 import re
 import secrets
+import sqlite3
 import uuid
 
 from flask import Flask, request, redirect, url_for, send_from_directory, render_template, session
@@ -28,6 +29,7 @@ from src.data_drift import (
     load_baseline_profile,
     save_baseline_profile,
 )
+from src.drift_store import DriftStore
 from markupsafe import Markup
 import markdown as md
 
@@ -36,6 +38,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'uploads')
 REPORT_FOLDER = os.path.join(BASE_DIR, 'reports')
 BASELINE_FOLDER = os.path.join(BASE_DIR, 'data', 'baselines')
+DRIFT_STORE_PATH = os.path.join(BASE_DIR, 'data', 'drift', 'drift_history.sqlite3')
 IMAGE_FOLDER = 'images'
 
 # ✅ Создаём папки, если их нет
@@ -47,6 +50,8 @@ app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY') or secrets.token_hex(32
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['REPORT_FOLDER'] = REPORT_FOLDER
 app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
+app.config['DRIFT_STORE_PATH'] = DRIFT_STORE_PATH
+app.config['DRIFT_HISTORY_RETENTION'] = int(os.getenv('DRIFT_HISTORY_RETENTION', '100'))
 app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_UPLOAD_MB', '100')) * 1024 * 1024
 
 # Регистрируем VibeDash Blueprint
@@ -99,6 +104,23 @@ def baseline_profile_path(filename):
     if not isinstance(filename, str) or not re.fullmatch(r'[0-9a-f]{32}\.json', filename):
         raise ValueError('Некорректная ссылка на baseline-профиль.')
     return os.path.join(app.config['BASELINE_FOLDER'], filename)
+
+
+def monitoring_scope_id():
+    """Return an isolated server-signed monitoring scope for this session."""
+    scope_id = session.get('monitoring_scope_id')
+    if not isinstance(scope_id, str) or not re.fullmatch(r'[0-9a-f]{32}', scope_id):
+        scope_id = uuid.uuid4().hex
+        session['monitoring_scope_id'] = scope_id
+    return scope_id
+
+
+def get_drift_store():
+    return DriftStore(
+        app.config['DRIFT_STORE_PATH'],
+        monitoring_scope_id(),
+        retention=app.config['DRIFT_HISTORY_RETENTION'],
+    )
 
 
 @app.errorhandler(413)
@@ -240,6 +262,28 @@ def show_dashboard():
     if df is None:
         return "<h2>❌ Ошибка загрузки данных</h2>", 404
 
+    drift_store = None
+    drift_store_error = None
+    try:
+        drift_store = get_drift_store()
+    except (OSError, sqlite3.Error, ValueError):
+        app.logger.exception('Не удалось открыть журнал drift-мониторинга')
+        drift_store_error = 'Журнал drift-мониторинга временно недоступен.'
+
+    if request.method == 'POST' and request.form.get('dashboard_action') == 'acknowledge_drift_alert':
+        if drift_store is None:
+            return 'Журнал drift-мониторинга недоступен.', 503
+        try:
+            alert_id = int(request.form.get('alert_id', ''))
+            if not drift_store.acknowledge_alert(alert_id):
+                return 'Alert не найден или уже подтверждён.', 404
+        except (TypeError, ValueError):
+            return 'Некорректный идентификатор alert.', 400
+        except sqlite3.Error:
+            app.logger.exception('Не удалось подтвердить drift alert')
+            return 'Журнал drift-мониторинга недоступен.', 503
+        return redirect(url_for('show_dashboard'))
+
     # Явно фиксируем текущий датасет как эталон.
     # Последующие загрузки его не перезаписывают.
     if request.method == 'POST' and request.form.get('dashboard_action') == 'set_drift_baseline':
@@ -266,6 +310,8 @@ def show_dashboard():
 
     drift_report = None
     drift_error = None
+    drift_history = []
+    drift_alerts = []
     baseline_filename = session.get('baseline_profile_filename')
     if baseline_filename:
         try:
@@ -278,6 +324,32 @@ def show_dashboard():
             drift_error = (
                 'Baseline-профиль недоступен или повреждён. '
                 'Сохраните новый эталон.'
+            )
+
+    if drift_report is not None and drift_store is not None:
+        try:
+            drift_store.record_run(
+                drift_report,
+                batch_id=dataset_filename,
+                dataset_name=session.get('dataset_name', dataset_filename),
+            )
+        except (sqlite3.Error, TypeError, ValueError):
+            app.logger.exception('Не удалось записать drift-событие')
+            drift_store_error = (
+                'Не удалось записать результат в журнал '
+                'drift-мониторинга.'
+            )
+
+    if drift_store is not None:
+        try:
+            drift_history = drift_store.list_runs(limit=10)
+            drift_alerts = drift_store.list_alerts(limit=10)
+        except sqlite3.Error:
+            app.logger.exception(
+                'Не удалось прочитать журнал drift-мониторинга'
+            )
+            drift_store_error = (
+                'Журнал drift-мониторинга временно недоступен.'
             )
 
     # Получаем список подходящих колонок для целевой переменной
@@ -303,6 +375,9 @@ def show_dashboard():
             ml_card=ml_card,
             drift_report=drift_report,
             drift_error=drift_error,
+            drift_store_error=drift_store_error,
+            drift_history=drift_history,
+            drift_alerts=drift_alerts,
             baseline_configured=bool(baseline_filename),
             selectable_columns=selectable_columns,
             selected_target=selected_target

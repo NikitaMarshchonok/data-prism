@@ -158,7 +158,7 @@ def compare_to_baseline(
             "Thresholds are operational screening rules and should be calibrated for each business context.",
             (
                 "This compares an explicit baseline with the current batch; "
-                "it does not schedule checks or retain drift history."
+                "the comparison engine itself does not schedule checks."
             ),
         ],
     }
