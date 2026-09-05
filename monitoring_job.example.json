@@ -1,0 +1,9 @@
+{
+  "job_id": "sales-production-drift",
+  "job_name": "daily-sales-drift",
+  "baseline_profile": "data/baselines/sales-reference.json",
+  "current_data": "data/incoming/sales-current.csv",
+  "history_database": "data/drift/sales-history.sqlite3",
+  "fail_on": "warning",
+  "retention": 100
+}

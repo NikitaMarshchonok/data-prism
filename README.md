@@ -20,6 +20,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 - 🛰️ Persistent aggregate baselines with PSI, categorical drift, missingness, and schema-change monitoring
 - 🚨 Session-isolated drift history with deduplicated in-app alerts and configurable retention
 - 🔌 API-key-protected drift baselines, checks, history, full reports, and alert acknowledgement
+- ⏱️ Cron/CI-ready drift runner with validated job configs and machine-readable exit codes
 - 📉 Missing values, correlation matrix, outlier detection (IQR)
 - 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
 - 🧾 PDF export of full analytics report
@@ -137,6 +138,36 @@ deduplicated by their SHA-256 content hash.
 
 ---
 
+## Automated Drift Runs
+
+Create a reusable aggregate baseline from a local reference dataset:
+
+```bash
+python monitor_drift.py create-baseline \
+  --data data/reference/sales.csv \
+  --output data/baselines/sales-reference.json
+```
+
+Copy `monitoring_job.example.json`, update its paths, and execute one idempotent check:
+
+```bash
+python monitor_drift.py run \
+  --config monitoring_job.json \
+  --batch-id batch-2026-09-06
+```
+
+Configuration paths are resolved relative to the job file. The command prints one JSON document
+to standard output and is suitable for cron or CI orchestration. Exit codes are stable:
+
+- `0` — run completed and the configured threshold was not reached;
+- `1` — configuration, input, or execution error;
+- `2` — the configured `fail_on` threshold was reached.
+
+`fail_on` accepts `never`, `warning`, or `critical`. Even when `never` is selected, detected
+warning and critical states are persisted as alerts.
+
+---
+
 
 
 ##  Project Status
@@ -157,7 +188,8 @@ New features, performance optimizations, and visual enhancements will be added o
 - [x] Add persistent baseline-to-current data drift monitoring
 - [x] Add persistent drift history and in-app alert events
 - [x] Add authenticated machine-readable drift monitoring API
-- [ ] Add scheduled drift runs and external alert delivery
+- [x] Add cron/CI-ready drift job runner
+- [ ] Add managed scheduling and external alert delivery
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness
