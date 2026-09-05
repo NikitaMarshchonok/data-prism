@@ -27,6 +27,7 @@ class DashboardGeneratorTests(unittest.TestCase):
             "cv_folds": 5,
             "cv_metric": "balanced accuracy; higher is better",
             "diagnostics": {"type": "classification", "per_class_metrics": []},
+            "reliability": {"status": "ok", "scope": "random holdout reliability audit"},
             "feature_importance_method": "holdout permutation importance",
             "feature_importance_plot": None,
         },
@@ -47,6 +48,7 @@ class DashboardGeneratorTests(unittest.TestCase):
         self.assertEqual(ml_card["cv_folds"], 5)
         self.assertEqual(len(ml_card["model_comparison"]), 1)
         self.assertEqual(ml_card["diagnostics"]["type"], "classification")
+        self.assertEqual(ml_card["reliability"]["status"], "ok")
 
 
 if __name__ == "__main__":

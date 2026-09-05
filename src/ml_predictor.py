@@ -30,6 +30,8 @@ from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score, tra
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from src.model_reliability import analyze_model_reliability
+
 
 RANDOM_STATE = 42
 MIN_TRAINING_ROWS = 10
@@ -118,6 +120,14 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
         y_test,
         task_type,
     )
+    reliability = analyze_model_reliability(
+        X_train,
+        X_test,
+        y_train,
+        y_test,
+        predictions,
+        task_type,
+    )
     evaluation_notes = [
         split_notes,
         (
@@ -154,6 +164,7 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
         "metric": metric_text,
         "metrics": metrics,
         "diagnostics": diagnostics,
+        "reliability": reliability,
         "model_comparison": model_comparison,
         "cv_folds": cv_folds,
         "cv_metric": cv_metric,
@@ -591,6 +602,7 @@ def _error_report(message: str, target_col: Optional[Any] = None) -> Dict[str, A
         "metric": f"⚠️ {message}",
         "metrics": {},
         "diagnostics": {},
+        "reliability": {},
         "model_comparison": [],
         "cv_folds": 0,
         "cv_metric": None,

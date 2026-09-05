@@ -425,6 +425,7 @@ def generate_dashboard_data(df, target_column=None):
             "cv_folds": ml_result.get("cv_folds", 0),
             "cv_metric": ml_result.get("cv_metric"),
             "diagnostics": ml_result.get("diagnostics", {}),
+            "reliability": ml_result.get("reliability", {}),
             "feature_importance_method": ml_result.get("feature_importance_method"),
             "evaluation_notes": ml_result.get("evaluation_notes", []),
         }
