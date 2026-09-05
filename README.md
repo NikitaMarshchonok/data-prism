@@ -13,6 +13,7 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 - 🧠 AI Summary: automatic insights using LLMs
 - 🔎 Evidence-based insights with metrics, support levels, and recommended next steps
 - 🧪 Statistical validation with effect sizes, confidence intervals, and FDR correction
+- 🧭 Multivariate anomaly scoring and quality-validated exploratory segmentation
 - 🧪 Leakage-safe ML evaluation with holdout metrics and naive baseline comparison
 - 📉 Missing values, correlation matrix, outlier detection (IQR)
 - 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
@@ -102,6 +103,7 @@ New features, performance optimizations, and visual enhancements will be added o
 - [x] Add leakage-safe baseline ML evaluation block
 - [x] Compare multiple model families with cross-validation
 - [x] Add auditable statistical hypothesis validation
+- [x] Add anomaly detection and validated segmentation
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs
 - [ ] Improve mobile layout and responsiveness
