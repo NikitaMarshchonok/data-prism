@@ -6,6 +6,7 @@ matplotlib
 seaborn
 jinja2
 flask
+gunicorn
 plotly
 pyarrow
 pdfkit
@@ -15,7 +16,6 @@ python-dotenv
 markdown
 gpt4free
 scikit-learn
-matplotlib
 xgboost
 pydantic
 requests

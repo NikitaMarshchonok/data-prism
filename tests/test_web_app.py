@@ -19,8 +19,10 @@ class WebUploadTests(unittest.TestCase):
         self.drift_store_path = Path(self.temporary_directory.name) / "drift.sqlite3"
         self.upload_folder.mkdir()
         self.report_folder.mkdir()
+        self.baseline_folder.mkdir()
         self.previous_config = {
             "TESTING": web_app.app.config.get("TESTING"),
+            "SESSION_KEY_PERSISTENT": web_app.app.config["SESSION_KEY_PERSISTENT"],
             "UPLOAD_FOLDER": web_app.app.config["UPLOAD_FOLDER"],
             "REPORT_FOLDER": web_app.app.config["REPORT_FOLDER"],
             "BASELINE_FOLDER": web_app.app.config["BASELINE_FOLDER"],
@@ -102,6 +104,37 @@ class WebUploadTests(unittest.TestCase):
             response = client.get("/dashboard")
 
         self.assertEqual(response.status_code, 400)
+
+    def test_health_endpoint_reports_process_liveness(self):
+        with web_app.app.test_client() as client:
+            response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {"service": "data-prism", "status": "ok"})
+
+    def test_readiness_requires_persistent_session_key(self):
+        with web_app.app.test_client() as client:
+            web_app.app.config["SESSION_KEY_PERSISTENT"] = False
+            not_ready = client.get("/readyz")
+            web_app.app.config["SESSION_KEY_PERSISTENT"] = True
+            ready = client.get("/readyz")
+
+        self.assertEqual(not_ready.status_code, 503)
+        self.assertIn("FLASK_SECRET_KEY", not_ready.get_json()["issues"][0])
+        self.assertEqual(ready.status_code, 200)
+        self.assertEqual(ready.get_json()["status"], "ready")
+
+    def test_positive_integer_environment_value_is_validated(self):
+        with patch.dict("os.environ", {"MAX_UPLOAD_MB": "256"}):
+            self.assertEqual(web_app.positive_int_env("MAX_UPLOAD_MB", 100), 256)
+
+        with patch.dict("os.environ", {"MAX_UPLOAD_MB": "not-a-number"}):
+            with self.assertRaisesRegex(RuntimeError, "must be an integer"):
+                web_app.positive_int_env("MAX_UPLOAD_MB", 100)
+
+        with patch.dict("os.environ", {"MAX_UPLOAD_MB": "0"}):
+            with self.assertRaisesRegex(RuntimeError, "must be between"):
+                web_app.positive_int_env("MAX_UPLOAD_MB", 100)
 
     @patch("src.data_loader.load_data")
     def test_dashboard_can_persist_current_dataset_as_baseline(self, load_data):
