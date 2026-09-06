@@ -61,7 +61,9 @@ class AdvancedAIAnalyzer:
     def _get_data_summary(self) -> str:
         """Получает краткое описание датасета"""
         numeric_cols = self.df.select_dtypes(include=[np.number]).columns.tolist()
-        categorical_cols = self.df.select_dtypes(include=['object']).columns.tolist()
+        categorical_cols = self.df.select_dtypes(
+            include=["object", "string", "category", "bool"]
+        ).columns.tolist()
         
         summary = f"Dataset: {len(self.df):,} records, {len(self.df.columns)} columns"
         if numeric_cols:
@@ -598,7 +600,6 @@ This pie chart shows the proportional composition of your data, making it easy t
 • Category balance
 
 **Professional Insight:** Best for showing parts of a whole, but limit to 5-7 categories for clarity."""
-
 
 
 

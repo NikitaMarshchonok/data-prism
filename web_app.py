@@ -3,8 +3,18 @@ import re
 import secrets
 import sqlite3
 import uuid
+from pathlib import Path
 
-from flask import Flask, request, redirect, url_for, send_from_directory, render_template, session
+from flask import (
+    Flask,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    session,
+    url_for,
+)
 from werkzeug.utils import secure_filename
 
 from src.data_loader import SUPPORTED_DATA_EXTENSIONS, is_supported_data_file, load_data
@@ -45,15 +55,36 @@ IMAGE_FOLDER = 'images'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(REPORT_FOLDER, exist_ok=True)
 
+
+def positive_int_env(name, default, *, minimum=1, maximum=100000):
+    """Read a bounded positive integer from the environment."""
+    raw_value = os.getenv(name, str(default))
+    try:
+        value = int(raw_value)
+    except ValueError as error:
+        raise RuntimeError(f'{name} must be an integer.') from error
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f'{name} must be between {minimum} and {maximum}.')
+    return value
+
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY') or secrets.token_hex(32)
+configured_session_key = os.getenv('FLASK_SECRET_KEY')
+app.config['SECRET_KEY'] = configured_session_key or secrets.token_hex(32)
+app.config['SESSION_KEY_PERSISTENT'] = bool(configured_session_key)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['REPORT_FOLDER'] = REPORT_FOLDER
 app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
 app.config['DRIFT_STORE_PATH'] = DRIFT_STORE_PATH
-app.config['DRIFT_HISTORY_RETENTION'] = int(os.getenv('DRIFT_HISTORY_RETENTION', '100'))
+app.config['DRIFT_HISTORY_RETENTION'] = positive_int_env(
+    'DRIFT_HISTORY_RETENTION',
+    100,
+    maximum=10000,
+)
 app.config['DATA_PRISM_API_KEY'] = os.getenv('DATA_PRISM_API_KEY')
-app.config['MAX_CONTENT_LENGTH'] = int(os.getenv('MAX_UPLOAD_MB', '100')) * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = (
+    positive_int_env('MAX_UPLOAD_MB', 100, maximum=10240) * 1024 * 1024
+)
 
 # Регистрируем VibeDash Blueprint
 from vibedash import vibedash_bp
@@ -130,6 +161,33 @@ def get_drift_store():
 def upload_too_large(_error):
     max_upload_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
     return f'Файл слишком большой. Максимальный размер: {max_upload_mb} МБ.', 413
+
+
+@app.get('/healthz')
+def healthcheck():
+    """Process liveness endpoint for containers and orchestrators."""
+    return jsonify({'status': 'ok', 'service': 'data-prism'}), 200
+
+
+@app.get('/readyz')
+def readinesscheck():
+    """Report whether persistent runtime configuration is ready for production traffic."""
+    issues = []
+    if not app.config.get('SESSION_KEY_PERSISTENT'):
+        issues.append('FLASK_SECRET_KEY is not configured.')
+
+    directories = {
+        'uploads': Path(app.config['UPLOAD_FOLDER']),
+        'reports': Path(app.config['REPORT_FOLDER']),
+        'baselines': Path(app.config['BASELINE_FOLDER']),
+        'drift_history': Path(app.config['DRIFT_STORE_PATH']).parent,
+    }
+    for label, directory in directories.items():
+        if not directory.is_dir() or not os.access(directory, os.W_OK | os.X_OK):
+            issues.append(f'{label} directory is not writable.')
+
+    status = 'ready' if not issues else 'not_ready'
+    return jsonify({'status': status, 'issues': issues}), 200 if not issues else 503
 
 
 @app.route('/', methods=['GET', 'POST'])

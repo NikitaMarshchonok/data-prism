@@ -503,7 +503,9 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
         })
     
     # Топ значения по категориальным колонкам
-    categorical_cols = df.select_dtypes(include='object').columns
+    categorical_cols = df.select_dtypes(
+        include=["object", "string", "category", "bool"]
+    ).columns
     for col in categorical_cols[:3]:  # Первые 3 категориальные колонки
         value_counts = df[col].value_counts().head(10)
         tables.append({

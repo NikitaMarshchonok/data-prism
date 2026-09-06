@@ -1,5 +1,7 @@
 #  Data Prism
 
+[![CI](https://github.com/NikitaMarshchonok/data-prism/actions/workflows/ci.yml/badge.svg)](https://github.com/NikitaMarshchonok/data-prism/actions/workflows/ci.yml)
+
 **Data Prism** is a universal tool for automated data analysis and visualization. 
 Upload a dataset (CSV, Excel, JSON, or Parquet) and get an interactive BI dashboard with key metrics,
 advanced visualizations, AI-generated insights, and a downloadable PDF report.
@@ -21,6 +23,8 @@ advanced visualizations, AI-generated insights, and a downloadable PDF report.
 - 🚨 Session-isolated drift history with deduplicated in-app alerts and configurable retention
 - 🔌 API-key-protected drift baselines, checks, history, full reports, and alert acknowledgement
 - ⏱️ Cron/CI-ready drift runner with validated job configs and machine-readable exit codes
+- 📦 Reproducible non-root Docker runtime with liveness and readiness checks
+- ✅ Automated test matrix for Python 3.11 and 3.12 on every pull request
 - 📉 Missing values, correlation matrix, outlier detection (IQR)
 - 🛡️ Data quality score with duplicate, constant-column, and outlier recommendations
 - 🧾 PDF export of full analytics report
@@ -95,6 +99,32 @@ export DRIFT_HISTORY_RETENTION=100
 python web_app.py
 
 ```
+
+The process liveness endpoint is available at `/healthz`. The `/readyz` endpoint additionally
+checks persistent session configuration and writable runtime directories; it returns HTTP 503
+when the application is not ready to receive production traffic.
+
+---
+
+## Docker
+
+Create a local environment file and replace both placeholder secrets before starting the app:
+
+```bash
+cp .env.example .env
+docker build -t data-prism .
+docker run --rm --env-file .env -p 5001:5001 data-prism
+```
+
+Verify the running container from another terminal:
+
+```bash
+curl http://localhost:5001/healthz
+curl http://localhost:5001/readyz
+```
+
+The image runs Gunicorn as an unprivileged user. Runtime concurrency and timeout can be adjusted
+with `WEB_CONCURRENCY`, `WEB_THREADS`, and `WEB_TIMEOUT`.
 
 ---
 
@@ -189,6 +219,8 @@ New features, performance optimizations, and visual enhancements will be added o
 - [x] Add persistent drift history and in-app alert events
 - [x] Add authenticated machine-readable drift monitoring API
 - [x] Add cron/CI-ready drift job runner
+- [x] Add automated CI across supported Python versions
+- [x] Add a non-root container runtime with health checks
 - [ ] Add managed scheduling and external alert delivery
 - [ ] Deploy on cloud (e.g. Render, AWS, or Railway)
 - [ ] Add dynamic drill-down graphs

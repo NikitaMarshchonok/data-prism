@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    env:
+      FLASK_SECRET_KEY: ci-session-key-that-is-long-enough-for-tests
+      DATA_PRISM_API_KEY: ci-monitoring-key-that-is-long-enough-for-tests
+      MPLCONFIGDIR: /tmp/data-prism-matplotlib
+      XDG_CACHE_HOME: /tmp/data-prism-cache
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libharfbuzz-subset0 \
+            libpango-1.0-0 \
+            libpangoft2-1.0-0
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip check
+
+      - name: Compile Python sources
+        run: python -m compileall -q app.py web_app.py monitor_drift.py src vibedash
+
+      - name: Run unit and integration tests
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Run VibeDash smoke tests
+        run: python test_vibedash.py
