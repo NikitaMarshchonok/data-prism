@@ -190,6 +190,7 @@ def _infer_task_type(target: pd.Series) -> str:
     if (
         pd.api.types.is_bool_dtype(target)
         or pd.api.types.is_object_dtype(target)
+        or pd.api.types.is_string_dtype(target)
         or isinstance(target.dtype, pd.CategoricalDtype)
     ):
         return "classification"

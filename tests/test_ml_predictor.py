@@ -9,7 +9,10 @@ from src.ml_predictor import predict_target
 class ModelEvaluationTests(unittest.TestCase):
     def test_classification_handles_categories_missing_values_and_leakage(self):
         row_count = 120
-        target = pd.Series(["yes" if index % 3 == 0 else "no" for index in range(row_count)])
+        target = pd.Series(
+            ["yes" if index % 3 == 0 else "no" for index in range(row_count)],
+            dtype="string",
+        )
         data = pd.DataFrame(
             {
                 "customer_id": list(range(1000, 1000 + row_count)),

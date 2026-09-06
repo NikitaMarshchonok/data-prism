@@ -50,7 +50,15 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 load_dotenv()
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+
+def _openai_client():
+    """Create the API client only when an AI summary is requested."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key)
+
 
 def generate_ai_summary_openai(df: pd.DataFrame, max_rows=4) -> str:
     preview = df.head(max_rows).iloc[:, :6].to_string(index=False)
@@ -72,6 +80,9 @@ def generate_ai_summary_openai(df: pd.DataFrame, max_rows=4) -> str:
     )
 
     try:
+        client = _openai_client()
+        if client is None:
+            return "⚠️ AI Summary недоступен: переменная OPENAI_API_KEY не настроена."
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",  # или gpt-4, если доступен
             messages=[

@@ -207,7 +207,9 @@ def generate_dashboard_data(df, target_column=None):
         })
 
     # 🔹 Категориальные графики с новым стилем
-    cat_cols = df.select_dtypes(include='object').columns
+    cat_cols = df.select_dtypes(
+        include=["object", "string", "category", "bool"]
+    ).columns
     filtered_cats = [col for col in cat_cols if df[col].nunique() <= 20]
     for col in filtered_cats[:2]:
         top_values = df[col].value_counts().reset_index()

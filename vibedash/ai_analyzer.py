@@ -374,7 +374,9 @@ class DataScienceAI:
     def _analyze_summary(self, question: str) -> Dict[str, Any]:
         """Общий анализ данных"""
         numeric_cols = self.df.select_dtypes(include='number').columns
-        categorical_cols = self.df.select_dtypes(include='object').columns
+        categorical_cols = self.df.select_dtypes(
+            include=["object", "string", "category", "bool"]
+        ).columns
         
         answer = f"📋 **Общий анализ данных**\n\n"
         answer += f"**Размер данных:** {len(self.df)} строк, {len(self.df.columns)} колонок\n"
@@ -444,7 +446,9 @@ class DataScienceAI:
     
     def _analyze_comparisons(self, question: str) -> Dict[str, Any]:
         """Сравнительный анализ"""
-        categorical_cols = self.df.select_dtypes(include='object').columns
+        categorical_cols = self.df.select_dtypes(
+            include=["object", "string", "category", "bool"]
+        ).columns
         numeric_cols = self.df.select_dtypes(include='number').columns
         
         if len(categorical_cols) == 0 or len(numeric_cols) == 0:
@@ -509,7 +513,9 @@ class DataScienceAI:
         
         # Базовые метрики
         numeric_cols = self.df.select_dtypes(include='number').columns
-        categorical_cols = self.df.select_dtypes(include='object').columns
+        categorical_cols = self.df.select_dtypes(
+            include=["object", "string", "category", "bool"]
+        ).columns
         
         answer += f"**Данные для анализа:**\n"
         answer += f"• {len(self.df)} записей\n"
