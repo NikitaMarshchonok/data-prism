@@ -3,7 +3,6 @@ import plotly.graph_objects as go
 import pandas as pd
 from src.data_loader import load_data
 from src.kpi_generator import generate_dynamic_kpis  # ✅ Кастомные KPI
-import plotly.figure_factory as ff
 from pandas.api.types import is_numeric_dtype
 from src.ai_summary import generate_ai_summary_openai
 from src.ml_predictor import predict_target
@@ -238,13 +237,24 @@ def generate_dashboard_data(df, target_column=None):
     # ✅ Вставляем матрицу корреляции ОДИН
     if len(numeric_cols) >= 2:
         corr_matrix = df[numeric_cols].corr().round(2)
-        fig = ff.create_annotated_heatmap(
-            z=corr_matrix.values,
-            x=list(corr_matrix.columns),
-            y=list(corr_matrix.index),
-            annotation_text=corr_matrix.values,
-            colorscale='Tealrose',
-            showscale=True
+        annotation_text = [
+            [f"{value:.2f}" for value in row]
+            for row in corr_matrix.to_numpy()
+        ]
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=corr_matrix.to_numpy(),
+                x=list(corr_matrix.columns),
+                y=list(corr_matrix.index),
+                text=annotation_text,
+                texttemplate='%{text}',
+                colorscale='Tealrose',
+                zmin=-1,
+                zmax=1,
+                zmid=0,
+                colorbar=dict(title='Correlation'),
+                hovertemplate='%{x} × %{y}: %{z:.2f}<extra></extra>',
+            )
         )
         fig.update_layout(
             title='📊 Матрица корреляции',

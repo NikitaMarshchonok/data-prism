@@ -49,6 +49,9 @@ class DashboardGeneratorTests(unittest.TestCase):
         self.assertEqual(len(ml_card["model_comparison"]), 1)
         self.assertEqual(ml_card["diagnostics"]["type"], "classification")
         self.assertEqual(ml_card["reliability"]["status"], "ok")
+        self.assertTrue(
+            any(chart["title"] == "📊 Матрица корреляции" for chart in result[1])
+        )
 
 
 if __name__ == "__main__":
