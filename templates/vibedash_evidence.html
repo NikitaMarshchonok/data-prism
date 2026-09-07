@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="A Data Prism evidence dashboard with traceable metrics, statistical validation, and anomaly diagnostics.">
+    <title>{{ viz_spec.title }} · Data Prism</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_preview.css') }}">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+</head>
+<body>
+    <nav class="topbar" aria-label="Dashboard navigation">
+        <a class="brand" href="{{ url_for('vibedash.index') }}" aria-label="Data Prism home">
+            <span class="brand-mark" aria-hidden="true">DP</span>
+            <span>Data Prism</span>
+        </a>
+        <div class="topbar-status"><span></span> Evidence calculated locally</div>
+    </nav>
+
+    <main class="dashboard-shell">
+        <header class="dashboard-header">
+            <div class="header-copy">
+                <div class="eyebrow">Analysis workspace</div>
+                <h1>{{ viz_spec.title }}</h1>
+                <div class="dataset-meta" aria-label="Dataset metadata">
+                    <span>{{ filename }}</span>
+                    <span>{{ dashboard_data.df_shape[0] if dashboard_data.df_shape else 'N/A' }} rows</span>
+                    <span>{{ dashboard_data.df_shape[1] if dashboard_data.df_shape else 'N/A' }} columns</span>
+                </div>
+            </div>
+            <div class="header-actions">
+                <a class="button button-primary" href="{{ url_for('vibedash.export', session_id=session_id) }}">Export HTML <span aria-hidden="true">↓</span></a>
+                <a class="button button-secondary" href="{{ url_for('vibedash.index') }}"><span aria-hidden="true">←</span> New analysis</a>
+            </div>
+        </header>
+
+        <section class="request-panel" aria-labelledby="request-heading">
+            <div class="section-index">01</div>
+            <div><h2 id="request-heading">Decision question</h2><p>{{ prompt }}</p></div>
+            <span class="evidence-badge">Traceable output</span>
+        </section>
+
+        {% if dashboard_data.kpis %}
+        <section class="dashboard-section" aria-labelledby="kpi-heading">
+            <div class="section-heading"><div><span>02</span><h2 id="kpi-heading">Core metrics</h2></div><p>Each value is linked to its calculation.</p></div>
+            <div class="kpi-grid">
+                {% for kpi in dashboard_data.kpis %}
+                <article class="kpi-card"><div class="kpi-label">{{ kpi.title }}</div><strong>{{ kpi.value }}</strong>{% if kpi.tooltip %}<small>{{ kpi.tooltip }}</small>{% endif %}</article>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.insights %}
+        <section class="dashboard-section" aria-labelledby="insights-heading">
+            <div class="section-heading"><div><span>03</span><h2 id="insights-heading">Evidence-backed findings</h2></div><p>Calculated observations first; recommendations second.</p></div>
+            <div class="insight-grid">
+                {% for insight in dashboard_data.insights %}
+                <article class="insight-card severity-{{ insight.severity }}">
+                    <div class="card-heading"><h3>{{ insight.title }}</h3><span>{{ insight.confidence }} support</span></div>
+                    <p class="finding-statement">{{ insight.statement }}</p>
+                    <ul class="evidence-list">{% for item in insight.evidence %}<li>{{ item }}</li>{% endfor %}</ul>
+                    <p class="recommendation"><strong>Next check</strong>{{ insight.recommendation }}</p>
+                </article>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.statistical_validation and dashboard_data.statistical_validation.tests %}
+        <section class="dashboard-section" aria-labelledby="statistics-heading">
+            <div class="section-heading"><div><span>04</span><h2 id="statistics-heading">Statistical validation</h2></div><p>{{ dashboard_data.statistical_validation.summary }}</p></div>
+            <div class="method-note">{{ dashboard_data.statistical_validation.correction }} · confidence intervals and effect sizes are reported with p-values.</div>
+            <div class="validation-list">
+                {% for test in dashboard_data.statistical_validation.tests %}
+                <article class="validation-card {% if test.significant %}is-significant{% endif %}">
+                    <div class="card-heading"><h3>{{ test.title }}</h3><span>{% if test.significant %}FDR significant{% else %}Inconclusive{% endif %}</span></div>
+                    <p class="finding-statement">{{ test.interpretation }}</p>
+                    <div class="stat-grid">
+                        <div><small>Adjusted p-value</small><strong>{{ "%.4g"|format(test.adjusted_p_value) }}</strong></div>
+                        <div><small>Effect size</small><strong>{{ test.effect_size.name }} = {{ "%.3f"|format(test.effect_size.value) }} <em>{{ test.effect_size.magnitude }}</em></strong></div>
+                        <div><small>95% confidence interval</small><strong>[{{ "%.3f"|format(test.confidence_interval.lower) }}, {{ "%.3f"|format(test.confidence_interval.upper) }}]</strong></div>
+                    </div>
+                    <p class="test-meta">{{ test.method }} · n={{ test.sample_size }} · raw p={{ "%.4g"|format(test.raw_p_value) }}</p>
+                    {% if test.limitations %}<p class="limitation"><strong>Limitation</strong>{{ test.limitations[0] }}</p>{% endif %}
+                </article>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.pattern_analysis and dashboard_data.pattern_analysis.status == 'ok' %}
+        <section class="dashboard-section" aria-labelledby="patterns-heading">
+            <div class="section-heading"><div><span>05</span><h2 id="patterns-heading">Anomalies and segments</h2></div><p>{{ dashboard_data.pattern_analysis.anomaly_detection.summary }}</p></div>
+            {% if dashboard_data.pattern_analysis.anomaly_detection.top_anomalies %}
+            <div class="table-card"><div class="table-scroll"><table>
+                <thead><tr><th>Row</th><th>Anomaly score</th><th>Leading reason</th></tr></thead>
+                <tbody>{% for anomaly in dashboard_data.pattern_analysis.anomaly_detection.top_anomalies %}<tr><td>{{ anomaly.row_index }}</td><td><span class="score">{{ "%.3f"|format(anomaly.anomaly_score) }}</span></td><td>{% set reason = anomaly.reasons[0] %}{{ reason.feature }}={{ "%.3f"|format(reason.value) }}; median={{ "%.3f"|format(reason.median) }}; robust deviation={{ "%+.2f"|format(reason.robust_deviation) }}</td></tr>{% endfor %}</tbody>
+            </table></div></div>
+            {% endif %}
+
+            {% if dashboard_data.pattern_analysis.segmentation.status == 'ok' %}
+            <div class="subsection-copy"><h3>Exploratory segmentation</h3><p>{{ dashboard_data.pattern_analysis.segmentation.summary }} Flagged anomalies were excluded while fitting centroids.</p></div>
+            <div class="segment-grid">
+                {% for segment in dashboard_data.pattern_analysis.segmentation.segments %}
+                <article class="segment-card"><div class="card-heading"><h3>Segment {{ segment.segment }}</h3><span>{{ "%.1f%%"|format(segment.share * 100) }}</span></div><p>{{ segment.size }} rows</p><ul>{% for feature in segment.distinguishing_features %}<li><strong>{{ feature.feature }}</strong><span>mean {{ "%.3f"|format(feature.segment_mean) }} · robust difference {{ "%+.2f"|format(feature.robust_difference) }}</span></li>{% endfor %}</ul></article>
+                {% endfor %}
+            </div>
+            {% endif %}
+            <p class="guardrail">Review candidates with domain experts. Do not automatically delete anomalies or operationalize segments.</p>
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.charts %}
+        <section class="dashboard-section" aria-labelledby="charts-heading">
+            <div class="section-heading"><div><span>06</span><h2 id="charts-heading">Visual diagnostics</h2></div><p>Charts support exploration; the evidence panels carry the conclusions.</p></div>
+            <div class="chart-grid">{% for chart in dashboard_data.charts %}<article class="chart-card"><h3>{{ chart.title }}</h3><div class="chart-container">{{ chart.html | safe }}</div></article>{% endfor %}</div>
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.tables %}
+        <section class="dashboard-section" aria-labelledby="tables-heading">
+            <div class="section-heading"><div><span>07</span><h2 id="tables-heading">Data audit</h2></div><p>Source preview and descriptive statistics for manual verification.</p></div>
+            <div class="data-table-stack">{% for table in dashboard_data.tables %}<article class="table-card"><h3>{{ table.title }}</h3><div class="table-scroll"><table><thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead><tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></article>{% endfor %}</div>
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.ai_summary %}
+        <section class="dashboard-section" aria-labelledby="summary-heading">
+            <div class="section-heading"><div><span>08</span><h2 id="summary-heading">Analysis summary</h2></div><p>Generated from the dashboard specification and calculated dataset coverage.</p></div>
+            <div class="summary-card">{{ dashboard_data.ai_summary }}</div>
+        </section>
+        {% endif %}
+
+        {% if not export_mode %}
+        <details class="specification-panel"><summary>Inspect dashboard specification</summary><div class="spec-grid"><div><h3>Metrics · {{ viz_spec.metrics | length }}</h3><ul>{% for metric in viz_spec.metrics %}<li>{{ metric.title }} <code>{{ metric.expr }}</code></li>{% endfor %}</ul></div><div><h3>Charts · {{ viz_spec.charts | length }}</h3><ul>{% for chart in viz_spec.charts %}<li>{{ chart.type }} · {{ chart.x }}{% if chart.y %} → {{ chart.y }}{% endif %}</li>{% endfor %}</ul></div></div></details>
+        {% endif %}
+    </main>
+
+    <footer class="dashboard-footer"><span>Data Prism</span><p>Decision support for tabular data. Observational findings are not causal claims.</p></footer>
+</body>
+</html>

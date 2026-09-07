@@ -44,6 +44,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | --- | --- | --- |
 | `web_app.py` | Flask configuration, upload/session workflow, dashboard route, health endpoints | Statistical or ML algorithms |
 | `src/data_loader.py` | Format validation, bounded loading, normalization | Business interpretation |
+| `src/demo_data.py` | Deterministic synthetic SaaS data for the product demo | User data or production fixtures |
 | `src/data_analyzer.py` | Descriptive profiling and data-quality checks | Predictive modelling |
 | `vibedash/insight_engine.py` | Deterministic evidence-backed findings | Causal claims |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
@@ -75,6 +76,8 @@ sequenceDiagram
 ```
 
 Uploaded source files receive server-generated identifiers. The main workflow stores a normalized CSV working copy for the session; these runtime files are excluded from version control.
+
+The VibeDash landing page also exposes a one-click demonstration path. That path generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so the demo remains reproducible across machines. All evidence, validation, and anomaly engines then run through the same production code path used for uploaded data.
 
 ## Model-evaluation boundary
 
@@ -162,4 +165,3 @@ Scaling to multiple instances requires:
 ## Verification
 
 Pull requests execute compilation, dependency consistency checks, unit/integration tests, and VibeDash smoke tests on Python 3.11 and 3.12. Tests cover both successful workflows and defensive behaviour such as invalid uploads, unsafe expressions, missing credentials, idempotency, path validation, and insufficient statistical support.
-

@@ -8,6 +8,8 @@ Data Prism turns CSV, TSV, Excel, JSON, and Parquet files into an interactive an
 
 The project is designed as a decision-support system: every important conclusion should be traceable to a metric, sample size, confidence estimate, baseline, or diagnostic—not just an LLM-generated narrative.
 
+![Data Prism evidence-first analytics workspace](docs/assets/data-prism-landing.jpg)
+
 ## What the system does
 
 | Area | Capabilities |
@@ -41,6 +43,25 @@ flowchart LR
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, data flows, storage decisions, and current limitations.
+
+## Reproducible product demo
+
+Start the application, open `http://localhost:5001/vibedash/`, and select **Run the live demo**. No upload or external model is required. The application generates the same privacy-safe SaaS dataset and dashboard specification on every run, then calculates:
+
+- four traceable business KPIs and five visual diagnostics;
+- evidence-backed data-quality, correlation, trend, outlier, and concentration findings;
+- effect sizes, confidence intervals, p-values, and FDR-adjusted statistical results;
+- multivariate anomaly candidates and exploratory segments with explicit guardrails.
+
+![Data Prism SaaS evidence dashboard](docs/assets/data-prism-evidence-dashboard.jpg)
+
+The synthetic dataset can also be generated independently for scripts or notebooks:
+
+```bash
+python -m src.demo_data --output data/demo/saas_growth_demo.csv
+```
+
+The generator is deterministic by default, contains no personal information, and deliberately includes missing values and operational incidents so reviewers can verify that the analysis panels produce meaningful results.
 
 ## Quick start with Docker
 
@@ -156,6 +177,7 @@ data-prism/
 ├── monitor_drift.py           # Scheduled/CI drift command
 ├── src/
 │   ├── data_loader.py         # Validated tabular ingestion
+│   ├── demo_data.py           # Deterministic, privacy-safe product demo
 │   ├── data_analyzer.py       # Profiling and data-quality checks
 │   ├── dashboard_generator.py # Dashboard orchestration
 │   ├── ml_predictor.py        # Leakage-safe model selection and evaluation
@@ -194,6 +216,4 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 - Background workers for long-running analyses
 - Object-storage and PostgreSQL adapters
 - Role-based access control and audit events
-- Reproducible demonstration dataset and updated product screenshots
 - Cloud deployment with operational telemetry
-

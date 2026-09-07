@@ -37,10 +37,76 @@ class Filter(BaseModel):
 class VizSpec(BaseModel):
     """Полная спецификация дашборда"""
     title: str
-    metrics: List[Metric] = []
-    charts: List[Chart] = []
-    filters: List[Filter] = []
-    comments: List[str] = []
+    metrics: List[Metric] = Field(default_factory=list)
+    charts: List[Chart] = Field(default_factory=list)
+    filters: List[Filter] = Field(default_factory=list)
+    comments: List[str] = Field(default_factory=list)
+
+
+def create_saas_demo_viz_spec() -> VizSpec:
+    """Return the stable dashboard contract used by the built-in product demo."""
+    return VizSpec(
+        title="SaaS Growth Evidence Dashboard",
+        metrics=[
+            Metric(
+                title="Total Revenue",
+                expr="sum(MonthlyRevenue)",
+                fmt="currency",
+            ),
+            Metric(
+                title="Average Daily Revenue",
+                expr="mean(MonthlyRevenue)",
+                fmt="currency",
+            ),
+            Metric(
+                title="Average Customers",
+                expr="mean(CustomerCount)",
+                fmt="number",
+            ),
+            Metric(
+                title="Average Churn Rate",
+                expr="mean(ChurnRate)",
+                fmt="percent",
+            ),
+        ],
+        charts=[
+            Chart(
+                type="line",
+                x="Date",
+                y="MonthlyRevenue",
+                title="Daily Revenue Trend",
+            ),
+            Chart(
+                type="bar",
+                y="MonthlyRevenue",
+                agg="mean",
+                group="Region",
+                title="Average Revenue by Region",
+            ),
+            Chart(
+                type="bar",
+                y="ChurnRate",
+                agg="mean",
+                group="Plan",
+                title="Average Churn by Plan",
+            ),
+            Chart(
+                type="scatter",
+                x="CustomerCount",
+                y="MonthlyRevenue",
+                title="Customer Count vs Revenue",
+            ),
+            Chart(
+                type="hist",
+                x="TicketCount",
+                title="Support Ticket Distribution",
+            ),
+        ],
+        comments=[
+            "Built-in synthetic dataset with deterministic analytical signals.",
+            "Evidence, statistics, and anomaly results are calculated locally.",
+        ],
+    )
 
 
 def parse_prompt_to_viz_spec(prompt: str, df_columns: List[str]) -> VizSpec:
