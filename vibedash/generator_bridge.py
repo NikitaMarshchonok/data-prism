@@ -234,14 +234,14 @@ def _generate_kpis(df: pd.DataFrame, metrics: List[Metric]) -> List[Dict[str, st
             kpis.append({
                 "title": metric.title,
                 "value": formatted_value,
-                "tooltip": f"Выражение: {metric.expr}"
+                "tooltip": f"Calculation: {metric.expr}"
             })
         except Exception as e:
             print(f"⚠️ Ошибка в метрике {metric.title}: {e}")
             kpis.append({
                 "title": metric.title,
-                "value": "Ошибка",
-                "tooltip": f"Ошибка: {str(e)}"
+                "value": "Unavailable",
+                "tooltip": f"Calculation error: {str(e)}"
             })
     
     return kpis
@@ -321,7 +321,8 @@ def _format_value(value: float, fmt: str) -> str:
         if fmt == "currency":
             return f"${value:,.2f}"
         elif fmt == "percent":
-            return f"{value:.1f}%"
+            percentage = value * 100 if -1 <= value <= 1 else value
+            return f"{percentage:.1f}%"
         elif fmt == "number":
             return f"{value:,.0f}"
         else:
@@ -346,7 +347,7 @@ def _generate_charts(df: pd.DataFrame, charts: List[Chart]) -> List[Dict[str, st
             print(f"⚠️ Ошибка в графике {chart.title}: {e}")
             chart_list.append({
                 "title": chart.title or f"График: {chart.type}",
-                "html": f"<div>Ошибка создания графика: {escape(str(e))}</div>"
+                "html": f"<div>Chart generation error: {escape(str(e))}</div>"
             })
     
     return chart_list
@@ -471,10 +472,11 @@ def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
 
     # Применяем стиль
     fig.update_layout(
-        plot_bgcolor='#131c2c',
-        paper_bgcolor='#131c2c',
-        font=dict(color='white'),
-        margin=dict(t=40, b=30, l=0, r=0)
+        plot_bgcolor='#10201c',
+        paper_bgcolor='#10201c',
+        font=dict(color='#d8e8e2', family='DM Sans, sans-serif'),
+        margin=dict(t=40, b=30, l=0, r=0),
+        colorway=['#72e0b6', '#8eb6f7', '#efc477', '#c6a6f7'],
     )
 
     # Plotly загружается один раз шаблоном страницы.

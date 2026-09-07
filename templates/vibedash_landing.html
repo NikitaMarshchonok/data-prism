@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Data Prism turns tabular data into evidence-backed insights, validated analysis, and monitoring-ready dashboards.">
+    <title>Data Prism · Evidence-first analytics</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_landing.css') }}">
+</head>
+<body>
+    <div class="page-glow page-glow-one" aria-hidden="true"></div>
+    <div class="page-glow page-glow-two" aria-hidden="true"></div>
+
+    <nav class="site-nav" aria-label="Main navigation">
+        <a class="brand" href="{{ url_for('vibedash.index') }}" aria-label="Data Prism home">
+            <span class="brand-mark" aria-hidden="true">DP</span>
+            <span>Data Prism</span>
+        </a>
+        <div class="nav-links">
+            <a href="#workspace">Workspace</a>
+            <a href="#capabilities">Capabilities</a>
+            <a href="{{ url_for('upload_file') }}">Classic analysis</a>
+        </div>
+        <div class="engine-status" title="Deterministic analytics work without an external model">
+            <span class="status-dot"></span>
+            Evidence engine ready
+        </div>
+    </nav>
+
+    <main>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <section class="flash-stack" aria-label="Notifications">
+                    {% for category, message in messages %}
+                        <div class="flash-message flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </section>
+            {% endif %}
+        {% endwith %}
+
+        <section class="hero">
+            <div class="hero-copy">
+                <div class="eyebrow"><span></span> Evidence-first automated data science</div>
+                <h1>From raw tables to <em>defensible decisions.</em></h1>
+                <p class="hero-description">
+                    Profile data quality, validate statistical signals, explore anomalies,
+                    and turn findings into a monitoring-ready dashboard—without hiding the evidence.
+                </p>
+                <div class="hero-actions">
+                    <a class="button button-primary" href="#workspace">Analyze your data</a>
+                    <form method="POST" action="{{ url_for('vibedash.preview') }}">
+                        <input type="hidden" name="demo_dataset" value="saas_growth">
+                        <input type="hidden" name="prompt" value="{{ demo_prompt }}">
+                        <button class="button button-secondary" type="submit">
+                            Run the live demo <span aria-hidden="true">→</span>
+                        </button>
+                    </form>
+                </div>
+                <ul class="trust-list" aria-label="Product guarantees">
+                    <li><span>✓</span> No demo setup</li>
+                    <li><span>✓</span> Synthetic, privacy-safe data</li>
+                    <li><span>✓</span> Metrics before narrative</li>
+                </ul>
+            </div>
+
+            <aside class="evidence-preview" aria-label="Example evidence report">
+                <div class="preview-header">
+                    <div>
+                        <span class="preview-label">SaaS growth · daily</span>
+                        <h2>Evidence report</h2>
+                    </div>
+                    <span class="support-badge">High support</span>
+                </div>
+                <div class="metric-grid">
+                    <div class="metric-card">
+                        <span>Rows</span>
+                        <strong>360</strong>
+                        <small>12 months</small>
+                    </div>
+                    <div class="metric-card">
+                        <span>Signals</span>
+                        <strong>11</strong>
+                        <small>mixed types</small>
+                    </div>
+                    <div class="metric-card accent-card">
+                        <span>Designed events</span>
+                        <strong>3</strong>
+                        <small>detectable anomalies</small>
+                    </div>
+                </div>
+                <div class="finding-card">
+                    <div class="finding-heading">
+                        <span class="finding-icon">↗</span>
+                        <div>
+                            <small>Example finding</small>
+                            <h3>Revenue follows customer growth</h3>
+                        </div>
+                    </div>
+                    <div class="evidence-line"><span style="width: 84%"></span></div>
+                    <p>Confirm the relationship with calculated correlation, confidence, and sample-size evidence.</p>
+                </div>
+                <div class="preview-footer">
+                    <span>Quality</span><span>Statistics</span><span>Anomalies</span><span>Monitoring</span>
+                </div>
+            </aside>
+        </section>
+
+        <section class="workflow" aria-label="Analysis workflow">
+            <div><span>01</span><strong>Load</strong><small>Validate tabular input</small></div>
+            <div><span>02</span><strong>Interrogate</strong><small>Calculate evidence</small></div>
+            <div><span>03</span><strong>Validate</strong><small>Measure uncertainty</small></div>
+            <div><span>04</span><strong>Monitor</strong><small>Detect change over time</small></div>
+        </section>
+
+        <section class="workspace" id="workspace">
+            <div class="section-heading">
+                <div>
+                    <div class="eyebrow"><span></span> Interactive workspace</div>
+                    <h2>Bring a question and a CSV.</h2>
+                </div>
+                <p>Describe the decision you need to support. Data Prism creates the initial specification, then calculates the evidence locally.</p>
+            </div>
+
+            <form class="analysis-form" method="POST" action="{{ url_for('vibedash.preview') }}" enctype="multipart/form-data">
+                <div class="field-card upload-card">
+                    <label for="datafile">
+                        <span class="field-number">1</span>
+                        <span><strong>Select a CSV file</strong><small>Runtime uploads are excluded from version control.</small></span>
+                    </label>
+                    <input type="file" name="datafile" id="datafile" accept=".csv,text/csv" required>
+                    <p id="file-selected-name">No file selected</p>
+                </div>
+
+                <div class="field-card prompt-card">
+                    <label for="prompt">
+                        <span class="field-number">2</span>
+                        <span><strong>Describe the analysis</strong><small>Be specific about KPIs, comparisons, and trends.</small></span>
+                    </label>
+                    <textarea id="prompt" name="prompt" rows="5" required placeholder="Example: Compare revenue and churn by plan and region, identify anomalies, validate the strongest differences, and recommend what to investigate next."></textarea>
+                    <div class="prompt-presets" aria-label="Prompt templates">
+                        <button type="button" data-prompt="{{ preset_prompts.sales|e }}">Revenue</button>
+                        <button type="button" data-prompt="{{ preset_prompts.finance|e }}">Finance</button>
+                        <button type="button" data-prompt="{{ preset_prompts.real_estate|e }}">Real estate</button>
+                    </div>
+                </div>
+
+                <button class="button button-primary submit-button" id="submit-btn" type="submit">
+                    Create evidence dashboard <span aria-hidden="true">→</span>
+                </button>
+                <div class="loading-indicator" id="loading-indicator" hidden>
+                    Calculating evidence and building the dashboard…
+                </div>
+            </form>
+        </section>
+
+        <section class="capabilities" id="capabilities">
+            <div class="section-heading compact-heading">
+                <div>
+                    <div class="eyebrow"><span></span> What gets calculated</div>
+                    <h2>Analysis with an audit trail.</h2>
+                </div>
+            </div>
+            <div class="capability-grid">
+                <article><span>01</span><h3>Data quality</h3><p>Missingness, duplicates, constants, schema, and outlier diagnostics.</p></article>
+                <article><span>02</span><h3>Validated evidence</h3><p>Effect sizes, confidence intervals, FDR correction, and explicit limitations.</p></article>
+                <article><span>03</span><h3>Model diagnostics</h3><p>Leakage-safe evaluation, baselines, calibration, stability, and explainability.</p></article>
+                <article><span>04</span><h3>Drift monitoring</h3><p>Aggregate baselines, persistent history, deduplicated alerts, API, and CLI.</p></article>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <span>Data Prism</span>
+        <p>Decision support for tabular data. Statistical findings are observational, not causal.</p>
+        <span class="model-status">Optional local model: {{ 'available' if ollama_available else 'heuristic mode' }}</span>
+    </footer>
+
+    <script>
+        const fileInput = document.getElementById('datafile');
+        const fileName = document.getElementById('file-selected-name');
+        const prompt = document.getElementById('prompt');
+        const analysisForm = document.querySelector('.analysis-form');
+        const submitButton = document.getElementById('submit-btn');
+        const loadingIndicator = document.getElementById('loading-indicator');
+
+        fileInput.addEventListener('change', (event) => {
+            const selectedFile = event.target.files[0];
+            fileName.textContent = selectedFile ? selectedFile.name : 'No file selected';
+            fileName.classList.toggle('has-file', Boolean(selectedFile));
+        });
+
+        document.querySelectorAll('[data-prompt]').forEach((button) => {
+            button.addEventListener('click', () => {
+                prompt.value = button.dataset.prompt;
+                prompt.focus();
+            });
+        });
+
+        analysisForm.addEventListener('submit', () => {
+            submitButton.disabled = true;
+            loadingIndicator.hidden = false;
+        });
+    </script>
+</body>
+</html>
