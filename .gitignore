@@ -24,4 +24,20 @@ tmp/
 *.mov
 *.jpg
 *.jpeg
-*.png
+/*.png
+images/*.png
+
+# Local development notes and generated debug artifacts
+QUICK_START.md
+VS_CODE_START.md
+README_VIBEDASH.md
+VIBEDASH_README.md
+debug_upload.html
+debug_upload.py
+final_report.html
+har_and_cookies/
+images/gpt4free_test.py
+test_ai_chat.py
+test_ml_predictor.py
+test_spec.py
+test_upload.html
