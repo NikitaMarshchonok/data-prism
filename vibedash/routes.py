@@ -160,7 +160,8 @@ if vibedash_bp:
             }
             
             # Сохраняем данные сессии
-            save_session_data(session_id, session_data)
+            if not save_session_data(session_id, session_data):
+                raise RuntimeError("VibeDash session could not be persisted.")
 
             # Рендерим предварительный просмотр
             current_app.logger.info(
