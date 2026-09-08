@@ -110,7 +110,13 @@ class WebUploadTests(unittest.TestCase):
             response = client.get("/healthz")
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.get_json(), {"service": "data-prism", "status": "ok"})
+        self.assertEqual(response.get_json()["service"], "data-prism")
+        self.assertEqual(response.get_json()["status"], "ok")
+        self.assertEqual(
+            response.get_json()["version"],
+            web_app.app.config["SERVICE_VERSION"],
+        )
+        self.assertRegex(response.headers["X-Request-ID"], r"^[0-9a-f]{32}$")
 
     def test_readiness_requires_persistent_session_key(self):
         with web_app.app.test_client() as client:

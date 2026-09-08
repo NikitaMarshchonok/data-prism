@@ -40,20 +40,52 @@ from src.data_drift import (
     save_baseline_profile,
 )
 from src.drift_store import DriftStore
+from src.observability import configure_observability
 from markupsafe import Markup
 import markdown as md
 
 # 📁 Пути
+def resolve_runtime_paths(base_dir, state_dir=None):
+    """Resolve runtime storage paths for local or mounted-state deployments."""
+    base_path = Path(base_dir).expanduser().resolve()
+    if state_dir:
+        state_path = Path(state_dir).expanduser().resolve()
+        return {
+            'state': str(state_path),
+            'uploads': str(state_path / 'uploads'),
+            'reports': str(state_path / 'reports'),
+            'baselines': str(state_path / 'baselines'),
+            'drift_store': str(state_path / 'drift' / 'drift_history.sqlite3'),
+        }
+    return {
+        'state': str(base_path),
+        'uploads': str(base_path / 'data' / 'uploads'),
+        'reports': str(base_path / 'reports'),
+        'baselines': str(base_path / 'data' / 'baselines'),
+        'drift_store': str(base_path / 'data' / 'drift' / 'drift_history.sqlite3'),
+    }
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'data', 'uploads')
-REPORT_FOLDER = os.path.join(BASE_DIR, 'reports')
-BASELINE_FOLDER = os.path.join(BASE_DIR, 'data', 'baselines')
-DRIFT_STORE_PATH = os.path.join(BASE_DIR, 'data', 'drift', 'drift_history.sqlite3')
+runtime_paths = resolve_runtime_paths(
+    BASE_DIR,
+    os.getenv('DATA_PRISM_STATE_DIR'),
+)
+STATE_DIR = runtime_paths['state']
+UPLOAD_FOLDER = runtime_paths['uploads']
+REPORT_FOLDER = runtime_paths['reports']
+BASELINE_FOLDER = runtime_paths['baselines']
+DRIFT_STORE_PATH = runtime_paths['drift_store']
 IMAGE_FOLDER = 'images'
 
 # ✅ Создаём папки, если их нет
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(REPORT_FOLDER, exist_ok=True)
+for runtime_directory in (
+    UPLOAD_FOLDER,
+    REPORT_FOLDER,
+    BASELINE_FOLDER,
+    os.path.dirname(DRIFT_STORE_PATH),
+):
+    os.makedirs(runtime_directory, exist_ok=True)
 
 
 def positive_int_env(name, default, *, minimum=1, maximum=100000):
@@ -85,6 +117,7 @@ app.config['DATA_PRISM_API_KEY'] = os.getenv('DATA_PRISM_API_KEY')
 app.config['MAX_CONTENT_LENGTH'] = (
     positive_int_env('MAX_UPLOAD_MB', 100, maximum=10240) * 1024 * 1024
 )
+configure_observability(app)
 
 # Регистрируем VibeDash Blueprint
 from vibedash import vibedash_bp
@@ -166,7 +199,11 @@ def upload_too_large(_error):
 @app.get('/healthz')
 def healthcheck():
     """Process liveness endpoint for containers and orchestrators."""
-    return jsonify({'status': 'ok', 'service': 'data-prism'}), 200
+    return jsonify({
+        'status': 'ok',
+        'service': 'data-prism',
+        'version': app.config['SERVICE_VERSION'],
+    }), 200
 
 
 @app.get('/readyz')
@@ -187,7 +224,11 @@ def readinesscheck():
             issues.append(f'{label} directory is not writable.')
 
     status = 'ready' if not issues else 'not_ready'
-    return jsonify({'status': status, 'issues': issues}), 200 if not issues else 503
+    return jsonify({
+        'status': status,
+        'issues': issues,
+        'version': app.config['SERVICE_VERSION'],
+    }), 200 if not issues else 503
 
 
 @app.route('/', methods=['GET', 'POST'])

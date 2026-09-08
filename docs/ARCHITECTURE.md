@@ -43,6 +43,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | Component | Responsibility | Does not own |
 | --- | --- | --- |
 | `web_app.py` | Flask configuration, upload/session workflow, dashboard route, health endpoints | Statistical or ML algorithms |
+| `src/observability.py` | Request correlation, structured application logs, deployment version, response safety headers | External log storage or tracing backend |
 | `src/data_loader.py` | Format validation, bounded loading, normalization | Business interpretation |
 | `src/demo_data.py` | Deterministic synthetic SaaS data for the product demo | User data or production fixtures |
 | `src/data_analyzer.py` | Descriptive profiling and data-quality checks | Predictive modelling |
@@ -152,7 +153,9 @@ These controls reduce common portfolio-app risks but do not replace a full produ
 
 ## Deployment shape
 
-The provided container runs Gunicorn and exposes liveness and readiness endpoints. The current supported topology is one application instance with writable persistent storage.
+The provided container runs Gunicorn and exposes liveness and readiness endpoints. Runtime state can be redirected with `DATA_PRISM_STATE_DIR`. The current supported topology is one application instance with writable local storage.
+
+Every response receives a bounded `X-Request-ID`. Production JSON access events record the normalized Flask route, status, latency, and deployment version without including raw URLs, query strings, request bodies, client addresses, or session identifiers. Render supplies the deployment commit through `RENDER_GIT_COMMIT`; the health endpoints expose its shortened value for verification.
 
 Scaling to multiple instances requires:
 
@@ -164,4 +167,4 @@ Scaling to multiple instances requires:
 
 ## Verification
 
-Pull requests execute compilation, dependency consistency checks, unit/integration tests, and VibeDash smoke tests on Python 3.11 and 3.12. Tests cover both successful workflows and defensive behaviour such as invalid uploads, unsafe expressions, missing credentials, idempotency, path validation, and insufficient statistical support.
+Pull requests execute compilation, dependency consistency checks, unit/integration tests, and VibeDash smoke tests on Python 3.11 and 3.12. After those jobs pass, CI builds and starts the production container, verifies readiness and request correlation, and checks for structured runtime logs. Tests cover both successful workflows and defensive behaviour such as invalid uploads, unsafe expressions, missing credentials, idempotency, path validation, and insufficient statistical support.
