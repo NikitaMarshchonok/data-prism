@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: data-prism
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /readyz
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: DATA_PRISM_API_KEY
+        generateValue: true
+      - key: DATA_PRISM_STATE_DIR
+        value: /var/lib/data-prism
+      - key: LOG_FORMAT
+        value: json
+      - key: LOG_LEVEL
+        value: INFO
+      - key: FLASK_DEBUG
+        value: "false"
+      - key: MAX_UPLOAD_MB
+        value: "25"
+      - key: MAX_ROWS_PREVIEW
+        value: "25000"
+      - key: DRIFT_HISTORY_RETENTION
+        value: "100"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: WEB_THREADS
+        value: "4"
+      - key: WEB_TIMEOUT
+        value: "120"

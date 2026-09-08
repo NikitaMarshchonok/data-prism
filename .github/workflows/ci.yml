@@ -29,6 +29,7 @@ jobs:
       MPLCONFIGDIR: /tmp/data-prism-matplotlib
       XDG_CACHE_HOME: /tmp/data-prism-cache
       PYTHONDONTWRITEBYTECODE: "1"
+      LOG_LEVEL: WARNING
 
     steps:
       - name: Check out repository
@@ -62,3 +63,55 @@ jobs:
 
       - name: Run VibeDash smoke tests
         run: python test_vibedash.py
+
+  container:
+    name: Container smoke test
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Build production image
+        run: docker build --tag data-prism:ci .
+
+      - name: Start production container
+        run: |
+          docker run --detach --name data-prism-ci \
+            --env FLASK_SECRET_KEY=ci-container-session-key-that-is-long-enough \
+            --env DATA_PRISM_API_KEY=ci-container-monitoring-key-that-is-long-enough \
+            --env SERVICE_VERSION=ci-container \
+            --publish 5001:5001 \
+            data-prism:ci
+
+      - name: Verify readiness and request correlation
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:5001/readyz > /tmp/data-prism-ready.json; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs data-prism-ci
+              exit 1
+            fi
+            sleep 2
+          done
+
+          curl --fail --silent --show-error \
+            --dump-header /tmp/data-prism-response-headers \
+            --header "X-Request-ID: ci-health-check" \
+            http://127.0.0.1:5001/healthz > /tmp/data-prism-health.json
+
+          grep --ignore-case --quiet \
+            '^x-request-id: ci-health-check' \
+            /tmp/data-prism-response-headers
+          grep --quiet '"status":"ready"' /tmp/data-prism-ready.json
+          grep --quiet '"version":"ci-container"' /tmp/data-prism-health.json
+          docker logs data-prism-ci > /tmp/data-prism-container.log 2>&1
+          grep --quiet '"event":"http_request"' /tmp/data-prism-container.log
+
+      - name: Stop production container
+        if: always()
+        run: docker rm --force data-prism-ci

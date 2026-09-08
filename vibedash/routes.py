@@ -59,15 +59,17 @@ if vibedash_bp:
     def preview():
         """Предварительный просмотр дашборда"""
         try:
-            import logging
-            logging.info("=== VibeDash Preview Request ===")
-            logging.info(f"Request method: {request.method}")
-            logging.info(f"Request files: {list(request.files.keys())}")
-            logging.info(f"Request form: {dict(request.form)}")
-            
+            current_app.logger.info(
+                "VibeDash preview started",
+                extra={"event": "vibedash_preview_started"},
+            )
+
             prompt = request.form.get('prompt', '').strip()
             if not prompt:
-                logging.error("No prompt provided")
+                current_app.logger.warning(
+                    "VibeDash preview rejected: prompt missing",
+                    extra={"event": "vibedash_preview_rejected"},
+                )
                 flash('Please enter a dashboard description!', 'error')
                 return redirect(url_for('vibedash.index'))
 
@@ -84,11 +86,17 @@ if vibedash_bp:
                 filename = DEMO_FILENAME
                 df = create_saas_growth_demo()
                 df.to_csv(upload_path, index=False)
-                logging.info("Generated built-in demonstration dataset")
+                current_app.logger.info(
+                    "Built-in demonstration dataset generated",
+                    extra={"event": "vibedash_demo_generated"},
+                )
             else:
                 file = request.files.get('datafile')
                 if file is None or not file.filename:
-                    logging.error("No file selected")
+                    current_app.logger.warning(
+                        "VibeDash preview rejected: file missing",
+                        extra={"event": "vibedash_preview_rejected"},
+                    )
                     flash('No file selected!', 'error')
                     return redirect(url_for('vibedash.index'))
 
@@ -96,7 +104,6 @@ if vibedash_bp:
                 if not filename or Path(filename).suffix.lower() != '.csv':
                     flash('VibeDash currently accepts CSV files only.', 'error')
                     return redirect(url_for('vibedash.index'))
-                logging.info(f"File: {filename}, Prompt: {prompt[:50]}...")
                 file.save(upload_path)
 
                 # Загружаем данные с правильной кодировкой
@@ -107,34 +114,38 @@ if vibedash_bp:
                         df = pd.read_csv(upload_path, encoding='latin-1')
                     except UnicodeDecodeError:
                         df = pd.read_csv(upload_path, encoding='cp1252')
-            logging.info(f"File saved to: {upload_path}")
-            logging.info(f"DataFrame loaded: {df.shape}")
+            current_app.logger.info(
+                "VibeDash dataset loaded",
+                extra={"event": "vibedash_dataset_loaded"},
+            )
             
             # Ограничиваем размер для предварительного просмотра
             max_rows = int(os.getenv('MAX_ROWS_PREVIEW', '100000'))
             if len(df) > max_rows:
                 df = df.head(max_rows)
                 flash(f'Data limited to {max_rows:,} rows for preview', 'info')
-                logging.info(f"Data limited to {max_rows:,} rows")
+                current_app.logger.info(
+                    "VibeDash dataset truncated to preview limit",
+                    extra={"event": "vibedash_dataset_truncated"},
+                )
             
             # Проверяем размер файла
             file_size_mb = os.path.getsize(upload_path) / (1024 * 1024)
             if file_size_mb > 100:  # Больше 100MB
                 flash(f'Large file detected ({file_size_mb:.1f}MB). Processing may take longer...', 'warning')
-                logging.info(f"Large file detected: {file_size_mb:.1f}MB")
+                current_app.logger.warning(
+                    "VibeDash large dataset detected",
+                    extra={"event": "vibedash_large_dataset"},
+                )
             
             # Парсим промпт в VizSpec
-            logging.info("Parsing prompt to VizSpec...")
             if demo_dataset:
                 viz_spec = create_saas_demo_viz_spec()
             else:
                 viz_spec = parse_prompt_to_viz_spec(prompt, list(df.columns))
-            logging.info(f"VizSpec generated: {len(viz_spec.metrics)} metrics, {len(viz_spec.charts)} charts")
-            
+
             # Генерируем данные дашборда
-            logging.info("Generating dashboard data...")
             dashboard_data = bridge_generate_dashboard_data(df, viz_spec)
-            logging.info("Dashboard data generated successfully")
             
             # Создаем сессию
             session_id = str(uuid.uuid4())
@@ -150,10 +161,12 @@ if vibedash_bp:
             
             # Сохраняем данные сессии
             save_session_data(session_id, session_data)
-            logging.info(f"Session data saved: {session_id}")
-            
+
             # Рендерим предварительный просмотр
-            logging.info("Rendering preview template...")
+            current_app.logger.info(
+                "VibeDash preview completed",
+                extra={"event": "vibedash_preview_completed"},
+            )
             return render_template('vibedash_evidence.html',
                                  session_id=session_id,
                                  viz_spec=viz_spec,
@@ -161,13 +174,15 @@ if vibedash_bp:
                                  filename=filename,
                                  prompt=prompt)
         
-        except Exception as e:
-            import logging
-            import traceback
-            logging.exception("Error in preview route:")
-            print(f"❌ ERROR in preview route: {str(e)}")
-            print(f"📋 Traceback: {traceback.format_exc()}")
-            flash(f'Error creating dashboard: {str(e)}', 'error')
+        except Exception:
+            current_app.logger.exception(
+                "VibeDash preview failed",
+                extra={"event": "vibedash_preview_failed"},
+            )
+            flash(
+                'Could not create the dashboard. Check the CSV and analysis request.',
+                'error',
+            )
             return redirect(url_for('vibedash.index'))
 
 

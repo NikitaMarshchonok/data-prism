@@ -2,7 +2,9 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=5001
+    PORT=5001 \
+    DATA_PRISM_STATE_DIR=/var/lib/data-prism \
+    LOG_FORMAT=json
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
@@ -21,8 +23,11 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY --chown=data-prism:data-prism . .
-RUN mkdir -p data/uploads data/baselines data/drift reports \
-    && chown -R data-prism:data-prism data reports
+RUN mkdir -p /var/lib/data-prism/uploads \
+        /var/lib/data-prism/reports \
+        /var/lib/data-prism/baselines \
+        /var/lib/data-prism/drift \
+    && chown -R data-prism:data-prism /var/lib/data-prism
 
 USER data-prism
 
@@ -31,4 +36,4 @@ EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.getenv('PORT', '5001') + '/readyz', timeout=3)" || exit 1
 
-CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-5001} --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${WEB_TIMEOUT:-120} --access-logfile - --error-logfile - web_app:app"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-5001} --workers ${WEB_CONCURRENCY:-2} --threads ${WEB_THREADS:-4} --timeout ${WEB_TIMEOUT:-120} --error-logfile - web_app:app"]

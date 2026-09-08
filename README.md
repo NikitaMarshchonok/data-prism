@@ -23,6 +23,7 @@ The project is designed as a decision-support system: every important conclusion
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
 | Interfaces | BI dashboard, prompt-to-dashboard workspace, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
+| Operations | Docker/Gunicorn runtime, readiness checks, request IDs, structured JSON logs, and a CI-gated Render Blueprint |
 
 ## System overview
 
@@ -42,7 +43,7 @@ flowchart LR
     J --> K[Web UI / API / CLI]
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, data flows, storage decisions, and current limitations.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported deployment and persistence model.
 
 ## Reproducible product demo
 
@@ -86,6 +87,12 @@ Open:
 - Readiness: `http://localhost:5001/readyz`
 
 The container runs Gunicorn as an unprivileged user. `/readyz` returns HTTP 503 if the persistent session key is missing or required runtime directories are not writable.
+
+## Cloud deployment
+
+The root `render.yaml` defines a free Docker web service with generated secrets, CI-gated deploys, structured logs, and `/readyz` health checks. After this repository is connected as a Render Blueprint, the built-in demo is available from the assigned public URL.
+
+The free service filesystem is ephemeral. This is suitable for the portfolio demo, but drift history and uploaded artifacts require a paid persistent disk or future external storage. Follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for exact setup, verification, persistence, and rollback guidance.
 
 ## Local development
 
@@ -189,6 +196,7 @@ data-prism/
 ├── templates/                 # Flask/Jinja interfaces and reports
 ├── tests/                     # Unit and integration tests
 ├── .github/workflows/ci.yml   # Python 3.11/3.12 CI matrix
+├── render.yaml                # CI-gated Render deployment Blueprint
 └── Dockerfile                 # Non-root Gunicorn runtime
 ```
 
@@ -216,4 +224,4 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 - Background workers for long-running analyses
 - Object-storage and PostgreSQL adapters
 - Role-based access control and audit events
-- Cloud deployment with operational telemetry
+- Publish and verify the live portfolio deployment
