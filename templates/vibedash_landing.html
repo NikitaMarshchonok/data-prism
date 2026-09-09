@@ -51,12 +51,16 @@
                 </p>
                 <div class="hero-actions">
                     <a class="button button-primary" href="#workspace">Analyze your data</a>
-                    <form method="POST" action="{{ url_for('vibedash.preview') }}">
+                    <form id="demo-form" method="POST" action="{{ url_for('vibedash.preview') }}">
                         <input type="hidden" name="demo_dataset" value="saas_growth">
                         <input type="hidden" name="prompt" value="{{ demo_prompt }}">
-                        <button class="button button-secondary" type="submit">
-                            Run the live demo <span aria-hidden="true">→</span>
+                        <button class="button button-secondary demo-submit" id="demo-submit" type="submit" aria-describedby="demo-loading-status">
+                            <span id="demo-submit-label">Run the live demo</span>
+                            <span id="demo-submit-arrow" aria-hidden="true">→</span>
                         </button>
+                        <span class="demo-loading-status" id="demo-loading-status" role="status" aria-live="polite" hidden>
+                            Building the evidence dashboard. This can take up to a minute.
+                        </span>
                     </form>
                 </div>
                 <ul class="trust-list" aria-label="Product guarantees">
@@ -182,6 +186,11 @@
         const fileInput = document.getElementById('datafile');
         const fileName = document.getElementById('file-selected-name');
         const prompt = document.getElementById('prompt');
+        const demoForm = document.getElementById('demo-form');
+        const demoSubmit = document.getElementById('demo-submit');
+        const demoSubmitLabel = document.getElementById('demo-submit-label');
+        const demoSubmitArrow = document.getElementById('demo-submit-arrow');
+        const demoLoadingStatus = document.getElementById('demo-loading-status');
         const analysisForm = document.querySelector('.analysis-form');
         const submitButton = document.getElementById('submit-btn');
         const loadingIndicator = document.getElementById('loading-indicator');
@@ -202,6 +211,22 @@
         analysisForm.addEventListener('submit', () => {
             submitButton.disabled = true;
             loadingIndicator.hidden = false;
+        });
+
+        demoForm.addEventListener('submit', () => {
+            demoSubmit.disabled = true;
+            demoSubmit.classList.add('is-loading');
+            demoSubmitLabel.textContent = 'Analyzing demo…';
+            demoSubmitArrow.hidden = true;
+            demoLoadingStatus.hidden = false;
+        });
+
+        window.addEventListener('pageshow', () => {
+            demoSubmit.disabled = false;
+            demoSubmit.classList.remove('is-loading');
+            demoSubmitLabel.textContent = 'Run the live demo';
+            demoSubmitArrow.hidden = false;
+            demoLoadingStatus.hidden = true;
         });
     </script>
 </body>
