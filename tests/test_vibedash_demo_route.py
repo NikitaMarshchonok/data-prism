@@ -122,6 +122,8 @@ class VibeDashDemoRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Run the live demo", page)
         self.assertIn('name="demo_dataset" value="saas_growth"', page)
+        self.assertIn('id="demo-loading-status"', page)
+        self.assertIn("Building the evidence dashboard", page)
         self.assertNotIn("Data Prism v2", page)
 
 
