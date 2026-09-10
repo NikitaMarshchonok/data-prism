@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PORT=5001 \
     DATA_PRISM_STATE_DIR=/var/lib/data-prism \
+    VIBEDASH_RETENTION_HOURS=24 \
     LOG_FORMAT=json
 
 RUN apt-get update \

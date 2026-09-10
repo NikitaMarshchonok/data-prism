@@ -25,6 +25,10 @@ _STRUCTURED_FIELDS = (
     "http_status",
     "duration_ms",
     "service_version",
+    "removed_sessions",
+    "removed_uploads",
+    "removed_exports",
+    "errors",
 )
 
 

@@ -26,6 +26,8 @@ services:
         value: "25000"
       - key: DRIFT_HISTORY_RETENTION
         value: "100"
+      - key: VIBEDASH_RETENTION_HOURS
+        value: "24"
       - key: WEB_CONCURRENCY
         value: "1"
       - key: WEB_THREADS

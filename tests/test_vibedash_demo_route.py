@@ -23,13 +23,20 @@ class VibeDashDemoRouteTests(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = TemporaryDirectory()
         self.previous_upload_folder = web_app.app.config["UPLOAD_FOLDER"]
+        self.previous_retention_hours = web_app.app.config[
+            "VIBEDASH_RETENTION_HOURS"
+        ]
         web_app.app.config.update(
             TESTING=True,
             UPLOAD_FOLDER=self.temporary_directory.name,
+            VIBEDASH_RETENTION_HOURS=24,
         )
 
     def tearDown(self):
         web_app.app.config["UPLOAD_FOLDER"] = self.previous_upload_folder
+        web_app.app.config[
+            "VIBEDASH_RETENTION_HOURS"
+        ] = self.previous_retention_hours
         self.temporary_directory.cleanup()
 
     @patch("vibedash.routes.save_session_data")
@@ -124,6 +131,7 @@ class VibeDashDemoRouteTests(unittest.TestCase):
         self.assertIn('name="demo_dataset" value="saas_growth"', page)
         self.assertIn('id="demo-loading-status"', page)
         self.assertIn("Building the evidence dashboard", page)
+        self.assertIn("Temporary storage · 24-hour retention window.", page)
         self.assertNotIn("Data Prism v2", page)
 
 
