@@ -5,6 +5,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=5001 \
     DATA_PRISM_STATE_DIR=/var/lib/data-prism \
     VIBEDASH_RETENTION_HOURS=24 \
+    VIBEDASH_JOB_TIMEOUT_SECONDS=600 \
+    VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE=2 \
+    VIBEDASH_MAX_ACTIVE_JOBS=25 \
     LOG_FORMAT=json
 
 RUN apt-get update \
@@ -27,6 +30,7 @@ COPY --chown=data-prism:data-prism . .
 RUN mkdir -p /var/lib/data-prism/uploads \
         /var/lib/data-prism/reports \
         /var/lib/data-prism/baselines \
+        /var/lib/data-prism/jobs \
         /var/lib/data-prism/drift \
     && chown -R data-prism:data-prism /var/lib/data-prism
 

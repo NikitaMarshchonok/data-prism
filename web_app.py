@@ -56,6 +56,7 @@ def resolve_runtime_paths(base_dir, state_dir=None):
             'reports': str(state_path / 'reports'),
             'baselines': str(state_path / 'baselines'),
             'drift_store': str(state_path / 'drift' / 'drift_history.sqlite3'),
+            'analysis_jobs': str(state_path / 'jobs' / 'analysis_jobs.sqlite3'),
         }
     return {
         'state': str(base_path),
@@ -63,6 +64,7 @@ def resolve_runtime_paths(base_dir, state_dir=None):
         'reports': str(base_path / 'reports'),
         'baselines': str(base_path / 'data' / 'baselines'),
         'drift_store': str(base_path / 'data' / 'drift' / 'drift_history.sqlite3'),
+        'analysis_jobs': str(base_path / 'data' / 'jobs' / 'analysis_jobs.sqlite3'),
     }
 
 
@@ -76,6 +78,7 @@ UPLOAD_FOLDER = runtime_paths['uploads']
 REPORT_FOLDER = runtime_paths['reports']
 BASELINE_FOLDER = runtime_paths['baselines']
 DRIFT_STORE_PATH = runtime_paths['drift_store']
+ANALYSIS_JOB_STORE_PATH = runtime_paths['analysis_jobs']
 IMAGE_FOLDER = 'images'
 
 # ✅ Создаём папки, если их нет
@@ -84,6 +87,7 @@ for runtime_directory in (
     REPORT_FOLDER,
     BASELINE_FOLDER,
     os.path.dirname(DRIFT_STORE_PATH),
+    os.path.dirname(ANALYSIS_JOB_STORE_PATH),
 ):
     os.makedirs(runtime_directory, exist_ok=True)
 
@@ -108,6 +112,7 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['REPORT_FOLDER'] = REPORT_FOLDER
 app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
 app.config['DRIFT_STORE_PATH'] = DRIFT_STORE_PATH
+app.config['VIBEDASH_JOB_STORE_PATH'] = ANALYSIS_JOB_STORE_PATH
 app.config['DRIFT_HISTORY_RETENTION'] = positive_int_env(
     'DRIFT_HISTORY_RETENTION',
     100,
@@ -117,6 +122,26 @@ app.config['VIBEDASH_RETENTION_HOURS'] = positive_int_env(
     'VIBEDASH_RETENTION_HOURS',
     24,
     maximum=720,
+)
+app.config['VIBEDASH_JOB_TIMEOUT_SECONDS'] = positive_int_env(
+    'VIBEDASH_JOB_TIMEOUT_SECONDS',
+    600,
+    maximum=3600,
+)
+app.config['VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE'] = positive_int_env(
+    'VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE',
+    2,
+    maximum=10,
+)
+app.config['VIBEDASH_MAX_ACTIVE_JOBS'] = positive_int_env(
+    'VIBEDASH_MAX_ACTIVE_JOBS',
+    25,
+    maximum=1000,
+)
+app.config['MAX_ROWS_PREVIEW'] = positive_int_env(
+    'MAX_ROWS_PREVIEW',
+    100000,
+    maximum=1000000,
 )
 app.config['DATA_PRISM_API_KEY'] = os.getenv('DATA_PRISM_API_KEY')
 app.config['MAX_CONTENT_LENGTH'] = (
@@ -223,6 +248,7 @@ def readinesscheck():
         'reports': Path(app.config['REPORT_FOLDER']),
         'baselines': Path(app.config['BASELINE_FOLDER']),
         'drift_history': Path(app.config['DRIFT_STORE_PATH']).parent,
+        'analysis_jobs': Path(app.config['VIBEDASH_JOB_STORE_PATH']).parent,
     }
     for label, directory in directories.items():
         if not directory.is_dir() or not os.access(directory, os.W_OK | os.X_OK):

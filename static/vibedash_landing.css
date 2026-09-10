@@ -156,6 +156,7 @@ h1 em { color: var(--accent); font-style: normal; }
     font-size: 11px;
     line-height: 1.4;
 }
+.demo-loading-status.has-error, .loading-indicator.has-error { color: #f0a7a7; }
 
 @keyframes button-spin { to { transform: rotate(360deg); } }
 

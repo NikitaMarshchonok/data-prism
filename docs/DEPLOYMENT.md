@@ -10,6 +10,7 @@ The root `render.yaml` defines a Docker web service with:
 - `/readyz` as the deployment health check;
 - generated session and monitoring API secrets;
 - one Gunicorn worker with four threads for the 512 MB free plan;
+- one bounded background analysis thread with durable SQLite job states;
 - a 25 MB public upload limit and bounded VibeDash previews;
 - structured JSON application logs.
 
@@ -53,6 +54,20 @@ VIBEDASH_RETENTION_HOURS=24
 The accepted range is 1–720 hours. Before each VibeDash request, the application removes expired regular files that match its server-generated naming schemes. It does not recursively traverse directories, follow symbolic links, or remove unrelated files. Cleanup totals and failures are emitted as structured operational events without logging uploaded filenames or session identifiers.
 
 This cleanup is activity-triggered. An inactive service may retain an expired file until the next VibeDash request, and an ephemeral host may remove it earlier during restart or redeployment. Therefore the setting is a bounded application lifecycle policy, not a wall-clock deletion SLA. A deployment requiring strict deletion timing should use a scheduled cleanup job or an object-store lifecycle rule.
+
+## Analysis job lifecycle
+
+JavaScript-enabled VibeDash clients submit work to `POST /vibedash/jobs` and poll the returned status URL. Job records move through `queued`, `running`, `completed`, or `failed` in SQLite. Access to status and results is restricted to the server-signed browser session that created the job.
+
+The single-instance deployment intentionally runs one in-process analysis worker. The queue defaults to two active jobs per browser scope and 25 across the service. A job that remains `running` longer than 600 seconds is treated as interrupted and reported as failed. These bounds can be adjusted with:
+
+```text
+VIBEDASH_JOB_TIMEOUT_SECONDS=600
+VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE=2
+VIBEDASH_MAX_ACTIVE_JOBS=25
+```
+
+This topology prevents long analysis from occupying an HTTP request thread, but it does not provide distributed delivery guarantees. A process restart can interrupt active work, and the free Render filesystem can remove queued inputs during restart or redeployment. Multi-instance production deployment requires an external queue, shared object storage, and separate workers.
 
 ## Runtime signals
 

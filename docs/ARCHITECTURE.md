@@ -21,6 +21,9 @@ flowchart TB
         U[Browser] --> W[web_app.py]
         W --> DG[Dashboard generator]
         W --> VD[VibeDash blueprint]
+        VD --> JQ[Bounded job dispatcher]
+        JQ --> JS[(Analysis job SQLite)]
+        JQ --> AN
         DG --> AN[Analysis engines]
         VD --> AN
     end
@@ -50,6 +53,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/insight_engine.py` | Deterministic evidence-backed findings | Causal claims |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
+| `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
 | `src/ml_predictor.py` | Preprocessing, cross-validated model selection, holdout metrics, explainability | Model serving or retraining |
 | `src/model_reliability.py` | Split stability and supported subgroup diagnostics | Fairness certification |
 | `src/data_drift.py` | Aggregate profiles and baseline-to-current comparisons | Persistent storage |
@@ -78,7 +82,9 @@ sequenceDiagram
 
 Uploaded source files receive server-generated identifiers. The main workflow stores a normalized CSV working copy for the session; these runtime files are excluded from version control.
 
-The VibeDash landing page also exposes a one-click demonstration path. That path generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so the demo remains reproducible across machines. All evidence, validation, and anomaly engines then run through the same production code path used for uploaded data.
+The VibeDash landing page also exposes a one-click demonstration path. A JavaScript client creates a session-scoped job, polls its non-sensitive status representation, and opens the stored result after the job reaches `completed`. The bounded dispatcher atomically claims queued work so duplicate polls cannot execute one job twice. The original synchronous endpoint remains a progressive fallback.
+
+The demo generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so it remains reproducible across machines. Both synchronous and background entry points call the same analysis-and-session pipeline.
 
 ## Model-evaluation boundary
 
@@ -132,6 +138,7 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | --- | --- | --- |
 | Interactive uploads | Local runtime directory | Session working data; ignored by Git |
 | Reports and exports | Local runtime directory | Generated artifact; ignored by Git |
+| Analysis job lifecycle | SQLite | Terminal records follow VibeDash retention |
 | Drift baselines | JSON aggregate profiles | Persistent until removed by operator |
 | Drift history and alerts | SQLite | Retention-limited per monitoring scope |
 | Secrets | Environment variables | Never committed to the repository |
@@ -142,6 +149,7 @@ The storage interfaces are local by design for this stage. Object storage and Po
 
 - Supported file extensions and server-side filenames are validated.
 - Upload and preview sizes are bounded.
+- Active analysis jobs are bounded per signed browser scope and per service instance.
 - Monitoring endpoints remain disabled until a sufficiently long API key is configured.
 - API keys are compared with constant-time comparison.
 - Storage scopes are derived from hashes rather than raw secret values.
@@ -153,7 +161,9 @@ These controls reduce common portfolio-app risks but do not replace a full produ
 
 ## Deployment shape
 
-The provided container runs Gunicorn and exposes liveness and readiness endpoints. Runtime state can be redirected with `DATA_PRISM_STATE_DIR`. The current supported topology is one application instance with writable local storage.
+The provided container runs Gunicorn and exposes liveness and readiness endpoints. Runtime state can be redirected with `DATA_PRISM_STATE_DIR`. The current supported topology is one application instance with writable local storage and one bounded in-process VibeDash analysis worker.
+
+Job records survive page refreshes, while a process interruption converts stale `running` work to a safe failed state. This avoids pretending that an in-process executor provides distributed delivery guarantees. Multiple web processes or instances require an external transactional queue and independently managed workers.
 
 Every response receives a bounded `X-Request-ID`. Production JSON access events record the normalized Flask route, status, latency, and deployment version without including raw URLs, query strings, request bodies, client addresses, or session identifiers. Render supplies the deployment commit through `RENDER_GIT_COMMIT`; the health endpoints expose its shortened value for verification.
 
@@ -161,7 +171,7 @@ Scaling to multiple instances requires:
 
 - shared object storage for uploads, exports, and baselines;
 - PostgreSQL or another shared transactional store for monitoring history;
-- background workers for long-running analysis;
+- an external queue and independently scalable workers for long-running analysis;
 - centralized sessions or stateless authentication;
 - structured logs, metrics, traces, and external alert delivery.
 

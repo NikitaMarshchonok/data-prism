@@ -26,10 +26,16 @@ class VibeDashDemoRouteTests(unittest.TestCase):
         self.previous_retention_hours = web_app.app.config[
             "VIBEDASH_RETENTION_HOURS"
         ]
+        self.previous_job_store_path = web_app.app.config[
+            "VIBEDASH_JOB_STORE_PATH"
+        ]
         web_app.app.config.update(
             TESTING=True,
             UPLOAD_FOLDER=self.temporary_directory.name,
             VIBEDASH_RETENTION_HOURS=24,
+            VIBEDASH_JOB_STORE_PATH=str(
+                Path(self.temporary_directory.name) / "analysis_jobs.sqlite3"
+            ),
         )
 
     def tearDown(self):
@@ -37,6 +43,9 @@ class VibeDashDemoRouteTests(unittest.TestCase):
         web_app.app.config[
             "VIBEDASH_RETENTION_HOURS"
         ] = self.previous_retention_hours
+        web_app.app.config[
+            "VIBEDASH_JOB_STORE_PATH"
+        ] = self.previous_job_store_path
         self.temporary_directory.cleanup()
 
     @patch("vibedash.routes.save_session_data")
@@ -78,7 +87,10 @@ class VibeDashDemoRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(list(Path(self.temporary_directory.name).iterdir()), [])
+        self.assertEqual(
+            list(Path(self.temporary_directory.name).glob("vibedash-*.csv")),
+            [],
+        )
 
     def test_builtin_demo_and_export_use_runtime_storage(self):
         with TemporaryDirectory() as state_directory:
@@ -131,6 +143,8 @@ class VibeDashDemoRouteTests(unittest.TestCase):
         self.assertIn('name="demo_dataset" value="saas_growth"', page)
         self.assertIn('id="demo-loading-status"', page)
         self.assertIn("Building the evidence dashboard", page)
+        self.assertIn("/vibedash/jobs", page)
+        self.assertIn("waitForJob", page)
         self.assertIn("Temporary storage · 24-hour retention window.", page)
         self.assertNotIn("Data Prism v2", page)
 
