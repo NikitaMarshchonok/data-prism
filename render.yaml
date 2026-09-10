@@ -28,6 +28,12 @@ services:
         value: "100"
       - key: VIBEDASH_RETENTION_HOURS
         value: "24"
+      - key: VIBEDASH_JOB_TIMEOUT_SECONDS
+        value: "600"
+      - key: VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE
+        value: "2"
+      - key: VIBEDASH_MAX_ACTIVE_JOBS
+        value: "25"
       - key: WEB_CONCURRENCY
         value: "1"
       - key: WEB_THREADS
