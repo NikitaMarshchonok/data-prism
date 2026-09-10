@@ -27,7 +27,13 @@ try:
     )
     from .spec import create_saas_demo_viz_spec, parse_prompt_to_viz_spec
     from .generator_bridge import generate_dashboard_data as bridge_generate_dashboard_data
-    from .exporter import make_single_file_html, save_export, load_session_data, save_session_data
+    from .exporter import (
+        cleanup_expired_artifacts,
+        load_session_data,
+        make_single_file_html,
+        save_export,
+        save_session_data,
+    )
     from .ollama_client import is_ollama_available
     from . import vibedash_bp
 except ImportError:
@@ -36,6 +42,39 @@ except ImportError:
 
 
 if vibedash_bp:
+    @vibedash_bp.before_request
+    def cleanup_runtime_artifacts():
+        """Apply the configured retention window before serving VibeDash."""
+        result = cleanup_expired_artifacts(
+            current_app.config['UPLOAD_FOLDER'],
+            current_app.config['VIBEDASH_RETENTION_HOURS'],
+        )
+        removed = sum(
+            result[key]
+            for key in (
+                'removed_sessions',
+                'removed_uploads',
+                'removed_exports',
+            )
+        )
+        if removed:
+            current_app.logger.info(
+                "Expired VibeDash artifacts removed",
+                extra={
+                    "event": "vibedash_retention_cleanup",
+                    **result,
+                },
+            )
+        if result['errors']:
+            current_app.logger.warning(
+                "VibeDash artifact cleanup completed with errors",
+                extra={
+                    "event": "vibedash_retention_cleanup_error",
+                    **result,
+                },
+            )
+
+
     @vibedash_bp.route('/')
     def index():
         """Главная страница VibeDash"""
@@ -52,6 +91,7 @@ if vibedash_bp:
         return render_template('vibedash_landing.html',
                              preset_prompts=preset_prompts,
                              demo_prompt=DEMO_PROMPT,
+                             retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
                              ollama_available=ollama_available)
 
 

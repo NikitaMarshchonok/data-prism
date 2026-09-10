@@ -23,7 +23,7 @@ The project is designed as a decision-support system: every important conclusion
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
 | Interfaces | BI dashboard, prompt-to-dashboard workspace, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
-| Operations | Docker/Gunicorn runtime, readiness checks, request IDs, structured JSON logs, and a CI-gated Render Blueprint |
+| Operations | Docker/Gunicorn runtime, readiness checks, request IDs, structured JSON logs, managed temporary-artifact retention, and a CI-gated Render Blueprint |
 
 ## System overview
 
@@ -93,6 +93,8 @@ The container runs Gunicorn as an unprivileged user. `/readyz` returns HTTP 503 
 The root `render.yaml` defines a free Docker web service with generated secrets, CI-gated deploys, structured logs, and `/readyz` health checks. After this repository is connected as a Render Blueprint, the built-in demo is available from the assigned public URL.
 
 The free service filesystem is ephemeral. This is suitable for the portfolio demo, but drift history and uploaded artifacts require a paid persistent disk or future external storage. Follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for exact setup, verification, persistence, and rollback guidance.
+
+VibeDash working copies, session files, and generated HTML exports use a configurable retention window. `VIBEDASH_RETENTION_HOURS` defaults to 24 hours and accepts values from 1 to 720. Expired, application-owned artifacts are removed when VibeDash receives a request; unrelated files and symbolic links are never removed by this cleanup.
 
 ## Local development
 
@@ -203,6 +205,7 @@ data-prism/
 ## Data and security boundaries
 
 - Uploaded datasets, generated reports, local baselines, and SQLite history are runtime artifacts and are excluded from version control.
+- VibeDash uploads, sessions, and exports are server-named and subject to the configured temporary-artifact retention window.
 - Monitoring API keys are compared using constant-time comparison and are not used directly as storage identifiers.
 - API drift uploads are transient; persisted baselines contain aggregate profiles rather than raw rows.
 - Server-generated identifiers and filenames are validated before resolving filesystem paths.
@@ -214,6 +217,7 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 
 - Web analysis is synchronous and intended for single-node workloads.
 - Runtime state uses the local filesystem and SQLite rather than managed object storage and a distributed database.
+- Temporary-artifact cleanup is request-triggered, so it is not a wall-clock deletion SLA; strict retention guarantees require a scheduler or storage-provider lifecycle policy.
 - Predictive models are fast diagnostic baselines, not automatically deployable production models.
 - Statistical findings are observational and must not be interpreted as causal conclusions.
 - External alert delivery, managed scheduling, access-control roles, and production telemetry are not yet implemented.

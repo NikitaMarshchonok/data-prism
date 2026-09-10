@@ -113,6 +113,11 @@ app.config['DRIFT_HISTORY_RETENTION'] = positive_int_env(
     100,
     maximum=10000,
 )
+app.config['VIBEDASH_RETENTION_HOURS'] = positive_int_env(
+    'VIBEDASH_RETENTION_HOURS',
+    24,
+    maximum=720,
+)
 app.config['DATA_PRISM_API_KEY'] = os.getenv('DATA_PRISM_API_KEY')
 app.config['MAX_CONTENT_LENGTH'] = (
     positive_int_env('MAX_UPLOAD_MB', 100, maximum=10240) * 1024 * 1024

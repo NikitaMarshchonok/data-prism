@@ -5,6 +5,8 @@ import os
 import json
 import uuid
 from pathlib import Path
+import re
+import time
 from typing import List
 from datetime import datetime
 
@@ -13,6 +15,15 @@ from plotly.utils import PlotlyJSONEncoder
 
 DEFAULT_SESSIONS_DIR = Path("tmp") / "vibedash"
 DEFAULT_EXPORTS_DIR = Path("exports")
+SESSION_FILE_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$"
+)
+UPLOAD_FILE_PATTERN = re.compile(r"^vibedash-[0-9a-f]{32}\.csv$")
+EXPORT_FILE_PATTERN = re.compile(
+    r"^vibedash_export_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}_[0-9]{8}_[0-9]{6}\.html$"
+)
 
 
 def _resolve_sessions_dir(sessions_dir=None) -> Path:
@@ -46,6 +57,72 @@ def _session_file(session_id: str, sessions_dir=None) -> Path:
     if normalized_session_id != session_id.lower():
         raise ValueError("Invalid VibeDash session identifier.")
     return _resolve_sessions_dir(sessions_dir) / f"{normalized_session_id}.json"
+
+
+def _delete_expired_files(directory, pattern, cutoff_timestamp: float):
+    """Delete only recognized, regular files older than the cutoff."""
+    removed = 0
+    errors = 0
+    directory = Path(directory)
+    try:
+        candidates = list(directory.iterdir())
+    except FileNotFoundError:
+        return removed, errors
+    except OSError:
+        return removed, 1
+
+    for candidate in candidates:
+        if not pattern.fullmatch(candidate.name):
+            continue
+        try:
+            if candidate.is_symlink() or not candidate.is_file():
+                continue
+            if candidate.stat().st_mtime >= cutoff_timestamp:
+                continue
+            candidate.unlink()
+            removed += 1
+        except OSError:
+            errors += 1
+    return removed, errors
+
+
+def cleanup_expired_artifacts(
+    upload_dir,
+    retention_hours: int,
+    *,
+    sessions_dir=None,
+    exports_dir=None,
+    now: float | None = None,
+):
+    """Remove expired VibeDash artifacts without touching unrelated files."""
+    if isinstance(retention_hours, bool) or not isinstance(retention_hours, int):
+        raise ValueError("retention_hours must be an integer")
+    if retention_hours < 1:
+        raise ValueError("retention_hours must be at least 1")
+
+    current_timestamp = time.time() if now is None else float(now)
+    cutoff_timestamp = current_timestamp - (retention_hours * 60 * 60)
+    locations = (
+        ("sessions", _resolve_sessions_dir(sessions_dir), SESSION_FILE_PATTERN),
+        ("uploads", Path(upload_dir), UPLOAD_FILE_PATTERN),
+        ("exports", _resolve_exports_dir(exports_dir), EXPORT_FILE_PATTERN),
+    )
+    result = {
+        "removed_sessions": 0,
+        "removed_uploads": 0,
+        "removed_exports": 0,
+        "errors": 0,
+    }
+
+    for label, directory, pattern in locations:
+        removed, errors = _delete_expired_files(
+            directory,
+            pattern,
+            cutoff_timestamp,
+        )
+        result[f"removed_{label}"] = removed
+        result["errors"] += errors
+    return result
 
 
 def make_single_file_html(html: str, css_paths: List[str] = None, js_paths: List[str] = None) -> str:

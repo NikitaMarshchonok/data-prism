@@ -30,12 +30,14 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("healthCheckPath: /readyz", blueprint)
         self.assertIn("autoDeployTrigger: checksPass", blueprint)
         self.assertEqual(blueprint.count("generateValue: true"), 2)
+        self.assertIn("VIBEDASH_RETENTION_HOURS", blueprint)
         self.assertNotIn("replace-with", blueprint)
 
     def test_container_uses_mounted_state_and_application_request_logs(self):
         dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn("DATA_PRISM_STATE_DIR=/var/lib/data-prism", dockerfile)
+        self.assertIn("VIBEDASH_RETENTION_HOURS=24", dockerfile)
         self.assertIn("LOG_FORMAT=json", dockerfile)
         self.assertNotIn("--access-logfile", dockerfile)
 

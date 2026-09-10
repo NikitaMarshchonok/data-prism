@@ -42,6 +42,18 @@ Keep `DATA_PRISM_STATE_DIR=/var/lib/data-prism`. Render's disk documentation exp
 
 A persistent disk restricts the service to one instance and prevents zero-downtime deploys. A future multi-instance architecture should instead move uploads and reports to object storage and drift history to PostgreSQL.
 
+## Temporary-artifact retention
+
+VibeDash stores normalized upload copies, dashboard sessions, and generated HTML exports under `DATA_PRISM_STATE_DIR`. Their retention window is controlled by:
+
+```text
+VIBEDASH_RETENTION_HOURS=24
+```
+
+The accepted range is 1–720 hours. Before each VibeDash request, the application removes expired regular files that match its server-generated naming schemes. It does not recursively traverse directories, follow symbolic links, or remove unrelated files. Cleanup totals and failures are emitted as structured operational events without logging uploaded filenames or session identifiers.
+
+This cleanup is activity-triggered. An inactive service may retain an expired file until the next VibeDash request, and an ephemeral host may remove it earlier during restart or redeployment. Therefore the setting is a bounded application lifecycle policy, not a wall-clock deletion SLA. A deployment requiring strict deletion timing should use a scheduled cleanup job or an object-store lifecycle rule.
+
 ## Runtime signals
 
 Each response includes an `X-Request-ID`. A valid inbound request ID is preserved; otherwise the application creates a new one. Application request logs contain:
