@@ -56,10 +56,24 @@ jobs:
           python -m pip check
 
       - name: Compile Python sources
-        run: python -m compileall -q app.py web_app.py monitor_drift.py src vibedash
+        run: python -m compileall -q app.py web_app.py monitor_drift.py evaluate_quality.py src vibedash
 
       - name: Run unit and integration tests
         run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Run analytical quality gate
+        run: |
+          python evaluate_quality.py \
+            --config evaluation/quality_gate.json \
+            --output quality-report-${{ matrix.python-version }}.json
+
+      - name: Preserve analytical quality report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: analytical-quality-report-python-${{ matrix.python-version }}
+          path: quality-report-${{ matrix.python-version }}.json
+          if-no-files-found: ignore
 
       - name: Run VibeDash smoke tests
         run: python test_vibedash.py

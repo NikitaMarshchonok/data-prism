@@ -55,6 +55,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
 | `vibedash/audit_manifest.py` | Versioned dataset, schema, request, specification, and evidence fingerprints | Raw-row persistence or identity management |
+| `src/quality_evaluation.py` | Known-signal and null-signal analytical regression scenarios | Domain certification or causal validation |
 | `src/ml_predictor.py` | Preprocessing, cross-validated model selection, holdout metrics, explainability | Model serving or retraining |
 | `src/model_reliability.py` | Split stability and supported subgroup diagnostics | Fairness certification |
 | `src/data_drift.py` | Aggregate profiles and baseline-to-current comparisons | Persistent storage |
@@ -178,6 +179,24 @@ Scaling to multiple instances requires:
 - centralized sessions or stateless authentication;
 - structured logs, metrics, traces, and external alert delivery.
 
+## Analytical quality boundary
+
+The repository distinguishes function correctness from analytical behaviour.
+Unit tests exercise algorithms and defensive paths, while
+`evaluate_quality.py` assembles the evidence, statistical, anomaly, and
+segmentation engines against seeded synthetic scenarios with known properties.
+
+The versioned threshold configuration checks signal recovery, false-discovery
+guardrails, incident ranking, segment quality, and deterministic repetition.
+Results include observed and expected values for every check and are retained
+as CI artifacts. Thresholds are behavioural tolerances rather than exact
+floating-point snapshots, so supported runtime versions can differ in
+irrelevant numerical details without hiding material regressions.
+
+Passing this gate demonstrates that the implemented analytical contracts still
+hold. It does not establish causal validity, production model readiness, or
+fitness for an unreviewed business domain.
+
 ## Verification
 
-Pull requests execute compilation, dependency consistency checks, unit/integration tests, and VibeDash smoke tests on Python 3.11 and 3.12. After those jobs pass, CI builds and starts the production container, verifies readiness and request correlation, and checks for structured runtime logs. Tests cover both successful workflows and defensive behaviour such as invalid uploads, unsafe expressions, missing credentials, idempotency, path validation, and insufficient statistical support.
+Pull requests execute compilation, dependency consistency checks, unit/integration tests, the analytical quality gate, and VibeDash smoke tests on Python 3.11 and 3.12. After those jobs pass, CI builds and starts the production container, verifies readiness and request correlation, and checks for structured runtime logs. Tests cover both successful workflows and defensive behaviour such as invalid uploads, unsafe expressions, missing credentials, idempotency, path validation, and insufficient statistical support.

@@ -1,0 +1,44 @@
+{
+  "contract_version": 1,
+  "minimum_pass_rate": 1.0,
+  "scenarios": {
+    "saas_known_signals": {
+      "required_insight_ids": [
+        "dataset-overview",
+        "data-quality",
+        "strongest-correlation",
+        "strongest-trend",
+        "potential-outliers",
+        "category-concentration"
+      ],
+      "correlation_pair": [
+        "CustomerCount",
+        "MonthlyRevenue"
+      ],
+      "minimum_absolute_correlation": 0.85,
+      "minimum_significant_tests": 8,
+      "required_incident_rows": [
+        57,
+        181,
+        294
+      ],
+      "minimum_silhouette_score": 0.4,
+      "minimum_stability_score": 0.8
+    },
+    "null_noise_guardrail": {
+      "seed": 2026,
+      "row_count": 320,
+      "forbidden_insight_ids": [
+        "strongest-correlation"
+      ],
+      "maximum_significant_tests": 0,
+      "minimum_candidate_tests": 10
+    },
+    "known_group_effect": {
+      "seed": 314,
+      "rows_per_group": 120,
+      "designed_mean_shift": 1.5,
+      "minimum_absolute_hedges_g": 1.0
+    }
+  }
+}
