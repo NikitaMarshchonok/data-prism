@@ -51,6 +51,8 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `src/demo_data.py` | Deterministic synthetic SaaS data for the product demo | User data or production fixtures |
 | `src/data_analyzer.py` | Descriptive profiling and data-quality checks | Predictive modelling |
 | `vibedash/insight_engine.py` | Deterministic evidence-backed findings | Causal claims |
+| `vibedash/readiness_engine.py` | Pre-analysis quality, schema, privacy, and coverage contracts | Domain approval or source-data correction |
+| `vibedash/decision_brief.py` | Deterministic ranking of evidence, decision risk, and next actions | Autonomous business decisions |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
@@ -69,11 +71,18 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 sequenceDiagram
     participant User
     participant Flask
+    participant Readiness
     participant Loader
     participant Engines
     participant Report
 
     User->>Flask: Upload supported tabular file
+    Flask->>Readiness: In-memory dataset preflight
+    alt Blocking issue detected
+        Readiness-->>User: Evidence and remediation; no job created
+    else Analysis allowed
+        Readiness-->>Flask: Score, warnings, and contract
+    end
     Flask->>Loader: Validate and load bounded dataset
     Loader-->>Flask: DataFrame + truncation status
     Flask->>Engines: Profile, validate, model, diagnose
@@ -84,11 +93,11 @@ sequenceDiagram
 
 Uploaded source files receive server-generated identifiers. The main workflow stores a normalized CSV working copy for the session; these runtime files are excluded from version control.
 
-The VibeDash landing page also exposes a one-click demonstration path. A JavaScript client creates a session-scoped job, polls its non-sensitive status representation, and opens the stored result after the job reaches `completed`. The bounded dispatcher atomically claims queued work so duplicate polls cannot execute one job twice. The original synchronous endpoint remains a progressive fallback.
+The VibeDash landing page also exposes a one-click demonstration path. For user uploads, a JavaScript client first calls the readiness endpoint, which reads the request stream and returns only aggregate checks. No Data Prism preflight working copy is retained. If analysis is allowed, the client creates a session-scoped job, polls its non-sensitive status representation, and opens the stored result after the job reaches `completed`. The bounded dispatcher atomically claims queued work so duplicate polls cannot execute one job twice. The original synchronous endpoint remains a progressive fallback and applies the same readiness gate.
 
 The demo generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so it remains reproducible across machines. Both synchronous and background entry points call the same analysis-and-session pipeline.
 
-On completion, that shared pipeline stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the random scope held in the signed Flask session; status, result, history, and manifest endpoints never authorize by a job identifier alone. Manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, and evidence counts. They do not include source row values.
+On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the random scope held in the signed Flask session; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 2 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
 
 ## Model-evaluation boundary
 

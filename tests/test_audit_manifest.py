@@ -26,6 +26,17 @@ class AuditManifestTests(unittest.TestCase):
                 "charts": [],
             },
             dashboard_data={
+                "readiness": {
+                    "contract": "dataset-readiness-v1",
+                    "status": "ready_with_warnings",
+                    "score": 92,
+                    "counts": {"blocked": 0, "warnings": 1},
+                },
+                "decision_brief": {
+                    "contract": "decision-brief-v1",
+                    "status": "review_required",
+                    "priority_count": 2,
+                },
                 "insights": [{"title": "Coverage"}],
                 "statistical_validation": {
                     "tests": [
@@ -53,12 +64,15 @@ class AuditManifestTests(unittest.TestCase):
             second = self._build(dataset_path, dataframe)
 
         self.assertEqual(first, second)
-        self.assertEqual(first["manifest_version"], 1)
+        self.assertEqual(first["manifest_version"], 2)
+        self.assertEqual(first["analysis_contract"], "vibedash-evidence-v2")
         self.assertEqual(first["dataset"]["analyzed_rows"], 2)
         self.assertEqual(first["dataset"]["column_count"], 2)
         self.assertEqual(first["evidence"]["statistical_test_count"], 2)
         self.assertEqual(first["evidence"]["significant_test_count"], 1)
         self.assertEqual(first["evidence"]["anomaly_candidate_count"], 1)
+        self.assertEqual(first["evidence"]["readiness"]["score"], 92)
+        self.assertEqual(first["evidence"]["decision_brief"]["priority_count"], 2)
         serialized = json.dumps(first)
         self.assertNotIn("private-a", serialized)
         self.assertNotIn("private-b", serialized)

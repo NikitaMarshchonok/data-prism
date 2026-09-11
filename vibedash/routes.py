@@ -1,6 +1,8 @@
 """
 VibeDash Flask routes
 """
+import csv
+import io
 import os
 import re
 import uuid
@@ -45,6 +47,8 @@ try:
         MAX_HISTORY_JOBS,
     )
     from .audit_manifest import build_audit_manifest
+    from .decision_brief import build_decision_brief
+    from .readiness_engine import DatasetReadinessEngine
     from . import vibedash_bp
 except ImportError:
     # Flask не установлен, создаем заглушки
@@ -53,6 +57,13 @@ except ImportError:
 
 if vibedash_bp:
     analysis_job_dispatcher = AnalysisJobDispatcher(max_workers=1)
+
+    class DatasetReadinessBlocked(ValueError):
+        """The uploaded table failed one or more safe readiness contracts."""
+
+        def __init__(self, report):
+            super().__init__(report['summary'])
+            self.report = report
 
     def _analysis_scope_id():
         scope_id = session.get('vibedash_analysis_scope_id')
@@ -66,14 +77,35 @@ if vibedash_bp:
         return AnalysisJobStore(current_app.config['VIBEDASH_JOB_STORE_PATH'])
 
 
-    def _load_vibedash_csv(path):
+    def _load_vibedash_csv(source):
         last_error = None
         for encoding in ('utf-8', 'latin-1', 'cp1252'):
             try:
-                return pd.read_csv(path, encoding=encoding)
+                if hasattr(source, 'seek'):
+                    source.seek(0)
+                dataframe = pd.read_csv(source, encoding=encoding)
+                header = _read_original_csv_header(source, encoding)
+                normalized = [str(column).strip() for column in header]
+                if len(normalized) == len(dataframe.columns) and (
+                    len(normalized) != len(set(normalized))
+                ):
+                    dataframe.columns = normalized
+                return dataframe
             except UnicodeDecodeError as error:
                 last_error = error
         raise ValueError('The CSV encoding is not supported.') from last_error
+
+
+    def _read_original_csv_header(source, encoding):
+        if hasattr(source, 'seek'):
+            source.seek(0)
+            sample = source.read(64 * 1024)
+            source.seek(0)
+            if isinstance(sample, bytes):
+                sample = sample.decode(encoding)
+            return next(csv.reader(io.StringIO(sample)), [])
+        with Path(source).open('r', encoding=encoding, newline='') as handle:
+            return next(csv.reader(handle), [])
 
 
     def _build_dashboard_session(payload, *, run_id=None):
@@ -107,6 +139,9 @@ if vibedash_bp:
         max_rows = current_app.config['MAX_ROWS_PREVIEW']
         truncated = source_row_count > max_rows
         df = source_df.head(max_rows) if truncated else source_df
+        readiness = DatasetReadinessEngine(df).assess()
+        if not readiness['analysis_allowed']:
+            raise DatasetReadinessBlocked(readiness)
 
         if demo_dataset:
             if demo_dataset != DEMO_DATASET_ID:
@@ -115,6 +150,11 @@ if vibedash_bp:
         else:
             viz_spec = parse_prompt_to_viz_spec(prompt, list(df.columns))
         dashboard_data = bridge_generate_dashboard_data(df, viz_spec)
+        dashboard_data['readiness'] = readiness
+        dashboard_data['decision_brief'] = build_decision_brief(
+            dashboard_data,
+            readiness,
+        )
 
         viz_spec_data = viz_spec.model_dump()
         audit_manifest = build_audit_manifest(
@@ -326,6 +366,34 @@ if vibedash_bp:
         )
 
 
+    @vibedash_bp.post('/readiness')
+    def dataset_readiness():
+        """Assess an uploaded CSV without retaining its rows."""
+        uploaded_file = request.files.get('datafile')
+        if uploaded_file is None or not uploaded_file.filename:
+            return jsonify({'error': 'A CSV file is required.'}), 400
+        filename = secure_filename(uploaded_file.filename)
+        if not filename or Path(filename).suffix.lower() != '.csv':
+            return jsonify({'error': 'VibeDash currently accepts CSV files only.'}), 400
+        try:
+            dataframe = _load_vibedash_csv(uploaded_file.stream)
+            report = DatasetReadinessEngine(dataframe).assess()
+        except Exception:
+            current_app.logger.info(
+                "VibeDash readiness input rejected",
+                extra={"event": "vibedash_readiness_rejected"},
+            )
+            return jsonify({
+                'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'
+            }), 422
+
+        current_app.logger.info(
+            "VibeDash readiness completed",
+            extra={"event": "vibedash_readiness_completed"},
+        )
+        return jsonify({'readiness': report})
+
+
     @vibedash_bp.route('/preview', methods=['POST'])
     def preview():
         """Предварительный просмотр дашборда"""
@@ -418,6 +486,14 @@ if vibedash_bp:
                                  audit_manifest=analysis_result['manifest'],
                                  manifest_url=None)
         
+        except DatasetReadinessBlocked as error:
+            upload_path.unlink(missing_ok=True)
+            current_app.logger.info(
+                "VibeDash preview blocked by dataset readiness",
+                extra={"event": "vibedash_readiness_blocked"},
+            )
+            flash(error.report['summary'], 'error')
+            return redirect(url_for('vibedash.index'))
         except Exception:
             current_app.logger.exception(
                 "VibeDash preview failed",
@@ -476,6 +552,26 @@ if vibedash_bp:
                 return jsonify({'error': 'The uploaded file could not be stored.'}), 500
 
         try:
+            readiness = DatasetReadinessEngine(
+                _load_vibedash_csv(upload_path)
+            ).assess()
+        except Exception:
+            upload_path.unlink(missing_ok=True)
+            return jsonify({
+                'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'
+            }), 422
+        if not readiness['analysis_allowed']:
+            upload_path.unlink(missing_ok=True)
+            current_app.logger.info(
+                "VibeDash job blocked by dataset readiness",
+                extra={"event": "vibedash_readiness_blocked"},
+            )
+            return jsonify({
+                'error': readiness['summary'],
+                'readiness': readiness,
+            }), 422
+
+        try:
             store = _analysis_job_store()
             job = store.create(
                 _analysis_scope_id(),
@@ -517,6 +613,7 @@ if vibedash_bp:
         return jsonify({
             'job_id': job['id'],
             'status': job['status'],
+            'readiness': readiness,
             'status_url': url_for(
                 'vibedash.analysis_job_status',
                 job_id=job['id'],

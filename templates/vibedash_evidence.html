@@ -47,9 +47,52 @@
             <span class="evidence-badge">Traceable output</span>
         </section>
 
+        {% if dashboard_data.readiness %}
+        <section class="dashboard-section" aria-labelledby="readiness-heading">
+            <div class="section-heading"><div><span>02</span><h2 id="readiness-heading">Dataset readiness</h2></div><p>{{ dashboard_data.readiness.summary }}</p></div>
+            <div class="readiness-overview status-{{ dashboard_data.readiness.status }}">
+                <div class="readiness-score"><small>Readiness score</small><strong>{{ dashboard_data.readiness.score }}</strong><span>/100</span></div>
+                <div><span class="readiness-status">{{ dashboard_data.readiness.status_label }}</span><p>{{ dashboard_data.readiness.dataset.row_count }} rows · {{ dashboard_data.readiness.dataset.column_count }} columns · {{ dashboard_data.readiness.counts.warnings }} warnings</p></div>
+            </div>
+            {% set readiness_issues = dashboard_data.readiness.checks | rejectattr('status', 'equalto', 'passed') | list %}
+            {% if readiness_issues %}
+            <div class="readiness-issues">
+                {% for check in readiness_issues %}
+                <article class="readiness-issue issue-{{ check.status }}">
+                    <div><span>{{ check.status }}</span><h3>{{ check.title }}</h3></div>
+                    <p>{{ check.description }}</p>
+                    <ul>{% for evidence in check.evidence %}<li>{{ evidence }}</li>{% endfor %}</ul>
+                    <small><strong>Recommended fix</strong>{{ check.recommendation }}</small>
+                </article>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.decision_brief %}
+        <section class="dashboard-section decision-section" aria-labelledby="decision-heading">
+            <div class="section-heading"><div><span>03</span><h2 id="decision-heading">Decision brief</h2></div><p>{{ dashboard_data.decision_brief.summary }}</p></div>
+            <div class="decision-banner"><div><small>Decision status</small><strong>{{ dashboard_data.decision_brief.headline }}</strong></div><span>{{ dashboard_data.decision_brief.priority_count }} priorities</span></div>
+            {% if dashboard_data.decision_brief.priorities %}
+            <div class="decision-grid">
+                {% for priority in dashboard_data.decision_brief.priorities %}
+                <article class="decision-card">
+                    <div class="decision-card-heading"><span>0{{ priority.priority }}</span><div><small>{{ priority.category | replace('-', ' ') }}</small><h3>{{ priority.title }}</h3></div><em>{{ priority.confidence }} support</em></div>
+                    <p>{{ priority.finding }}</p>
+                    <ul>{% for evidence in priority.evidence %}<li>{{ evidence }}</li>{% endfor %}</ul>
+                    <div class="decision-guidance"><p><strong>Risk</strong>{{ priority.risk }}</p><p><strong>Next action</strong>{{ priority.action }}</p></div>
+                </article>
+                {% endfor %}
+            </div>
+            {% endif %}
+            <p class="guardrail">{{ dashboard_data.decision_brief.guardrail }}</p>
+        </section>
+        {% endif %}
+
         {% if dashboard_data.kpis %}
         <section class="dashboard-section" aria-labelledby="kpi-heading">
-            <div class="section-heading"><div><span>02</span><h2 id="kpi-heading">Core metrics</h2></div><p>Each value is linked to its calculation.</p></div>
+            <div class="section-heading"><div><span>04</span><h2 id="kpi-heading">Core metrics</h2></div><p>Each value is linked to its calculation.</p></div>
             <div class="kpi-grid">
                 {% for kpi in dashboard_data.kpis %}
                 <article class="kpi-card"><div class="kpi-label">{{ kpi.title }}</div><strong>{{ kpi.value }}</strong>{% if kpi.tooltip %}<small>{{ kpi.tooltip }}</small>{% endif %}</article>
@@ -60,7 +103,7 @@
 
         {% if dashboard_data.insights %}
         <section class="dashboard-section" aria-labelledby="insights-heading">
-            <div class="section-heading"><div><span>03</span><h2 id="insights-heading">Evidence-backed findings</h2></div><p>Calculated observations first; recommendations second.</p></div>
+            <div class="section-heading"><div><span>05</span><h2 id="insights-heading">Evidence-backed findings</h2></div><p>Calculated observations first; recommendations second.</p></div>
             <div class="insight-grid">
                 {% for insight in dashboard_data.insights %}
                 <article class="insight-card severity-{{ insight.severity }}">
@@ -76,7 +119,7 @@
 
         {% if dashboard_data.statistical_validation and dashboard_data.statistical_validation.tests %}
         <section class="dashboard-section" aria-labelledby="statistics-heading">
-            <div class="section-heading"><div><span>04</span><h2 id="statistics-heading">Statistical validation</h2></div><p>{{ dashboard_data.statistical_validation.summary }}</p></div>
+            <div class="section-heading"><div><span>06</span><h2 id="statistics-heading">Statistical validation</h2></div><p>{{ dashboard_data.statistical_validation.summary }}</p></div>
             <div class="method-note">{{ dashboard_data.statistical_validation.correction }} · confidence intervals and effect sizes are reported with p-values.</div>
             <div class="validation-list">
                 {% for test in dashboard_data.statistical_validation.tests %}
@@ -98,7 +141,7 @@
 
         {% if dashboard_data.pattern_analysis and dashboard_data.pattern_analysis.status == 'ok' %}
         <section class="dashboard-section" aria-labelledby="patterns-heading">
-            <div class="section-heading"><div><span>05</span><h2 id="patterns-heading">Anomalies and segments</h2></div><p>{{ dashboard_data.pattern_analysis.anomaly_detection.summary }}</p></div>
+            <div class="section-heading"><div><span>07</span><h2 id="patterns-heading">Anomalies and segments</h2></div><p>{{ dashboard_data.pattern_analysis.anomaly_detection.summary }}</p></div>
             {% if dashboard_data.pattern_analysis.anomaly_detection.top_anomalies %}
             <div class="table-card"><div class="table-scroll"><table>
                 <thead><tr><th>Row</th><th>Anomaly score</th><th>Leading reason</th></tr></thead>
@@ -120,28 +163,28 @@
 
         {% if dashboard_data.charts %}
         <section class="dashboard-section" aria-labelledby="charts-heading">
-            <div class="section-heading"><div><span>06</span><h2 id="charts-heading">Visual diagnostics</h2></div><p>Charts support exploration; the evidence panels carry the conclusions.</p></div>
+            <div class="section-heading"><div><span>08</span><h2 id="charts-heading">Visual diagnostics</h2></div><p>Charts support exploration; the evidence panels carry the conclusions.</p></div>
             <div class="chart-grid">{% for chart in dashboard_data.charts %}<article class="chart-card"><h3>{{ chart.title }}</h3><div class="chart-container">{{ chart.html | safe }}</div></article>{% endfor %}</div>
         </section>
         {% endif %}
 
         {% if dashboard_data.tables %}
         <section class="dashboard-section" aria-labelledby="tables-heading">
-            <div class="section-heading"><div><span>07</span><h2 id="tables-heading">Data audit</h2></div><p>Source preview and descriptive statistics for manual verification.</p></div>
+            <div class="section-heading"><div><span>09</span><h2 id="tables-heading">Data audit</h2></div><p>Source preview and descriptive statistics for manual verification.</p></div>
             <div class="data-table-stack">{% for table in dashboard_data.tables %}<article class="table-card"><h3>{{ table.title }}</h3><div class="table-scroll"><table><thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead><tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></article>{% endfor %}</div>
         </section>
         {% endif %}
 
         {% if dashboard_data.ai_summary %}
         <section class="dashboard-section" aria-labelledby="summary-heading">
-            <div class="section-heading"><div><span>08</span><h2 id="summary-heading">Analysis summary</h2></div><p>Generated from the dashboard specification and calculated dataset coverage.</p></div>
+            <div class="section-heading"><div><span>10</span><h2 id="summary-heading">Analysis summary</h2></div><p>Generated from the dashboard specification and calculated dataset coverage.</p></div>
             <div class="summary-card">{{ dashboard_data.ai_summary }}</div>
         </section>
         {% endif %}
 
         {% if audit_manifest %}
         <section class="dashboard-section" aria-labelledby="audit-heading">
-            <div class="section-heading"><div><span>09</span><h2 id="audit-heading">Reproducibility record</h2></div><p>Versioned metadata and fingerprints; no source row values are included.</p></div>
+            <div class="section-heading"><div><span>11</span><h2 id="audit-heading">Reproducibility record</h2></div><p>Versioned metadata and fingerprints; no source row values are included.</p></div>
             <div class="audit-grid">
                 <article><small>Analysis contract</small><strong>{{ audit_manifest.analysis_contract }}</strong></article>
                 <article><small>Engine version</small><strong>{{ audit_manifest.engine_version }}</strong></article>
