@@ -6,7 +6,7 @@
 
 Data Prism turns CSV, TSV, Excel, JSON, and Parquet files into an interactive analysis workspace. It combines deterministic data-quality checks, statistically validated findings, leakage-safe model evaluation, and persistent drift monitoring in one Flask application.
 
-The project is designed as a decision-support system: every important conclusion should be traceable to a metric, sample size, confidence estimate, baseline, or diagnostic—not just an LLM-generated narrative.
+The project is designed as a decision-support system: every important conclusion should be traceable to a metric, sample size, confidence estimate, baseline, or diagnostic—not just an LLM-generated narrative. A deterministic analytical quality gate measures known-signal detection and false discoveries on synthetic benchmark scenarios before changes are merged.
 
 ![Data Prism evidence-first analytics workspace](docs/assets/data-prism-landing.jpg)
 
@@ -24,6 +24,7 @@ The project is designed as a decision-support system: every important conclusion
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
 | Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
 | Operations | Durable analysis-job states, bounded background execution, reproducibility fingerprints, request IDs, structured JSON logs, managed temporary-artifact retention, and a CI-gated Render Blueprint |
+| Quality evaluation | Versioned synthetic benchmarks for known signals, null-noise guardrails, reproducibility, and machine-readable CI evidence |
 
 ## System overview
 
@@ -181,10 +182,13 @@ The command emits one JSON document. Exit codes are stable:
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
+python evaluate_quality.py --config evaluation/quality_gate.json
 python test_vibedash.py
 ```
 
-GitHub Actions runs the full suite on Python 3.11 and 3.12 for every pull request to `main`. The current suite covers data loading, security boundaries, evidence generation, statistical validation, model evaluation, reliability diagnostics, drift persistence, API behaviour, CLI jobs, and Flask integration.
+GitHub Actions runs the full suite on Python 3.11 and 3.12 for every pull request to `main`. The analytical gate checks a known SaaS scenario, a null-noise false-discovery guardrail, and a designed group effect. It emits a machine-readable report that CI preserves as an artifact, including the observed and expected value for every check. See [docs/QUALITY_EVALUATION.md](docs/QUALITY_EVALUATION.md) for the benchmark contract and threshold policy.
+
+The wider suite covers data loading, security boundaries, evidence generation, statistical validation, model evaluation, reliability diagnostics, drift persistence, API behaviour, CLI jobs, and Flask integration.
 
 ## Repository structure
 
@@ -192,6 +196,9 @@ GitHub Actions runs the full suite on Python 3.11 and 3.12 for every pull reques
 data-prism/
 ├── web_app.py                 # Flask composition root and interactive workflow
 ├── monitor_drift.py           # Scheduled/CI drift command
+├── evaluate_quality.py        # Analytical regression-gate command
+├── evaluation/
+│   └── quality_gate.json      # Reviewed behavioural acceptance thresholds
 ├── src/
 │   ├── data_loader.py         # Validated tabular ingestion
 │   ├── demo_data.py           # Deterministic, privacy-safe product demo
@@ -199,6 +206,7 @@ data-prism/
 │   ├── dashboard_generator.py # Dashboard orchestration
 │   ├── ml_predictor.py        # Leakage-safe model selection and evaluation
 │   ├── model_reliability.py   # Stability and subgroup diagnostics
+│   ├── quality_evaluation.py  # Synthetic benchmark scenarios and checks
 │   ├── data_drift.py          # Aggregate baseline and drift algorithms
 │   ├── drift_store.py         # SQLite history and alert persistence
 │   └── monitoring_api.py      # Authenticated monitoring endpoints
