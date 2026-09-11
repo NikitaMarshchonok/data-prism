@@ -2,6 +2,7 @@ import os
 import time
 import unittest
 import uuid
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -79,6 +80,63 @@ class VibeDashJobRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
+    def test_preflight_blocks_duplicate_csv_headers(self):
+        rows = "\n".join(f"{index},{index + 1}" for index in range(40))
+        duplicate_header_csv = f"value,value\n{rows}\n".encode()
+
+        with web_app.app.test_client() as client:
+            response = client.post(
+                "/vibedash/readiness",
+                data={
+                    "datafile": (BytesIO(duplicate_header_csv), "duplicates.csv")
+                },
+            )
+
+        report = response.get_json()["readiness"]
+        identity = next(
+            check
+            for check in report["checks"]
+            if check["check_id"] == "column-identity"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(report["status"], "blocked")
+        self.assertEqual(identity["status"], "blocked")
+
+    def test_readiness_preflight_does_not_retain_uploaded_rows(self):
+        csv_rows = "date,revenue,region\n" + "\n".join(
+            f"2026-01-{(index % 28) + 1:02d},{index * 10},{'north' if index % 2 else 'south'}"
+            for index in range(40)
+        )
+        with web_app.app.test_client() as client:
+            response = client.post(
+                "/vibedash/readiness",
+                data={"datafile": (BytesIO(csv_rows.encode()), "clean.csv")},
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["readiness"]["analysis_allowed"])
+        self.assertEqual(payload["readiness"]["contract"], "dataset-readiness-v1")
+        self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
+    @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
+    def test_blocked_dataset_is_not_queued_or_retained(self, submit):
+        with web_app.app.test_client() as client:
+            response = client.post(
+                "/vibedash/jobs",
+                data={
+                    "prompt": "Analyze this table",
+                    "datafile": (BytesIO(b"constant\n1\n1\n1\n1\n1\n"), "blocked.csv"),
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(payload["readiness"]["status"], "blocked")
+        self.assertFalse(payload["readiness"]["analysis_allowed"])
+        submit.assert_not_called()
         self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
@@ -192,7 +250,7 @@ class VibeDashJobRouteTests(unittest.TestCase):
         self.assertIn("Analysis history", history.get_data(as_text=True))
         self.assertIn("Dataset SHA-256", history.get_data(as_text=True))
         self.assertEqual(manifest.status_code, 200)
-        self.assertEqual(manifest.get_json()["manifest_version"], 1)
+        self.assertEqual(manifest.get_json()["manifest_version"], 2)
         self.assertIn("attachment", manifest.headers["Content-Disposition"])
 
     @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)

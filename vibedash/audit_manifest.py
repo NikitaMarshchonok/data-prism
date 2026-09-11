@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-MANIFEST_VERSION = 1
-ANALYSIS_CONTRACT = "vibedash-evidence-v1"
+MANIFEST_VERSION = 2
+ANALYSIS_CONTRACT = "vibedash-evidence-v2"
 MAX_SCHEMA_PREVIEW_COLUMNS = 50
 
 
@@ -68,6 +68,8 @@ def build_audit_manifest(
     statistical_validation = dashboard_data.get("statistical_validation") or {}
     pattern_analysis = dashboard_data.get("pattern_analysis") or {}
     anomaly_detection = pattern_analysis.get("anomaly_detection") or {}
+    readiness = dashboard_data.get("readiness") or {}
+    decision_brief = dashboard_data.get("decision_brief") or {}
 
     normalized_spec = dict(viz_spec)
     return {
@@ -111,6 +113,22 @@ def build_audit_manifest(
             "anomaly_candidate_count": len(
                 anomaly_detection.get("top_anomalies") or []
             ),
+            "readiness": {
+                "contract": readiness.get("contract"),
+                "status": readiness.get("status"),
+                "score": readiness.get("score"),
+                "blocking_issue_count": (readiness.get("counts") or {}).get(
+                    "blocked", 0
+                ),
+                "warning_count": (readiness.get("counts") or {}).get(
+                    "warnings", 0
+                ),
+            },
+            "decision_brief": {
+                "contract": decision_brief.get("contract"),
+                "status": decision_brief.get("status"),
+                "priority_count": decision_brief.get("priority_count", 0),
+            },
         },
         "retention": {
             "temporary": True,

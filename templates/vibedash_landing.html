@@ -152,6 +152,19 @@
                     </div>
                 </div>
 
+                <section class="readiness-panel" id="readiness-panel" aria-live="polite" hidden>
+                    <div class="readiness-panel-header">
+                        <div>
+                            <span class="readiness-kicker">Dataset preflight</span>
+                            <h3 id="readiness-title">Checking readiness…</h3>
+                        </div>
+                        <div class="readiness-score" id="readiness-score" aria-label="Dataset readiness score">—</div>
+                    </div>
+                    <p class="readiness-summary" id="readiness-summary">The file is being checked before any analysis job is created.</p>
+                    <div class="readiness-checks" id="readiness-checks"></div>
+                    <p class="readiness-privacy">Preflight creates no retained Data Prism working copy of the uploaded rows.</p>
+                </section>
+
                 <button class="button button-primary submit-button" id="submit-btn" type="submit">
                     Create evidence dashboard <span aria-hidden="true">→</span>
                 </button>
@@ -195,11 +208,24 @@
         const analysisForm = document.querySelector('.analysis-form');
         const submitButton = document.getElementById('submit-btn');
         const loadingIndicator = document.getElementById('loading-indicator');
+        const readinessPanel = document.getElementById('readiness-panel');
+        const readinessTitle = document.getElementById('readiness-title');
+        const readinessScore = document.getElementById('readiness-score');
+        const readinessSummary = document.getElementById('readiness-summary');
+        const readinessChecks = document.getElementById('readiness-checks');
+        const readinessUrl = {{ url_for('vibedash.dataset_readiness')|tojson }};
+        let readinessState = 'idle';
+        let readinessRequest = null;
 
-        fileInput.addEventListener('change', (event) => {
+        fileInput.addEventListener('change', async (event) => {
             const selectedFile = event.target.files[0];
             fileName.textContent = selectedFile ? selectedFile.name : 'No file selected';
             fileName.classList.toggle('has-file', Boolean(selectedFile));
+            if (selectedFile) {
+                await checkDatasetReadiness(selectedFile);
+            } else {
+                resetReadiness();
+            }
         });
 
         document.querySelectorAll('[data-prompt]').forEach((button) => {
@@ -218,6 +244,93 @@
                 return response.json();
             }
             return {error: await response.text()};
+        }
+
+        function resetReadiness() {
+            if (readinessRequest) readinessRequest.abort();
+            readinessRequest = null;
+            readinessState = 'idle';
+            readinessPanel.hidden = true;
+            readinessPanel.className = 'readiness-panel';
+            readinessChecks.replaceChildren();
+            submitButton.disabled = false;
+        }
+
+        function addReadinessCheck(check) {
+            const article = document.createElement('article');
+            article.className = `readiness-check readiness-check-${check.status}`;
+            const heading = document.createElement('div');
+            const status = document.createElement('span');
+            const title = document.createElement('strong');
+            status.textContent = check.status;
+            title.textContent = check.title;
+            heading.append(status, title);
+            const description = document.createElement('p');
+            description.textContent = check.description;
+            const recommendation = document.createElement('small');
+            recommendation.textContent = `Next step: ${check.recommendation}`;
+            article.append(heading, description, recommendation);
+            readinessChecks.append(article);
+        }
+
+        function renderReadiness(report) {
+            readinessState = report.analysis_allowed ? 'allowed' : 'blocked';
+            readinessPanel.hidden = false;
+            readinessPanel.className = `readiness-panel status-${report.status}`;
+            readinessTitle.textContent = report.status_label;
+            readinessScore.textContent = `${report.score}/100`;
+            readinessSummary.textContent = report.summary;
+            readinessChecks.replaceChildren();
+            report.checks
+                .filter((check) => check.status !== 'passed')
+                .forEach(addReadinessCheck);
+            submitButton.disabled = !report.analysis_allowed;
+        }
+
+        function renderReadinessError(message) {
+            readinessState = 'error';
+            readinessPanel.hidden = false;
+            readinessPanel.className = 'readiness-panel status-error';
+            readinessTitle.textContent = 'Preflight could not finish';
+            readinessScore.textContent = '—';
+            readinessSummary.textContent = message;
+            readinessChecks.replaceChildren();
+            submitButton.disabled = true;
+        }
+
+        async function checkDatasetReadiness(file) {
+            if (readinessRequest) readinessRequest.abort();
+            const controller = new AbortController();
+            readinessRequest = controller;
+            readinessState = 'checking';
+            readinessPanel.hidden = false;
+            readinessPanel.className = 'readiness-panel status-checking';
+            readinessTitle.textContent = 'Checking readiness…';
+            readinessScore.textContent = '…';
+            readinessSummary.textContent = 'Validating structure, quality risks, identifiers, and analytical coverage.';
+            readinessChecks.replaceChildren();
+            submitButton.disabled = true;
+
+            const formData = new FormData();
+            formData.append('datafile', file);
+            try {
+                const response = await fetch(readinessUrl, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {'Accept': 'application/json'},
+                    credentials: 'same-origin',
+                    signal: controller.signal,
+                });
+                const payload = await readResponse(response);
+                if (!response.ok) {
+                    throw new Error(payload.error || 'The dataset preflight could not be completed.');
+                }
+                renderReadiness(payload.readiness);
+            } catch (error) {
+                if (error.name !== 'AbortError') renderReadinessError(error.message);
+            } finally {
+                if (readinessRequest === controller) readinessRequest = null;
+            }
         }
 
         async function waitForJob(statusUrl, statusNode) {
@@ -254,7 +367,9 @@
             });
             const job = await readResponse(response);
             if (!response.ok) {
-                throw new Error(job.error || 'The analysis could not be started.');
+                const error = new Error(job.error || 'The analysis could not be started.');
+                error.readiness = job.readiness;
+                throw error;
             }
             statusNode.textContent = 'Analysis queued. Waiting for an available worker…';
             await waitForJob(job.status_url, statusNode);
@@ -262,12 +377,19 @@
 
         analysisForm.addEventListener('submit', async (event) => {
             event.preventDefault();
+            const selectedFile = fileInput.files[0];
+            if (!selectedFile) return;
+            if (readinessState !== 'allowed') {
+                await checkDatasetReadiness(selectedFile);
+                if (readinessState !== 'allowed') return;
+            }
             const originalLabel = submitButton.innerHTML;
             submitButton.disabled = true;
             loadingIndicator.hidden = false;
             try {
                 await queueAnalysis(analysisForm, loadingIndicator);
             } catch (error) {
+                if (error.readiness) renderReadiness(error.readiness);
                 loadingIndicator.textContent = error.message;
                 loadingIndicator.classList.add('has-error');
                 submitButton.disabled = false;
@@ -306,6 +428,12 @@
             loadingIndicator.hidden = true;
             loadingIndicator.classList.remove('has-error');
             loadingIndicator.textContent = 'Calculating evidence and building the dashboard…';
+            const selectedFile = fileInput.files[0];
+            if (selectedFile) {
+                checkDatasetReadiness(selectedFile);
+            } else {
+                resetReadiness();
+            }
         });
     </script>
 </body>

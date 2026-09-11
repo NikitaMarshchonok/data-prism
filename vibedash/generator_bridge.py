@@ -16,6 +16,8 @@ from .spec import VizSpec, Metric, Chart, Filter
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
 from .anomaly_segmentation_engine import AnomalySegmentationEngine
+from .readiness_engine import DatasetReadinessEngine
+from .decision_brief import build_decision_brief
 
 
 MAX_DSL_LENGTH = 1000
@@ -154,20 +156,21 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
     Возвращает данные в формате, совместимом с существующим дашбордом
     """
     if df is None or df.empty:
-        return {
+        empty_df = pd.DataFrame() if df is None else df
+        readiness = DatasetReadinessEngine(empty_df).assess()
+        result = {
             "kpis": [],
             "charts": [],
             "tables": [],
             "ai_summary": "Нет данных для анализа",
             "insights": [],
-            "statistical_validation": StatisticalValidationEngine(
-                pd.DataFrame() if df is None else df
-            ).analyze(),
-            "pattern_analysis": AnomalySegmentationEngine(
-                pd.DataFrame() if df is None else df
-            ).analyze(),
+            "statistical_validation": StatisticalValidationEngine(empty_df).analyze(),
+            "pattern_analysis": AnomalySegmentationEngine(empty_df).analyze(),
+            "readiness": readiness,
             "df_shape": (0, 0) if df is None else df.shape,
         }
+        result["decision_brief"] = build_decision_brief(result, readiness)
+        return result
     
     # Применяем фильтры
     filtered_df = _apply_filters(df, viz_spec.filters)
@@ -188,8 +191,9 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
     insights = EvidenceBasedInsightEngine(filtered_df).generate()
     statistical_validation = StatisticalValidationEngine(filtered_df).analyze()
     pattern_analysis = AnomalySegmentationEngine(filtered_df).analyze()
-    
-    return {
+    readiness = DatasetReadinessEngine(filtered_df).assess()
+
+    result = {
         "kpis": kpis,
         "charts": charts,
         "tables": tables,
@@ -197,8 +201,11 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
         "insights": insights,
         "statistical_validation": statistical_validation,
         "pattern_analysis": pattern_analysis,
+        "readiness": readiness,
         "df_shape": filtered_df.shape,
     }
+    result["decision_brief"] = build_decision_brief(result, readiness)
+    return result
 
 
 def _apply_filters(df: pd.DataFrame, filters: List[Filter]) -> pd.DataFrame:

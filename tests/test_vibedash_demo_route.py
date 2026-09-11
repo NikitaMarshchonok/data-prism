@@ -68,6 +68,8 @@ class VibeDashDemoRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("saas_growth_demo.csv", response.get_data(as_text=True))
+        self.assertIn("Dataset readiness", response.get_data(as_text=True))
+        self.assertIn("Decision brief", response.get_data(as_text=True))
         generated_data = generate_dashboard.call_args.args[0]
         self.assertEqual(generated_data.shape, (360, 11))
         parse_prompt.assert_not_called()
@@ -144,6 +146,9 @@ class VibeDashDemoRouteTests(unittest.TestCase):
         self.assertIn('id="demo-loading-status"', page)
         self.assertIn("Building the evidence dashboard", page)
         self.assertIn("/vibedash/jobs", page)
+        self.assertIn("/vibedash/readiness", page)
+        self.assertIn('id="readiness-panel"', page)
+        self.assertIn("creates no retained Data Prism working copy", page)
         self.assertIn("waitForJob", page)
         self.assertIn("Temporary storage · 24-hour retention window.", page)
         self.assertNotIn("Data Prism v2", page)

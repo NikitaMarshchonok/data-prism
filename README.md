@@ -15,8 +15,10 @@ The project is designed as a decision-support system: every important conclusion
 | Area | Capabilities |
 | --- | --- |
 | Data intake | Validated uploads, safe filenames, normalized working copies, configurable size limits, and row limits |
+| Dataset readiness | Pre-analysis score, blocking quality contracts, privacy/schema warnings, and actionable remediation without retaining preflight rows |
 | Profiling | Schema summary, missingness, duplicates, constant columns, distributions, correlations, and outlier diagnostics |
 | Evidence engine | Ranked findings with supporting metrics, confidence levels, sample sizes, and recommended next steps |
+| Decision brief | Up to three ranked priorities that connect a finding to evidence, decision risk, and the next verification action |
 | Statistical validation | Welch group comparisons, Pearson correlation, effect sizes, 95% confidence intervals, and Benjamini–Hochberg FDR correction |
 | Exploratory ML | Multivariate anomaly scoring and quality-gated segmentation |
 | Predictive ML | Leakage-safe preprocessing, holdout evaluation, cross-validated model selection, and naive-baseline comparison |
@@ -30,7 +32,9 @@ The project is designed as a decision-support system: every important conclusion
 
 ```mermaid
 flowchart LR
-    A[Tabular dataset] --> Q[Bounded analysis job]
+    A[Tabular dataset] --> P[Readiness preflight]
+    P -->|Ready| Q[Bounded analysis job]
+    P -->|Blocked| X[Remediation guidance]
     Q --> B[Validated loader]
     B --> C[Quality and profiling]
     C --> D[Evidence and statistical engines]
@@ -45,7 +49,7 @@ flowchart LR
     J --> K[Web UI / API / CLI]
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported deployment and persistence model.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, [docs/DATASET_READINESS.md](docs/DATASET_READINESS.md) for the pre-analysis contract, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported deployment and persistence model.
 
 ## Reproducible product demo
 
@@ -55,6 +59,7 @@ Start the application, open `http://localhost:5001/vibedash/`, and select **Run 
 - evidence-backed data-quality, correlation, trend, outlier, and concentration findings;
 - effect sizes, confidence intervals, p-values, and FDR-adjusted statistical results;
 - multivariate anomaly candidates and exploratory segments with explicit guardrails.
+- a dataset-readiness record and a ranked decision brief that separates evidence, risk, and next action.
 
 ![Data Prism SaaS evidence dashboard](docs/assets/data-prism-evidence-dashboard.jpg)
 
@@ -66,9 +71,11 @@ python -m src.demo_data --output data/demo/saas_growth_demo.csv
 
 The generator is deterministic by default, contains no personal information, and deliberately includes missing values and operational incidents so reviewers can verify that the analysis panels produce meaningful results.
 
-In a JavaScript-enabled browser, VibeDash submits analysis through a durable job lifecycle and displays `queued` or `running` progress until the result is ready. Refreshing the page does not remove the SQLite job record. The original synchronous endpoint remains as a progressive fallback for clients without JavaScript.
+In a JavaScript-enabled browser, VibeDash first performs a non-retained dataset preflight. Blocking issues such as an unusably small sample, ambiguous columns, overwhelming missingness, or material duplicate-row distortion stop the run before a job or retained application working copy is created. Warnings remain visible but allow the user to continue with explicit limitations.
 
-Completed background runs appear under **History** for the same signed browser session. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, request and specification fingerprints, row/column coverage, truncation state, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
+After preflight, VibeDash submits analysis through a durable job lifecycle and displays `queued` or `running` progress until the result is ready. Refreshing the page does not remove the SQLite job record. The original synchronous endpoint remains as a progressive fallback for clients without JavaScript and enforces the same readiness contract.
+
+Completed background runs appear under **History** for the same signed browser session. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, request and specification fingerprints, row/column coverage, truncation state, readiness outcome, decision-brief coverage, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
 
 ## Quick start with Docker
 
@@ -212,6 +219,8 @@ data-prism/
 │   └── monitoring_api.py      # Authenticated monitoring endpoints
 ├── vibedash/                  # Prompt-to-dashboard and evidence engines
 │   ├── analysis_jobs.py       # Durable job states, scoped history, bounded dispatcher
+│   ├── readiness_engine.py    # Pre-analysis quality and privacy contracts
+│   ├── decision_brief.py      # Ranked evidence-to-action priorities
 │   └── audit_manifest.py      # Versioned fingerprints and reproducibility metadata
 ├── templates/                 # Flask/Jinja interfaces and reports
 ├── tests/                     # Unit and integration tests
