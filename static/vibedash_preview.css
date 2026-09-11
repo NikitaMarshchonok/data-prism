@@ -9,6 +9,9 @@ h1,h2,h3 { font-family:var(--display); }
 .topbar { min-height:78px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); }
 .brand { display:inline-flex; align-items:center; gap:12px; font:600 18px var(--display); }
 .brand-mark { display:grid; place-items:center; width:38px; height:38px; border-radius:12px; background:var(--accent); color:#07130f; font-size:13px; }
+.topbar-nav { display:flex; align-items:center; gap:20px; }
+.topbar-nav>a { color:var(--muted); font-size:12px; }
+.topbar-nav>a:hover { color:var(--text); }
 .topbar-status { display:flex; align-items:center; gap:9px; color:var(--muted); font-size:12px; }
 .topbar-status span { width:7px; height:7px; border-radius:50%; background:var(--accent); box-shadow:0 0 12px var(--accent); }
 .dashboard-shell { padding:54px 0 90px; }
@@ -90,6 +93,15 @@ tbody tr:last-child td { border-bottom:0; }
 .chart-container { min-width:0; overflow:hidden; }
 .data-table-stack { display:grid; gap:14px; }
 .summary-card { padding:22px; color:#c9d8d2; font-size:13px; line-height:1.7; white-space:pre-line; }
+.audit-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+.audit-grid article { padding:18px; border:1px solid var(--border); border-radius:14px; background:rgba(16,32,28,.88); }
+.audit-grid small,.audit-grid strong { display:block; }
+.audit-grid small { margin-bottom:7px; color:#70877f; font-size:9px; letter-spacing:.07em; text-transform:uppercase; }
+.audit-grid strong { overflow-wrap:anywhere; color:var(--blue); font:600 12px var(--display); }
+.audit-fingerprints { display:grid; gap:8px; margin-top:10px; }
+.audit-fingerprints>div { display:grid; grid-template-columns:170px 1fr; gap:16px; padding:12px 15px; border-radius:10px; background:#0a1714; }
+.audit-fingerprints span { color:#70877f; font-size:9px; letter-spacing:.06em; text-transform:uppercase; }
+.audit-fingerprints code { overflow:hidden; margin:0; color:var(--accent); font-size:10px; text-overflow:ellipsis; white-space:nowrap; }
 .specification-panel { margin-top:68px; padding:20px; }
 .specification-panel summary { cursor:pointer; color:var(--muted); font-size:13px; font-weight:700; }
 .spec-grid { display:grid; grid-template-columns:1fr 1fr; gap:30px; padding-top:20px; }
@@ -99,6 +111,6 @@ code { margin-left:7px; color:var(--accent); }
 .dashboard-footer { min-height:90px; display:flex; align-items:center; justify-content:space-between; gap:30px; border-top:1px solid var(--border); color:var(--muted); font-size:11px; }
 .dashboard-footer span { color:var(--text); font:600 15px var(--display); }
 .dashboard-footer p { margin:0; }
-@media (max-width:900px) { .dashboard-header,.section-heading { align-items:flex-start; flex-direction:column; } .section-heading>p { text-align:left; } .kpi-grid,.segment-grid { grid-template-columns:repeat(2,1fr); } .insight-grid,.chart-grid { grid-template-columns:1fr; } }
-@media (max-width:620px) { .topbar,.dashboard-shell,.dashboard-footer { width:min(100% - 26px,1240px); } .topbar-status { display:none; } .dashboard-shell { padding-top:38px; } h1 { font-size:40px; } .header-actions,.header-actions .button { width:100%; } .header-actions { flex-direction:column; } .request-panel { grid-template-columns:auto 1fr; } .request-panel .evidence-badge { display:none; } .kpi-grid,.segment-grid,.stat-grid,.spec-grid { grid-template-columns:1fr; } .card-heading { flex-direction:column; } .dashboard-footer { flex-direction:column; justify-content:center; text-align:center; } }
+@media (max-width:900px) { .dashboard-header,.section-heading { align-items:flex-start; flex-direction:column; } .section-heading>p { text-align:left; } .kpi-grid,.segment-grid,.audit-grid { grid-template-columns:repeat(2,1fr); } .insight-grid,.chart-grid { grid-template-columns:1fr; } }
+@media (max-width:620px) { .topbar,.dashboard-shell,.dashboard-footer { width:min(100% - 26px,1240px); } .topbar-status { display:none; } .topbar-nav { gap:0; } .dashboard-shell { padding-top:38px; } h1 { font-size:40px; } .header-actions,.header-actions .button { width:100%; } .header-actions { flex-direction:column; } .request-panel { grid-template-columns:auto 1fr; } .request-panel .evidence-badge { display:none; } .kpi-grid,.segment-grid,.stat-grid,.spec-grid,.audit-grid { grid-template-columns:1fr; } .audit-fingerprints>div { grid-template-columns:1fr; gap:5px; } .card-heading { flex-direction:column; } .dashboard-footer { flex-direction:column; justify-content:center; text-align:center; } }
 @media print { .topbar,.header-actions,.specification-panel { display:none; } body { background:#fff; color:#111; } .dashboard-shell { width:100%; padding:0; } }

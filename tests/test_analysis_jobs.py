@@ -109,6 +109,57 @@ class AnalysisJobStoreTests(unittest.TestCase):
                 max_active_total=1,
             )
 
+    def test_manifest_and_recent_history_are_scoped(self):
+        older = self.store.create(self.scope_id, {"prompt": "Older"})
+        newer = self.store.create(self.scope_id, {"prompt": "Newer"})
+        other = self.store.create(uuid.uuid4().hex, {"prompt": "Other"})
+        self.store.claim(older["id"])
+        self.store.complete(
+            older["id"],
+            str(uuid.uuid4()),
+            {"manifest_version": 1, "dataset": {"content_sha256": "a" * 64}},
+        )
+
+        history = self.store.list_for_scope(self.scope_id)
+
+        self.assertEqual([job["id"] for job in history], [newer["id"], older["id"]])
+        self.assertEqual(history[1]["manifest"]["manifest_version"], 1)
+        self.assertNotIn(other["id"], [job["id"] for job in history])
+        with self.assertRaises(ValueError):
+            self.store.list_for_scope(self.scope_id, limit=0)
+
+    def test_existing_job_database_is_migrated_for_manifests(self):
+        legacy_path = Path(self.temporary_directory.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE analysis_jobs (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    session_id TEXT,
+                    error_code TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT
+                )
+                """
+            )
+        migrated_store = AnalysisJobStore(legacy_path)
+        job = migrated_store.create(self.scope_id, {"prompt": "Migrated"})
+
+        self.assertIsNone(job["manifest"])
+        with sqlite3.connect(legacy_path) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(analysis_jobs)"
+                ).fetchall()
+            }
+        self.assertIn("manifest_json", columns)
+
 
 class AnalysisJobDispatcherTests(unittest.TestCase):
     def test_dispatcher_completes_a_claimed_job(self):

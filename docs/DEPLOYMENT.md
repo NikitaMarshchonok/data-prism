@@ -59,6 +59,8 @@ This cleanup is activity-triggered. An inactive service may retain an expired fi
 
 JavaScript-enabled VibeDash clients submit work to `POST /vibedash/jobs` and poll the returned status URL. Job records move through `queued`, `running`, `completed`, or `failed` in SQLite. Access to status and results is restricted to the server-signed browser session that created the job.
 
+`GET /vibedash/history` lists recent runs for that same browser scope. Completed jobs expose a downloadable manifest containing the service version, analysis-contract version, request/specification fingerprints, dataset and schema SHA-256 fingerprints, analyzed shape, truncation state, and evidence counts. The manifest contains no source row values. It is temporary metadata: the job record and its manifest are purged with `VIBEDASH_RETENTION_HOURS`, while the associated session and upload follow the same file-retention policy.
+
 The single-instance deployment intentionally runs one in-process analysis worker. The queue defaults to two active jobs per browser scope and 25 across the service. A job that remains `running` longer than 600 seconds is treated as interrupted and reported as failed. These bounds can be adjusted with:
 
 ```text

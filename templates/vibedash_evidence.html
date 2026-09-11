@@ -17,7 +17,10 @@
             <span class="brand-mark" aria-hidden="true">DP</span>
             <span>Data Prism</span>
         </a>
-        <div class="topbar-status"><span></span> Evidence calculated locally</div>
+        <div class="topbar-nav">
+            <a href="{{ url_for('vibedash.analysis_history') }}">Analysis history</a>
+            <div class="topbar-status"><span></span> Evidence calculated locally</div>
+        </div>
     </nav>
 
     <main class="dashboard-shell">
@@ -32,6 +35,7 @@
                 </div>
             </div>
             <div class="header-actions">
+                {% if manifest_url %}<a class="button button-secondary" href="{{ manifest_url }}">Audit manifest <span aria-hidden="true">↓</span></a>{% endif %}
                 <a class="button button-primary" href="{{ url_for('vibedash.export', session_id=session_id) }}">Export HTML <span aria-hidden="true">↓</span></a>
                 <a class="button button-secondary" href="{{ url_for('vibedash.index') }}"><span aria-hidden="true">←</span> New analysis</a>
             </div>
@@ -132,6 +136,23 @@
         <section class="dashboard-section" aria-labelledby="summary-heading">
             <div class="section-heading"><div><span>08</span><h2 id="summary-heading">Analysis summary</h2></div><p>Generated from the dashboard specification and calculated dataset coverage.</p></div>
             <div class="summary-card">{{ dashboard_data.ai_summary }}</div>
+        </section>
+        {% endif %}
+
+        {% if audit_manifest %}
+        <section class="dashboard-section" aria-labelledby="audit-heading">
+            <div class="section-heading"><div><span>09</span><h2 id="audit-heading">Reproducibility record</h2></div><p>Versioned metadata and fingerprints; no source row values are included.</p></div>
+            <div class="audit-grid">
+                <article><small>Analysis contract</small><strong>{{ audit_manifest.analysis_contract }}</strong></article>
+                <article><small>Engine version</small><strong>{{ audit_manifest.engine_version }}</strong></article>
+                <article><small>Rows analyzed</small><strong>{{ audit_manifest.dataset.analyzed_rows }}{% if audit_manifest.dataset.truncated %} of {{ audit_manifest.dataset.source_rows }}{% endif %}</strong></article>
+                <article><small>Generated</small><strong>{{ audit_manifest.generated_at }}</strong></article>
+            </div>
+            <div class="audit-fingerprints">
+                <div><span>Dataset SHA-256</span><code>{{ audit_manifest.dataset.content_sha256 }}</code></div>
+                <div><span>Schema SHA-256</span><code>{{ audit_manifest.dataset.schema_sha256 }}</code></div>
+                <div><span>Specification SHA-256</span><code>{{ audit_manifest.specification.sha256 }}</code></div>
+            </div>
         </section>
         {% endif %}
 
