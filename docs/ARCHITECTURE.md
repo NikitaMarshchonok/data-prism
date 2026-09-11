@@ -54,6 +54,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
+| `vibedash/audit_manifest.py` | Versioned dataset, schema, request, specification, and evidence fingerprints | Raw-row persistence or identity management |
 | `src/ml_predictor.py` | Preprocessing, cross-validated model selection, holdout metrics, explainability | Model serving or retraining |
 | `src/model_reliability.py` | Split stability and supported subgroup diagnostics | Fairness certification |
 | `src/data_drift.py` | Aggregate profiles and baseline-to-current comparisons | Persistent storage |
@@ -85,6 +86,8 @@ Uploaded source files receive server-generated identifiers. The main workflow st
 The VibeDash landing page also exposes a one-click demonstration path. A JavaScript client creates a session-scoped job, polls its non-sensitive status representation, and opens the stored result after the job reaches `completed`. The bounded dispatcher atomically claims queued work so duplicate polls cannot execute one job twice. The original synchronous endpoint remains a progressive fallback.
 
 The demo generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so it remains reproducible across machines. Both synchronous and background entry points call the same analysis-and-session pipeline.
+
+On completion, that shared pipeline stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the random scope held in the signed Flask session; status, result, history, and manifest endpoints never authorize by a job identifier alone. Manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, and evidence counts. They do not include source row values.
 
 ## Model-evaluation boundary
 
@@ -138,7 +141,7 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | --- | --- | --- |
 | Interactive uploads | Local runtime directory | Session working data; ignored by Git |
 | Reports and exports | Local runtime directory | Generated artifact; ignored by Git |
-| Analysis job lifecycle | SQLite | Terminal records follow VibeDash retention |
+| Analysis job lifecycle and audit manifest | SQLite | Session-scoped terminal records follow VibeDash retention |
 | Drift baselines | JSON aggregate profiles | Persistent until removed by operator |
 | Drift history and alerts | SQLite | Retention-limited per monitoring scope |
 | Secrets | Environment variables | Never committed to the repository |

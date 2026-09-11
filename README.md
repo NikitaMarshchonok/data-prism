@@ -22,8 +22,8 @@ The project is designed as a decision-support system: every important conclusion
 | Predictive ML | Leakage-safe preprocessing, holdout evaluation, cross-validated model selection, and naive-baseline comparison |
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
-| Interfaces | BI dashboard, prompt-to-dashboard workspace, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
-| Operations | Durable analysis-job states, bounded background execution, request IDs, structured JSON logs, managed temporary-artifact retention, and a CI-gated Render Blueprint |
+| Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
+| Operations | Durable analysis-job states, bounded background execution, reproducibility fingerprints, request IDs, structured JSON logs, managed temporary-artifact retention, and a CI-gated Render Blueprint |
 
 ## System overview
 
@@ -67,6 +67,8 @@ The generator is deterministic by default, contains no personal information, and
 
 In a JavaScript-enabled browser, VibeDash submits analysis through a durable job lifecycle and displays `queued` or `running` progress until the result is ready. Refreshing the page does not remove the SQLite job record. The original synchronous endpoint remains as a progressive fallback for clients without JavaScript.
 
+Completed background runs appear under **History** for the same signed browser session. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, request and specification fingerprints, row/column coverage, truncation state, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
+
 ## Quick start with Docker
 
 ```bash
@@ -86,6 +88,7 @@ Open:
 
 - Main analysis: `http://localhost:5001/`
 - Prompt-to-dashboard: `http://localhost:5001/vibedash/`
+- Recent analysis history: `http://localhost:5001/vibedash/history`
 - Liveness: `http://localhost:5001/healthz`
 - Readiness: `http://localhost:5001/readyz`
 
@@ -200,7 +203,8 @@ data-prism/
 │   ├── drift_store.py         # SQLite history and alert persistence
 │   └── monitoring_api.py      # Authenticated monitoring endpoints
 ├── vibedash/                  # Prompt-to-dashboard and evidence engines
-│   └── analysis_jobs.py       # Durable job states and bounded dispatcher
+│   ├── analysis_jobs.py       # Durable job states, scoped history, bounded dispatcher
+│   └── audit_manifest.py      # Versioned fingerprints and reproducibility metadata
 ├── templates/                 # Flask/Jinja interfaces and reports
 ├── tests/                     # Unit and integration tests
 ├── .github/workflows/ci.yml   # Python 3.11/3.12 CI matrix
@@ -213,6 +217,8 @@ data-prism/
 - Uploaded datasets, generated reports, local baselines, and SQLite history are runtime artifacts and are excluded from version control.
 - VibeDash uploads, sessions, and exports are server-named and subject to the configured temporary-artifact retention window.
 - Analysis-job status is isolated by a server-signed browser scope; job payloads and internal exceptions are not returned by the status API.
+- Run history, stored results, and audit-manifest downloads require the same signed browser scope that created the analysis.
+- Audit manifests include schema metadata and cryptographic fingerprints but never source row values.
 - Monitoring API keys are compared using constant-time comparison and are not used directly as storage identifiers.
 - API drift uploads are transient; persisted baselines contain aggregate profiles rather than raw rows.
 - Server-generated identifiers and filenames are validated before resolving filesystem paths.

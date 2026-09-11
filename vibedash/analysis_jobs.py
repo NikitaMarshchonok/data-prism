@@ -15,7 +15,7 @@ from typing import Any, Callable, Dict, Iterator
 
 
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
-MAX_OWNED_JOBS = 10
+MAX_HISTORY_JOBS = 50
 
 
 class AnalysisJobCapacityError(RuntimeError):
@@ -30,6 +30,23 @@ def _validated_job_id(job_id: str) -> str:
     if not isinstance(job_id, str) or not JOB_ID_PATTERN.fullmatch(job_id):
         raise ValueError("Invalid analysis job identifier.")
     return job_id
+
+
+def _validated_scope_id(scope_id: str) -> str:
+    if not isinstance(scope_id, str) or not JOB_ID_PATTERN.fullmatch(scope_id):
+        raise ValueError("Invalid analysis scope identifier.")
+    return scope_id
+
+
+def _serialized_json(value: Dict[str, Any]) -> str:
+    if not isinstance(value, dict):
+        raise ValueError("Analysis metadata must be an object.")
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+    )
 
 
 class AnalysisJobStore:
@@ -48,21 +65,13 @@ class AnalysisJobStore:
         max_active_per_scope: int = 2,
         max_active_total: int = 25,
     ) -> Dict[str, Any]:
-        if not isinstance(scope_id, str) or not JOB_ID_PATTERN.fullmatch(scope_id):
-            raise ValueError("Invalid analysis scope identifier.")
-        if not isinstance(payload, dict):
-            raise ValueError("Analysis job payload must be an object.")
+        normalized_scope_id = _validated_scope_id(scope_id)
         if not isinstance(max_active_per_scope, int) or max_active_per_scope < 1:
             raise ValueError("max_active_per_scope must be a positive integer.")
         if not isinstance(max_active_total, int) or max_active_total < 1:
             raise ValueError("max_active_total must be a positive integer.")
 
-        payload_json = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            allow_nan=False,
-        )
+        payload_json = _serialized_json(payload)
         job_id = uuid.uuid4().hex
         created_at = _utc_now()
         with self._connection() as connection:
@@ -72,7 +81,7 @@ class AnalysisJobStore:
                 SELECT COUNT(*) FROM analysis_jobs
                 WHERE scope_id = ? AND status IN ('queued', 'running')
                 """,
-                (scope_id,),
+                (normalized_scope_id,),
             ).fetchone()[0]
             active_total = connection.execute(
                 """
@@ -93,9 +102,15 @@ class AnalysisJobStore:
                     id, scope_id, status, payload_json, created_at, updated_at
                 ) VALUES (?, ?, 'queued', ?, ?, ?)
                 """,
-                (job_id, scope_id, payload_json, created_at, created_at),
+                (
+                    job_id,
+                    normalized_scope_id,
+                    payload_json,
+                    created_at,
+                    created_at,
+                ),
             )
-        return self.get(job_id, scope_id)
+        return self.get(job_id, normalized_scope_id)
 
     def get(self, job_id: str, scope_id: str | None = None) -> Dict[str, Any] | None:
         normalized_id = _validated_job_id(job_id)
@@ -104,22 +119,51 @@ class AnalysisJobStore:
         if scope_id is None:
             parameters = (normalized_id,)
         else:
-            if not isinstance(scope_id, str) or not JOB_ID_PATTERN.fullmatch(scope_id):
-                raise ValueError("Invalid analysis scope identifier.")
+            normalized_scope_id = _validated_scope_id(scope_id)
             scope_filter = " AND scope_id = ?"
-            parameters = (normalized_id, scope_id)
+            parameters = (normalized_id, normalized_scope_id)
 
         with self._connection() as connection:
             row = connection.execute(
                 f"""
-                SELECT id, scope_id, status, payload_json, session_id, error_code,
-                       created_at, updated_at, started_at, completed_at
+                SELECT id, scope_id, status, payload_json, manifest_json,
+                       session_id, error_code, created_at, updated_at,
+                       started_at, completed_at
                 FROM analysis_jobs
                 WHERE id = ?{scope_filter}
                 """,
                 parameters,
             ).fetchone()
         return self._row_to_job(row)
+
+    def list_for_scope(
+        self,
+        scope_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[Dict[str, Any]]:
+        """Return recent jobs for one signed browser scope."""
+        normalized_scope_id = _validated_scope_id(scope_id)
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise ValueError("limit must be an integer.")
+        if not 1 <= limit <= MAX_HISTORY_JOBS:
+            raise ValueError(
+                f"limit must be between 1 and {MAX_HISTORY_JOBS}."
+            )
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, scope_id, status, payload_json, manifest_json,
+                       session_id, error_code, created_at, updated_at,
+                       started_at, completed_at
+                FROM analysis_jobs
+                WHERE scope_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (normalized_scope_id, limit),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
 
     def claim(self, job_id: str) -> Dict[str, Any] | None:
         """Atomically move one queued job to running."""
@@ -138,22 +182,34 @@ class AnalysisJobStore:
                 return None
         return self.get(normalized_id)
 
-    def complete(self, job_id: str, session_id: str) -> bool:
+    def complete(
+        self,
+        job_id: str,
+        session_id: str,
+        manifest: Dict[str, Any] | None = None,
+    ) -> bool:
         normalized_id = _validated_job_id(job_id)
         try:
             normalized_session_id = str(uuid.UUID(session_id))
         except (AttributeError, TypeError, ValueError) as error:
             raise ValueError("Invalid dashboard session identifier.") from error
+        manifest_json = _serialized_json(manifest or {})
         timestamp = _utc_now()
         with self._connection() as connection:
             cursor = connection.execute(
                 """
-                UPDATE analysis_jobs
-                SET status = 'completed', session_id = ?, error_code = NULL,
-                    completed_at = ?, updated_at = ?
+                UPDATE analysis_jobs SET status = 'completed', session_id = ?,
+                    manifest_json = ?, error_code = NULL, completed_at = ?,
+                    updated_at = ?
                 WHERE id = ? AND status = 'running'
                 """,
-                (normalized_session_id, timestamp, timestamp, normalized_id),
+                (
+                    normalized_session_id,
+                    manifest_json,
+                    timestamp,
+                    timestamp,
+                    normalized_id,
+                ),
             )
         return cursor.rowcount == 1
 
@@ -217,6 +273,8 @@ class AnalysisJobStore:
             return None
         job = dict(row)
         job["payload"] = json.loads(job.pop("payload_json"))
+        manifest_json = job.pop("manifest_json", None)
+        job["manifest"] = json.loads(manifest_json) if manifest_json else None
         return job
 
     @contextmanager
@@ -242,6 +300,7 @@ class AnalysisJobStore:
                         status IN ('queued', 'running', 'completed', 'failed')
                     ),
                     payload_json TEXT NOT NULL,
+                    manifest_json TEXT,
                     session_id TEXT,
                     error_code TEXT,
                     created_at TEXT NOT NULL,
@@ -257,6 +316,16 @@ class AnalysisJobStore:
                 ON analysis_jobs(status, created_at ASC);
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(analysis_jobs)"
+                ).fetchall()
+            }
+            if "manifest_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE analysis_jobs ADD COLUMN manifest_json TEXT"
+                )
 
 
 class AnalysisJobDispatcher:
@@ -276,7 +345,7 @@ class AnalysisJobDispatcher:
         self,
         app,
         job_id: str,
-        processor: Callable[[Dict[str, Any]], str],
+        processor: Callable[[Dict[str, Any]], str | Dict[str, Any]],
     ) -> bool:
         normalized_id = _validated_job_id(job_id)
         with self._lock:
@@ -303,8 +372,16 @@ class AnalysisJobDispatcher:
                     extra={"event": "vibedash_job_started"},
                 )
                 try:
-                    session_id = processor(job)
-                    if not store.complete(job_id, session_id):
+                    result = processor(job)
+                    if isinstance(result, str):
+                        session_id = result
+                        manifest = None
+                    elif isinstance(result, dict):
+                        session_id = result.get("session_id")
+                        manifest = result.get("manifest")
+                    else:
+                        raise RuntimeError("Analysis processor returned no result.")
+                    if not store.complete(job_id, session_id, manifest):
                         raise RuntimeError("Analysis job completion transition failed.")
                 except Exception:
                     store.fail(job_id)

@@ -182,9 +182,46 @@ class VibeDashJobRouteTests(unittest.TestCase):
 
                 self.assertEqual(status["status"], "completed")
                 result = client.get(status["result_url"])
+                history = client.get("/vibedash/history")
+                manifest = client.get(status["manifest_url"])
 
         self.assertEqual(result.status_code, 200)
         self.assertIn("SaaS Growth Evidence Dashboard", result.get_data(as_text=True))
+        self.assertIn("Reproducibility record", result.get_data(as_text=True))
+        self.assertEqual(history.status_code, 200)
+        self.assertIn("Analysis history", history.get_data(as_text=True))
+        self.assertIn("Dataset SHA-256", history.get_data(as_text=True))
+        self.assertEqual(manifest.status_code, 200)
+        self.assertEqual(manifest.get_json()["manifest_version"], 1)
+        self.assertIn("attachment", manifest.headers["Content-Disposition"])
+
+    @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
+    def test_history_and_manifest_are_isolated_by_browser_scope(self, _submit):
+        with web_app.app.test_client() as owner:
+            queued = owner.post(
+                "/vibedash/jobs",
+                data={"demo_dataset": "saas_growth", "prompt": "Analyze"},
+            ).get_json()
+            store = AnalysisJobStore(web_app.app.config["VIBEDASH_JOB_STORE_PATH"])
+            store.claim(queued["job_id"])
+            store.complete(
+                queued["job_id"],
+                str(uuid.uuid4()),
+                {"manifest_version": 1},
+            )
+            owner_history = owner.get("/vibedash/history")
+
+        manifest_url = queued["status_url"] + "/manifest"
+        with web_app.app.test_client() as stranger:
+            stranger_history = stranger.get("/vibedash/history")
+            stranger_manifest = stranger.get(manifest_url)
+
+        self.assertIn(queued["job_id"][:10], owner_history.get_data(as_text=True))
+        self.assertNotIn(
+            queued["job_id"][:10],
+            stranger_history.get_data(as_text=True),
+        )
+        self.assertEqual(stranger_manifest.status_code, 404)
 
 
 if __name__ == "__main__":

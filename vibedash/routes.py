@@ -4,6 +4,7 @@ VibeDash Flask routes
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -41,8 +42,9 @@ try:
         AnalysisJobCapacityError,
         AnalysisJobStore,
         JOB_ID_PATTERN,
-        MAX_OWNED_JOBS,
+        MAX_HISTORY_JOBS,
     )
+    from .audit_manifest import build_audit_manifest
     from . import vibedash_bp
 except ImportError:
     # Flask не установлен, создаем заглушки
@@ -60,26 +62,6 @@ if vibedash_bp:
         return scope_id
 
 
-    def _owned_analysis_job_ids():
-        job_ids = session.get('vibedash_analysis_job_ids', [])
-        if not isinstance(job_ids, list):
-            return []
-        return [
-            job_id for job_id in job_ids
-            if isinstance(job_id, str) and JOB_ID_PATTERN.fullmatch(job_id)
-        ][-MAX_OWNED_JOBS:]
-
-
-    def _remember_analysis_job(job_id):
-        job_ids = [
-            existing for existing in _owned_analysis_job_ids()
-            if existing != job_id
-        ]
-        session['vibedash_analysis_job_ids'] = (
-            job_ids + [job_id]
-        )[-MAX_OWNED_JOBS:]
-
-
     def _analysis_job_store():
         return AnalysisJobStore(current_app.config['VIBEDASH_JOB_STORE_PATH'])
 
@@ -94,7 +76,7 @@ if vibedash_bp:
         raise ValueError('The CSV encoding is not supported.') from last_error
 
 
-    def _build_dashboard_session(payload):
+    def _build_dashboard_session(payload, *, run_id=None):
         """Build and persist one dashboard through the shared analysis path."""
         stored_filename = payload.get('stored_filename', '')
         if not isinstance(stored_filename, str) or not re.fullmatch(
@@ -109,18 +91,22 @@ if vibedash_bp:
         prompt = payload.get('prompt', '')
         filename = payload.get('filename', 'dataset.csv')
         demo_dataset = payload.get('demo_dataset', '')
-        if not isinstance(prompt, str) or not prompt.strip():
+        if (
+            not isinstance(prompt, str)
+            or not prompt.strip()
+            or len(prompt) > 4000
+        ):
             raise ValueError('The analysis request is invalid.')
         if not isinstance(filename, str) or not filename:
             raise ValueError('The dataset name is invalid.')
 
-        df = _load_vibedash_csv(upload_path)
-        if df.empty:
+        source_df = _load_vibedash_csv(upload_path)
+        if source_df.empty:
             raise ValueError('The dataset does not contain any rows.')
+        source_row_count = len(source_df)
         max_rows = current_app.config['MAX_ROWS_PREVIEW']
-        truncated = len(df) > max_rows
-        if len(df) > max_rows:
-            df = df.head(max_rows)
+        truncated = source_row_count > max_rows
+        df = source_df.head(max_rows) if truncated else source_df
 
         if demo_dataset:
             if demo_dataset != DEMO_DATASET_ID:
@@ -130,15 +116,31 @@ if vibedash_bp:
             viz_spec = parse_prompt_to_viz_spec(prompt, list(df.columns))
         dashboard_data = bridge_generate_dashboard_data(df, viz_spec)
 
+        viz_spec_data = viz_spec.model_dump()
+        audit_manifest = build_audit_manifest(
+            dataset_path=upload_path,
+            dataframe=df,
+            source_row_count=source_row_count,
+            truncated=truncated,
+            source_name=filename,
+            prompt=prompt,
+            demo_dataset=demo_dataset,
+            run_id=run_id,
+            viz_spec=viz_spec_data,
+            dashboard_data=dashboard_data,
+            engine_version=current_app.config['SERVICE_VERSION'],
+            retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
+        )
         session_id = str(uuid.uuid4())
         session_data = {
-            'viz_spec': viz_spec.model_dump(),
+            'viz_spec': viz_spec_data,
             'dashboard_data': dashboard_data,
             'filename': filename,
             'stored_filename': stored_filename,
             'prompt': prompt,
             'df_shape': df.shape,
             'file_path': str(upload_path),
+            'audit_manifest': audit_manifest,
         }
         if not save_session_data(session_id, session_data):
             raise RuntimeError('VibeDash session could not be persisted.')
@@ -147,12 +149,83 @@ if vibedash_bp:
             'session_data': session_data,
             'viz_spec': viz_spec,
             'truncated': truncated,
+            'manifest': audit_manifest,
         }
 
 
     def _process_analysis_job(job):
-        result = _build_dashboard_session(job.get('payload', {}))
-        return result['session_id']
+        result = _build_dashboard_session(
+            job.get('payload', {}),
+            run_id=job['id'],
+        )
+        return {
+            'session_id': result['session_id'],
+            'manifest': result['manifest'],
+        }
+
+
+    def _history_entry(job):
+        manifest = job.get('manifest') or {}
+        payload = job.get('payload') or {}
+        manifest_dataset = manifest.get('dataset') or {}
+        manifest_specification = manifest.get('specification') or {}
+        manifest_evidence = manifest.get('evidence') or {}
+        created_at = job.get('created_at')
+        started_at = job.get('started_at')
+        completed_at = job.get('completed_at')
+
+        def parse_timestamp(value):
+            if not value:
+                return None
+            try:
+                return datetime.fromisoformat(value).astimezone(timezone.utc)
+            except (TypeError, ValueError):
+                return None
+
+        created = parse_timestamp(created_at)
+        started = parse_timestamp(started_at)
+        completed = parse_timestamp(completed_at)
+        duration_seconds = None
+        if started and completed:
+            duration_seconds = max(0.0, (completed - started).total_seconds())
+
+        return {
+            'id': job['id'],
+            'short_id': job['id'][:10],
+            'status': job['status'],
+            'filename': payload.get('filename') or 'dataset.csv',
+            'prompt': payload.get('prompt') or 'Analysis request',
+            'is_demo': bool(payload.get('demo_dataset')),
+            'title': (
+                manifest_specification.get('title')
+                or payload.get('filename')
+                or 'Analysis'
+            ),
+            'created_at': (
+                created.strftime('%Y-%m-%d %H:%M UTC')
+                if created else 'Unknown time'
+            ),
+            'duration_seconds': duration_seconds,
+            'manifest': manifest,
+            'audit_available': bool(manifest_dataset.get('content_sha256')),
+            'analyzed_rows': manifest_dataset.get('analyzed_rows'),
+            'column_count': manifest_dataset.get('column_count'),
+            'insight_count': manifest_evidence.get('insight_count'),
+            'statistical_test_count': manifest_evidence.get(
+                'statistical_test_count'
+            ),
+            'dataset_sha256': manifest_dataset.get('content_sha256'),
+            'result_url': (
+                url_for('vibedash.analysis_job_result', job_id=job['id'])
+                if job['status'] == 'completed' and job.get('session_id')
+                else None
+            ),
+            'manifest_url': (
+                url_for('vibedash.analysis_job_manifest', job_id=job['id'])
+                if job['status'] == 'completed' and manifest
+                else None
+            ),
+        }
 
 
     @vibedash_bp.before_request
@@ -206,12 +279,15 @@ if vibedash_bp:
             )
 
         application = current_app._get_current_object()
-        for job_id in _owned_analysis_job_ids():
-            job = store.get(job_id, _analysis_scope_id())
-            if job and job['status'] == 'queued':
+        jobs = store.list_for_scope(
+            _analysis_scope_id(),
+            limit=MAX_HISTORY_JOBS,
+        )
+        for job in jobs:
+            if job['status'] == 'queued':
                 analysis_job_dispatcher.submit(
                     application,
-                    job_id,
+                    job['id'],
                     _process_analysis_job,
                 )
 
@@ -234,6 +310,20 @@ if vibedash_bp:
                              demo_prompt=DEMO_PROMPT,
                              retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
                              ollama_available=ollama_available)
+
+
+    @vibedash_bp.get('/history')
+    def analysis_history():
+        """Show recent analysis jobs owned by this signed browser session."""
+        jobs = _analysis_job_store().list_for_scope(
+            _analysis_scope_id(),
+            limit=MAX_HISTORY_JOBS,
+        )
+        return render_template(
+            'vibedash_history.html',
+            jobs=[_history_entry(job) for job in jobs],
+            retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
+        )
 
 
     @vibedash_bp.route('/preview', methods=['POST'])
@@ -324,7 +414,9 @@ if vibedash_bp:
                                  viz_spec=analysis_result['viz_spec'],
                                  dashboard_data=analysis_result['session_data']['dashboard_data'],
                                  filename=filename,
-                                 prompt=prompt)
+                                 prompt=prompt,
+                                 audit_manifest=analysis_result['manifest'],
+                                 manifest_url=None)
         
         except Exception:
             current_app.logger.exception(
@@ -413,7 +505,6 @@ if vibedash_bp:
             )
             return jsonify({'error': 'The analysis job could not be created.'}), 500
 
-        _remember_analysis_job(job['id'])
         analysis_job_dispatcher.submit(
             current_app._get_current_object(),
             job['id'],
@@ -439,7 +530,7 @@ if vibedash_bp:
         if not JOB_ID_PATTERN.fullmatch(job_id):
             return jsonify({'error': 'Analysis job not found.'}), 404
         job = _analysis_job_store().get(job_id, _analysis_scope_id())
-        if job is None or job_id not in _owned_analysis_job_ids():
+        if job is None:
             return jsonify({'error': 'Analysis job not found.'}), 404
 
         response = {
@@ -453,6 +544,11 @@ if vibedash_bp:
                 'vibedash.analysis_job_result',
                 job_id=job['id'],
             )
+            if job.get('manifest'):
+                response['manifest_url'] = url_for(
+                    'vibedash.analysis_job_manifest',
+                    job_id=job['id'],
+                )
         elif job['status'] == 'failed':
             response['error'] = (
                 'The analysis was interrupted. Please submit it again.'
@@ -468,7 +564,7 @@ if vibedash_bp:
         if not JOB_ID_PATTERN.fullmatch(job_id):
             return jsonify({'error': 'Analysis job not found.'}), 404
         job = _analysis_job_store().get(job_id, _analysis_scope_id())
-        if job is None or job_id not in _owned_analysis_job_ids():
+        if job is None:
             return jsonify({'error': 'Analysis job not found.'}), 404
         if job['status'] != 'completed' or not job['session_id']:
             return jsonify({'error': 'Analysis result is not ready.'}), 409
@@ -483,7 +579,29 @@ if vibedash_bp:
             dashboard_data=session_data['dashboard_data'],
             filename=session_data['filename'],
             prompt=session_data['prompt'],
+            audit_manifest=session_data.get('audit_manifest'),
+            manifest_url=(
+                url_for('vibedash.analysis_job_manifest', job_id=job['id'])
+                if job.get('manifest') else None
+            ),
         )
+
+
+    @vibedash_bp.get('/jobs/<job_id>/manifest')
+    def analysis_job_manifest(job_id):
+        """Download the bounded audit manifest for a completed owned job."""
+        if not JOB_ID_PATTERN.fullmatch(job_id):
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        job = _analysis_job_store().get(job_id, _analysis_scope_id())
+        if job is None:
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        if job['status'] != 'completed' or not job.get('manifest'):
+            return jsonify({'error': 'Analysis manifest is not ready.'}), 409
+        response = jsonify(job['manifest'])
+        response.headers['Content-Disposition'] = (
+            f'attachment; filename="data-prism-manifest-{job_id[:12]}.json"'
+        )
+        return response
 
 
     @vibedash_bp.route('/export/<session_id>')
@@ -503,6 +621,8 @@ if vibedash_bp:
                                          dashboard_data=session_data['dashboard_data'],
                                          filename=session_data['filename'],
                                          prompt=session_data['prompt'],
+                                         audit_manifest=session_data.get('audit_manifest'),
+                                         manifest_url=None,
                                          export_mode=True)
             
             # Создаем single-file HTML

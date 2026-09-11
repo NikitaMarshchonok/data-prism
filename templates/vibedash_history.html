@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Recent Data Prism analyses and reproducibility manifests for this browser session.">
+    <title>Analysis history · Data Prism</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_history.css') }}">
+</head>
+<body>
+    <div class="page-glow" aria-hidden="true"></div>
+    <nav class="topbar" aria-label="History navigation">
+        <a class="brand" href="{{ url_for('vibedash.index') }}" aria-label="Data Prism home">
+            <span class="brand-mark" aria-hidden="true">DP</span>
+            <span>Data Prism</span>
+        </a>
+        <div class="nav-actions">
+            <span class="scope-label"><span></span> This browser session</span>
+            <a class="button button-secondary" href="{{ url_for('vibedash.index') }}">New analysis</a>
+        </div>
+    </nav>
+
+    <main class="history-shell">
+        <header class="history-header">
+            <div>
+                <div class="eyebrow">Reproducible workspace</div>
+                <h1>Analysis history</h1>
+                <p>Recent runs, evidence counts, and versioned audit metadata for this signed browser session.</p>
+            </div>
+            <aside class="retention-note">
+                <strong>Temporary by design</strong>
+                <span>Runs and source files are retained for up to {{ retention_hours }} hours.</span>
+            </aside>
+        </header>
+
+        {% if jobs %}
+        <section class="history-list" aria-label="Recent analyses">
+            {% for job in jobs %}
+            <article class="history-card status-{{ job.status }}">
+                <div class="card-main">
+                    <div class="card-heading">
+                        <div>
+                            <span class="dataset-type">{{ 'Built-in demo' if job.is_demo else 'Uploaded CSV' }}</span>
+                            <h2>{{ job.title }}</h2>
+                        </div>
+                        <span class="status-badge">{{ job.status }}</span>
+                    </div>
+                    <p class="prompt">{{ job.prompt }}</p>
+                    <div class="run-meta">
+                        <span>{{ job.filename }}</span>
+                        <span>{{ job.created_at }}</span>
+                        <span>Run {{ job.short_id }}</span>
+                        {% if job.duration_seconds is not none %}
+                        <span>{{ "%.1f"|format(job.duration_seconds) }} seconds</span>
+                        {% endif %}
+                    </div>
+
+                    {% if job.audit_available %}
+                    <div class="evidence-grid" aria-label="Audit summary">
+                        <div><small>Analyzed rows</small><strong>{{ job.analyzed_rows }}</strong></div>
+                        <div><small>Columns</small><strong>{{ job.column_count }}</strong></div>
+                        <div><small>Insights</small><strong>{{ job.insight_count }}</strong></div>
+                        <div><small>Validated tests</small><strong>{{ job.statistical_test_count }}</strong></div>
+                    </div>
+                    <div class="fingerprint">
+                        <span>Dataset SHA-256</span>
+                        <code>{{ job.dataset_sha256 }}</code>
+                    </div>
+                    {% elif job.status == 'completed' %}
+                    <div class="state-message">This earlier run predates versioned audit manifests. Its dashboard remains available while the session artifact exists.</div>
+                    {% elif job.status == 'failed' %}
+                    <div class="state-message">The run did not complete. Submit the analysis again from the workspace.</div>
+                    {% else %}
+                    <div class="state-message">Evidence is being calculated. Refresh this page to see the completed manifest.</div>
+                    {% endif %}
+                </div>
+                <div class="card-actions">
+                    {% if job.result_url %}<a class="button button-primary" href="{{ job.result_url }}">Open dashboard</a>{% endif %}
+                    {% if job.manifest_url %}<a class="button button-secondary" href="{{ job.manifest_url }}">Download manifest</a>{% endif %}
+                </div>
+            </article>
+            {% endfor %}
+        </section>
+        {% else %}
+        <section class="empty-state">
+            <span class="empty-icon" aria-hidden="true">↗</span>
+            <h2>No analyses in this browser yet</h2>
+            <p>Run the deterministic demo or upload a CSV. Completed work will appear here with its audit manifest.</p>
+            <a class="button button-primary" href="{{ url_for('vibedash.index') }}">Start an analysis</a>
+        </section>
+        {% endif %}
+    </main>
+
+    <footer><span>Data Prism</span><p>History is session-scoped and does not contain source row values.</p></footer>
+</body>
+</html>
