@@ -19,6 +19,7 @@
         </a>
         <div class="topbar-nav">
             <a href="{{ url_for('vibedash.analysis_history') }}">Analysis history</a>
+            <a href="{{ url_for('vibedash.decision_cases') }}">Decision cases</a>
             <div class="topbar-status"><span></span> Evidence calculated locally</div>
         </div>
     </nav>
@@ -88,6 +89,43 @@
             {% endif %}
             <p class="guardrail">{{ dashboard_data.decision_brief.guardrail }}</p>
         </section>
+
+        {% if analysis_job_id and decision_csrf_token and not export_mode %}
+        <section class="decision-capture" aria-labelledby="decision-capture-heading">
+            <div class="decision-capture-copy">
+                <small>Close the decision loop</small>
+                <h2 id="decision-capture-heading">Turn evidence into a measurable commitment</h2>
+                <p>Select one priority, name the owner, and define what success must look like before the result is known.</p>
+            </div>
+            <form method="post" action="{{ url_for('vibedash.create_decision_case', job_id=analysis_job_id) }}" class="decision-form">
+                <input type="hidden" name="csrf_token" value="{{ decision_csrf_token }}">
+                <label>Priority
+                    <select name="priority" required>
+                        {% for priority in dashboard_data.decision_brief.priorities %}
+                        <option value="{{ priority.priority }}">0{{ priority.priority }} · {{ priority.title }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>Owner
+                    <input name="owner" maxlength="120" placeholder="Name or role accountable for the decision" required>
+                </label>
+                <label class="form-wide">Decision to test
+                    <textarea name="decision" maxlength="1000" rows="3" placeholder="What will be changed or investigated?" required></textarea>
+                </label>
+                <label>Success metric
+                    <input name="success_metric" maxlength="240" placeholder="Example: activation rate" required>
+                </label>
+                <label>Target outcome
+                    <input name="target_outcome" maxlength="500" placeholder="Example: increase from 42% to at least 47%" required>
+                </label>
+                <label>Review date
+                    <input type="date" name="review_date" required>
+                </label>
+                <button class="button button-primary" type="submit">Start tracking</button>
+            </form>
+            <p class="decision-privacy">Stores the selected evidence summary and audit fingerprint, never source rows. Do not enter personal, secret, or regulated information.</p>
+        </section>
+        {% endif %}
         {% endif %}
 
         {% if dashboard_data.kpis %}

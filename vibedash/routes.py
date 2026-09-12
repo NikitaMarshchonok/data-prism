@@ -5,8 +5,9 @@ import csv
 import io
 import os
 import re
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 try:
@@ -48,6 +49,13 @@ try:
     )
     from .audit_manifest import build_audit_manifest
     from .decision_brief import build_decision_brief
+    from .decision_cases import (
+        DecisionCaseCapacityError,
+        DecisionCaseConflictError,
+        DecisionCaseStore,
+        IDENTIFIER_PATTERN as DECISION_CASE_ID_PATTERN,
+        MAX_DECISION_CASES,
+    )
     from .readiness_engine import DatasetReadinessEngine
     from . import vibedash_bp
 except ImportError:
@@ -75,6 +83,93 @@ if vibedash_bp:
 
     def _analysis_job_store():
         return AnalysisJobStore(current_app.config['VIBEDASH_JOB_STORE_PATH'])
+
+
+    def _decision_case_store():
+        return DecisionCaseStore(current_app.config['VIBEDASH_JOB_STORE_PATH'])
+
+
+    def _decision_csrf_token():
+        token = session.get('vibedash_decision_csrf_token')
+        if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
+            token = secrets.token_hex(32)
+            session['vibedash_decision_csrf_token'] = token
+        return token
+
+
+    def _valid_decision_csrf_token(token):
+        expected = _decision_csrf_token()
+        return (
+            isinstance(token, str)
+            and len(token) == len(expected)
+            and secrets.compare_digest(token, expected)
+        )
+
+
+    def _decision_evidence_snapshot(job, session_data, priority_number):
+        dashboard_data = session_data.get('dashboard_data') or {}
+        decision_brief = dashboard_data.get('decision_brief') or {}
+        priorities = decision_brief.get('priorities') or []
+        selected = next(
+            (
+                priority
+                for priority in priorities
+                if priority.get('priority') == priority_number
+            ),
+            None,
+        )
+        if selected is None:
+            raise ValueError('The selected decision priority is unavailable.')
+
+        manifest = job.get('manifest') or {}
+        dataset = manifest.get('dataset') or {}
+        specification = manifest.get('specification') or {}
+
+        def bounded(value, maximum=500):
+            return ' '.join(str(value or '').split())[:maximum]
+
+        evidence = [
+            bounded(item, 300)
+            for item in (selected.get('evidence') or [])[:5]
+            if bounded(item, 300)
+        ]
+        return {
+            'contract': 'decision-case-source-v1',
+            'analysis_job_id': job['id'],
+            'analysis_contract': bounded(manifest.get('analysis_contract'), 80),
+            'dataset_sha256': bounded(dataset.get('content_sha256'), 64),
+            'analysis_title': bounded(
+                specification.get('title')
+                or session_data.get('filename')
+                or 'Analysis',
+                200,
+            ),
+            'priority': {
+                'number': priority_number,
+                'category': bounded(selected.get('category'), 80),
+                'title': bounded(selected.get('title'), 200),
+                'finding': bounded(selected.get('finding'), 800),
+                'recommended_action': bounded(selected.get('action'), 800),
+                'confidence': bounded(selected.get('confidence'), 40),
+                'evidence': evidence,
+            },
+        }
+
+
+    def _decision_case_view(decision_case):
+        review_date = date.fromisoformat(decision_case['review_date'])
+        return {
+            **decision_case,
+            'short_id': decision_case['id'][:10],
+            'created_label': datetime.fromisoformat(
+                decision_case['created_at']
+            ).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
+            'review_label': review_date.strftime('%Y-%m-%d'),
+            'overdue': (
+                decision_case['status'] == 'tracking'
+                and review_date < datetime.now(timezone.utc).date()
+            ),
+        }
 
 
     def _load_vibedash_csv(source):
@@ -307,6 +402,9 @@ if vibedash_bp:
         removed_jobs = store.purge_terminal(
             current_app.config['VIBEDASH_RETENTION_HOURS']
         )
+        removed_decisions = _decision_case_store().purge_terminal(
+            current_app.config['VIBEDASH_DECISION_RETENTION_DAYS']
+        )
         if stale_jobs:
             current_app.logger.warning(
                 "Interrupted VibeDash jobs marked as failed",
@@ -316,6 +414,11 @@ if vibedash_bp:
             current_app.logger.info(
                 "Expired VibeDash jobs removed",
                 extra={"event": "vibedash_jobs_retention_cleanup"},
+            )
+        if removed_decisions:
+            current_app.logger.info(
+                "Expired closed decision cases removed",
+                extra={"event": "vibedash_decisions_retention_cleanup"},
             )
 
         application = current_app._get_current_object()
@@ -363,6 +466,56 @@ if vibedash_bp:
             'vibedash_history.html',
             jobs=[_history_entry(job) for job in jobs],
             retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
+        )
+
+
+    @vibedash_bp.get('/decisions')
+    def decision_cases():
+        """Show evidence-linked decisions for this signed browser scope."""
+        list_limit = min(
+            current_app.config['VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'],
+            MAX_DECISION_CASES,
+        )
+        cases = _decision_case_store().list_for_scope(
+            _analysis_scope_id(),
+            limit=list_limit,
+        )
+        return render_template(
+            'vibedash_decisions.html',
+            decision_cases=[_decision_case_view(case) for case in cases],
+            selected_case=None,
+            csrf_token=_decision_csrf_token(),
+            retention_days=current_app.config[
+                'VIBEDASH_DECISION_RETENTION_DAYS'
+            ],
+        )
+
+
+    @vibedash_bp.get('/decisions/<case_id>')
+    def decision_case_detail(case_id):
+        """Open one decision case owned by this signed browser scope."""
+        if not DECISION_CASE_ID_PATTERN.fullmatch(case_id):
+            return jsonify({'error': 'Decision case not found.'}), 404
+        scope_id = _analysis_scope_id()
+        decision_case = _decision_case_store().get(case_id, scope_id)
+        if decision_case is None:
+            return jsonify({'error': 'Decision case not found.'}), 404
+        list_limit = min(
+            current_app.config['VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'],
+            MAX_DECISION_CASES,
+        )
+        cases = _decision_case_store().list_for_scope(
+            scope_id,
+            limit=list_limit,
+        )
+        return render_template(
+            'vibedash_decisions.html',
+            decision_cases=[_decision_case_view(case) for case in cases],
+            selected_case=_decision_case_view(decision_case),
+            csrf_token=_decision_csrf_token(),
+            retention_days=current_app.config[
+                'VIBEDASH_DECISION_RETENTION_DAYS'
+            ],
         )
 
 
@@ -681,6 +834,110 @@ if vibedash_bp:
                 url_for('vibedash.analysis_job_manifest', job_id=job['id'])
                 if job.get('manifest') else None
             ),
+            analysis_job_id=job['id'],
+            decision_csrf_token=_decision_csrf_token(),
+        )
+
+
+    @vibedash_bp.post('/jobs/<job_id>/decisions')
+    def create_decision_case(job_id):
+        """Create one bounded, evidence-linked decision from a completed job."""
+        if not JOB_ID_PATTERN.fullmatch(job_id):
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Invalid form token.'}), 400
+
+        scope_id = _analysis_scope_id()
+        job = _analysis_job_store().get(job_id, scope_id)
+        if job is None:
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        if job['status'] != 'completed' or not job.get('session_id'):
+            return jsonify({'error': 'Analysis result is not ready.'}), 409
+        session_data = load_session_data(job['session_id'])
+        if not session_data:
+            return jsonify({'error': 'Analysis result is no longer available.'}), 410
+
+        try:
+            priority = int(request.form.get('priority', ''))
+            snapshot = _decision_evidence_snapshot(job, session_data, priority)
+            decision_case = _decision_case_store().create(
+                scope_id,
+                job_id,
+                priority=priority,
+                owner=request.form.get('owner', ''),
+                decision=request.form.get('decision', ''),
+                success_metric=request.form.get('success_metric', ''),
+                target_outcome=request.form.get('target_outcome', ''),
+                review_date=request.form.get('review_date', ''),
+                evidence_snapshot=snapshot,
+                max_cases_per_scope=current_app.config[
+                    'VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'
+                ],
+            )
+        except DecisionCaseConflictError:
+            existing = _decision_case_store().find_for_job_priority(
+                scope_id,
+                job_id,
+                priority,
+            )
+            if existing:
+                flash('This analysis priority is already being tracked.', 'info')
+                return redirect(
+                    url_for(
+                        'vibedash.decision_case_detail',
+                        case_id=existing['id'],
+                    ),
+                    code=303,
+                )
+            return jsonify({'error': 'The decision case already exists.'}), 409
+        except DecisionCaseCapacityError:
+            return jsonify({
+                'error': 'The decision-case limit for this browser has been reached.'
+            }), 429
+        except (TypeError, ValueError) as error:
+            return jsonify({'error': str(error)}), 400
+
+        current_app.logger.info(
+            "Evidence-linked decision case created",
+            extra={"event": "vibedash_decision_created"},
+        )
+        flash('Decision case created. Track the outcome after the review date.', 'info')
+        return redirect(
+            url_for(
+                'vibedash.decision_case_detail',
+                case_id=decision_case['id'],
+            ),
+            code=303,
+        )
+
+
+    @vibedash_bp.post('/decisions/<case_id>/outcome')
+    def update_decision_case_outcome(case_id):
+        """Record the observed result of an owned decision case."""
+        if not DECISION_CASE_ID_PATTERN.fullmatch(case_id):
+            return jsonify({'error': 'Decision case not found.'}), 404
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Invalid form token.'}), 400
+        try:
+            decision_case = _decision_case_store().update_outcome(
+                case_id,
+                _analysis_scope_id(),
+                status=request.form.get('status', ''),
+                actual_outcome=request.form.get('actual_outcome', ''),
+            )
+        except ValueError as error:
+            return jsonify({'error': str(error)}), 400
+        if decision_case is None:
+            return jsonify({'error': 'Decision case not found.'}), 404
+
+        current_app.logger.info(
+            "Decision case outcome updated",
+            extra={"event": "vibedash_decision_outcome_updated"},
+        )
+        flash('Decision outcome updated.', 'info')
+        return redirect(
+            url_for('vibedash.decision_case_detail', case_id=case_id),
+            code=303,
         )
 
 
