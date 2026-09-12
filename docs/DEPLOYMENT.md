@@ -31,7 +31,7 @@ No external AI key is required for the deterministic demo. `OPENAI_API_KEY` can 
 
 ## Persistence boundary
 
-The free Render service uses an ephemeral filesystem. Uploaded datasets, reports, baselines, and drift history are therefore lost when the instance is restarted or redeployed. This is acceptable for a public portfolio demo, but not for persistent monitoring.
+The free Render service uses an ephemeral filesystem. Uploaded datasets, reports, baselines, drift history, and decision cases are therefore lost when the instance is restarted or redeployed. This is acceptable for a public portfolio demo, but not for persistent monitoring or a team decision record.
 
 For single-instance persistent monitoring, upgrade to a paid service and attach a disk at:
 
@@ -54,6 +54,20 @@ VIBEDASH_RETENTION_HOURS=24
 The accepted range is 1–720 hours. Before each VibeDash request, the application removes expired regular files that match its server-generated naming schemes. It does not recursively traverse directories, follow symbolic links, or remove unrelated files. Cleanup totals and failures are emitted as structured operational events without logging uploaded filenames or session identifiers.
 
 This cleanup is activity-triggered. An inactive service may retain an expired file until the next VibeDash request, and an ephemeral host may remove it earlier during restart or redeployment. Therefore the setting is a bounded application lifecycle policy, not a wall-clock deletion SLA. A deployment requiring strict deletion timing should use a scheduled cleanup job or an object-store lifecycle rule.
+
+Evidence-linked decision cases are stored in the analysis-job SQLite database but
+use a separate lifecycle:
+
+```text
+VIBEDASH_DECISION_RETENTION_DAYS=90
+VIBEDASH_MAX_DECISION_CASES_PER_SCOPE=50
+```
+
+Closed cases are removed after the configured 1–730 day window when a VibeDash
+request triggers cleanup. Active cases remain until closed. The per-browser
+limit accepts 1–500 cases. These settings do not override the free host's
+ephemeral storage behaviour. Case access depends on the signed browser session,
+so this workflow is a single-user pilot rather than account-based persistence.
 
 ## Analysis job lifecycle
 

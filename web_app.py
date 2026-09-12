@@ -138,6 +138,16 @@ app.config['VIBEDASH_MAX_ACTIVE_JOBS'] = positive_int_env(
     25,
     maximum=1000,
 )
+app.config['VIBEDASH_DECISION_RETENTION_DAYS'] = positive_int_env(
+    'VIBEDASH_DECISION_RETENTION_DAYS',
+    90,
+    maximum=730,
+)
+app.config['VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'] = positive_int_env(
+    'VIBEDASH_MAX_DECISION_CASES_PER_SCOPE',
+    50,
+    maximum=500,
+)
 app.config['MAX_ROWS_PREVIEW'] = positive_int_env(
     'MAX_ROWS_PREVIEW',
     100000,

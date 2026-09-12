@@ -19,12 +19,13 @@ The project is designed as a decision-support system: every important conclusion
 | Profiling | Schema summary, missingness, duplicates, constant columns, distributions, correlations, and outlier diagnostics |
 | Evidence engine | Ranked findings with supporting metrics, confidence levels, sample sizes, and recommended next steps |
 | Decision brief | Up to three ranked priorities that connect a finding to evidence, decision risk, and the next verification action |
+| Decision workflow | Evidence snapshots, accountable owners, success metrics, targets, review dates, and measured outcomes |
 | Statistical validation | Welch group comparisons, Pearson correlation, effect sizes, 95% confidence intervals, and Benjamini–Hochberg FDR correction |
 | Exploratory ML | Multivariate anomaly scoring and quality-gated segmentation |
 | Predictive ML | Leakage-safe preprocessing, holdout evaluation, cross-validated model selection, and naive-baseline comparison |
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
-| Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
+| Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run and decision history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
 | Operations | Durable analysis-job states, bounded background execution, reproducibility fingerprints, request IDs, structured JSON logs, managed temporary-artifact retention, and a CI-gated Render Blueprint |
 | Quality evaluation | Versioned synthetic benchmarks for known signals, null-noise guardrails, reproducibility, and machine-readable CI evidence |
 
@@ -43,13 +44,15 @@ flowchart LR
     D --> G[Dashboard and reports]
     E --> G
     F --> G
+    G --> L[Decision case]
+    L --> M[Measured outcome]
     B --> H[Aggregate baseline]
     H --> I[Drift comparison]
     I --> J[History and alerts]
     J --> K[Web UI / API / CLI]
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, [docs/DATASET_READINESS.md](docs/DATASET_READINESS.md) for the pre-analysis contract, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported deployment and persistence model.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, [docs/DATASET_READINESS.md](docs/DATASET_READINESS.md) for the pre-analysis contract, [docs/PILOT_DECISION_WORKFLOW.md](docs/PILOT_DECISION_WORKFLOW.md) for the evidence-to-outcome product experiment, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported deployment and persistence model.
 
 ## Reproducible product demo
 
@@ -77,6 +80,8 @@ After preflight, VibeDash submits analysis through a durable job lifecycle and d
 
 Completed background runs appear under **History** for the same signed browser session. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, request and specification fingerprints, row/column coverage, truncation state, readiness outcome, decision-brief coverage, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
 
+From a completed background result, a user can turn one ranked priority into a decision case before the outcome is known. The case freezes a bounded evidence summary and audit fingerprint together with the owner, decision, success metric, target, and review date. Later, the same browser scope records whether the target was validated, invalidated, or cancelled. This creates an auditable evidence-to-outcome loop; it does not infer causality or prove that the action caused the observed result.
+
 ## Quick start with Docker
 
 ```bash
@@ -97,6 +102,7 @@ Open:
 - Main analysis: `http://localhost:5001/`
 - Prompt-to-dashboard: `http://localhost:5001/vibedash/`
 - Recent analysis history: `http://localhost:5001/vibedash/history`
+- Decision cases: `http://localhost:5001/vibedash/decisions`
 - Liveness: `http://localhost:5001/healthz`
 - Readiness: `http://localhost:5001/readyz`
 
@@ -111,6 +117,8 @@ The free service filesystem is ephemeral. This is suitable for the portfolio dem
 VibeDash working copies, session files, and generated HTML exports use a configurable retention window. `VIBEDASH_RETENTION_HOURS` defaults to 24 hours and accepts values from 1 to 720. Expired, application-owned artifacts are removed when VibeDash receives a request; unrelated files and symbolic links are never removed by this cleanup.
 
 The public single-instance deployment runs one bounded in-process analysis worker. Active work is limited per signed browser session and across the service; interrupted jobs are reported as failed rather than remaining indefinitely in `running` state.
+
+Decision cases use the same local SQLite database and signed browser scope. Closed cases are retained for 90 days by default, while active cases remain until they are closed. Configure this with `VIBEDASH_DECISION_RETENTION_DAYS` and `VIBEDASH_MAX_DECISION_CASES_PER_SCOPE`. A free Render restart or redeploy can remove them earlier because its filesystem is ephemeral.
 
 ## Local development
 
@@ -219,6 +227,7 @@ data-prism/
 │   └── monitoring_api.py      # Authenticated monitoring endpoints
 ├── vibedash/                  # Prompt-to-dashboard and evidence engines
 │   ├── analysis_jobs.py       # Durable job states, scoped history, bounded dispatcher
+│   ├── decision_cases.py      # Evidence-to-outcome cases and bounded retention
 │   ├── readiness_engine.py    # Pre-analysis quality and privacy contracts
 │   ├── decision_brief.py      # Ranked evidence-to-action priorities
 │   └── audit_manifest.py      # Versioned fingerprints and reproducibility metadata
@@ -235,6 +244,7 @@ data-prism/
 - VibeDash uploads, sessions, and exports are server-named and subject to the configured temporary-artifact retention window.
 - Analysis-job status is isolated by a server-signed browser scope; job payloads and internal exceptions are not returned by the status API.
 - Run history, stored results, and audit-manifest downloads require the same signed browser scope that created the analysis.
+- Decision cases are isolated by that browser scope and store bounded evidence snapshots rather than source dataset rows.
 - Audit manifests include schema metadata and cryptographic fingerprints but never source row values.
 - Monitoring API keys are compared using constant-time comparison and are not used directly as storage identifiers.
 - API drift uploads are transient; persisted baselines contain aggregate profiles rather than raw rows.
@@ -247,6 +257,8 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 
 - Classic analysis is synchronous; VibeDash uses a bounded in-process worker intended for the documented single-instance topology.
 - Runtime state uses the local filesystem and SQLite rather than managed object storage and a distributed database.
+- Decision cases are browser-scoped, not account- or team-scoped; clearing the session cookie loses access, and free-host restarts can remove the records.
+- Measured outcomes are user-entered observations. They support learning and accountability but do not establish that a decision caused the result.
 - Temporary-artifact cleanup is request-triggered, so it is not a wall-clock deletion SLA; strict retention guarantees require a scheduler or storage-provider lifecycle policy.
 - Predictive models are fast diagnostic baselines, not automatically deployable production models.
 - Statistical findings are observational and must not be interpreted as causal conclusions.
@@ -254,8 +266,8 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 
 ## Roadmap
 
+- Run 5–10 observed SaaS decision pilots and measure repeat use and willingness to pay
 - Managed scheduling and external alert delivery
 - External queue and independently scalable background workers
 - Object-storage and PostgreSQL adapters
 - Role-based access control and audit events
-- Publish and verify the live portfolio deployment

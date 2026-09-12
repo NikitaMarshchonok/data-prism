@@ -23,6 +23,7 @@ flowchart TB
         W --> VD[VibeDash blueprint]
         VD --> JQ[Bounded job dispatcher]
         JQ --> JS[(Analysis job SQLite)]
+        VD --> DC[(Decision case SQLite)]
         JQ --> AN
         DG --> AN[Analysis engines]
         VD --> AN
@@ -53,6 +54,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/insight_engine.py` | Deterministic evidence-backed findings | Causal claims |
 | `vibedash/readiness_engine.py` | Pre-analysis quality, schema, privacy, and coverage contracts | Domain approval or source-data correction |
 | `vibedash/decision_brief.py` | Deterministic ranking of evidence, decision risk, and next actions | Autonomous business decisions |
+| `vibedash/decision_cases.py` | Session-scoped evidence snapshots, decision commitments, outcomes, and bounded retention | Identity, collaboration, or causal attribution |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
@@ -98,6 +100,8 @@ The VibeDash landing page also exposes a one-click demonstration path. For user 
 The demo generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so it remains reproducible across machines. Both synchronous and background entry points call the same analysis-and-session pipeline.
 
 On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the random scope held in the signed Flask session; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 2 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
+
+A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed result. Both reads and writes require the same signed browser scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
 
 ## Model-evaluation boundary
 
@@ -152,6 +156,7 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | Interactive uploads | Local runtime directory | Session working data; ignored by Git |
 | Reports and exports | Local runtime directory | Generated artifact; ignored by Git |
 | Analysis job lifecycle and audit manifest | SQLite | Session-scoped terminal records follow VibeDash retention |
+| Decision cases and measured outcomes | SQLite | Browser-scoped; closed cases follow decision retention, active cases remain |
 | Drift baselines | JSON aggregate profiles | Persistent until removed by operator |
 | Drift history and alerts | SQLite | Retention-limited per monitoring scope |
 | Secrets | Environment variables | Never committed to the repository |
@@ -163,6 +168,7 @@ The storage interfaces are local by design for this stage. Object storage and Po
 - Supported file extensions and server-side filenames are validated.
 - Upload and preview sizes are bounded.
 - Active analysis jobs are bounded per signed browser scope and per service instance.
+- Decision writes require a session-bound CSRF token and cases are bounded per browser scope.
 - Monitoring endpoints remain disabled until a sufficiently long API key is configured.
 - API keys are compared with constant-time comparison.
 - Storage scopes are derived from hashes rather than raw secret values.

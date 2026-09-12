@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Evidence-linked decisions and measured outcomes for this Data Prism browser session.">
+    <title>Decision cases · Data Prism</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_decisions.css') }}">
+</head>
+<body>
+    <div class="page-glow" aria-hidden="true"></div>
+    <nav class="topbar" aria-label="Decision navigation">
+        <a class="brand" href="{{ url_for('vibedash.index') }}" aria-label="Data Prism home">
+            <span class="brand-mark" aria-hidden="true">DP</span>
+            <span>Data Prism</span>
+        </a>
+        <div class="nav-actions">
+            <span class="scope-label"><span></span> This browser session</span>
+            <a class="button button-secondary" href="{{ url_for('vibedash.analysis_history') }}">Analysis history</a>
+            <a class="button button-secondary" href="{{ url_for('vibedash.index') }}">New analysis</a>
+        </div>
+    </nav>
+
+    <main class="decision-shell">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <section class="flash-stack" aria-label="Notifications">
+                {% for category, message in messages %}<div class="flash-message flash-{{ category }}">{{ message }}</div>{% endfor %}
+            </section>
+            {% endif %}
+        {% endwith %}
+
+        <header class="decision-header">
+            <div>
+                <div class="eyebrow">Evidence to outcome</div>
+                <h1>Decision cases</h1>
+                <p>Track whether an evidence-backed recommendation produced the result expected before the action was taken.</p>
+            </div>
+            <aside class="retention-note">
+                <strong>Bounded persistence</strong>
+                <span>Closed cases are retained for up to {{ retention_days }} days. Active cases remain until closed.</span>
+            </aside>
+        </header>
+
+        {% if decision_cases %}
+        <div class="decision-layout {% if not selected_case %}list-only{% endif %}">
+            <section class="case-list" aria-label="Tracked decisions">
+                {% for case in decision_cases %}
+                {% set source = case.evidence_snapshot.priority %}
+                <a class="case-row status-{{ case.status }} {% if selected_case and selected_case.id == case.id %}is-selected{% endif %}" href="{{ url_for('vibedash.decision_case_detail', case_id=case.id) }}">
+                    <div class="case-row-heading">
+                        <span>Priority 0{{ case.priority }}</span>
+                        <em>{{ case.status }}</em>
+                    </div>
+                    <h2>{{ source.title }}</h2>
+                    <p>{{ case.decision }}</p>
+                    <div class="case-meta"><span>{{ case.owner }}</span><span>Review {{ case.review_label }}</span>{% if case.overdue %}<strong>Overdue</strong>{% endif %}</div>
+                </a>
+                {% endfor %}
+            </section>
+
+            {% if selected_case %}
+            {% set source = selected_case.evidence_snapshot %}
+            {% set priority = source.priority %}
+            <article class="case-detail status-{{ selected_case.status }}">
+                <header class="detail-heading">
+                    <div><small>Case {{ selected_case.short_id }}</small><h2>{{ priority.title }}</h2></div>
+                    <span>{{ selected_case.status }}</span>
+                </header>
+
+                <section class="source-panel">
+                    <div class="panel-label">Evidence captured before the decision</div>
+                    <p>{{ priority.finding }}</p>
+                    {% if priority.evidence %}<ul>{% for item in priority.evidence %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+                    <div class="source-meta">
+                        <span>{{ priority.confidence }} support</span>
+                        <span>{{ source.analysis_contract or 'Analysis contract unavailable' }}</span>
+                    </div>
+                </section>
+
+                <section class="commitment-grid" aria-label="Decision commitment">
+                    <div class="wide"><small>Decision to test</small><strong>{{ selected_case.decision }}</strong></div>
+                    <div><small>Owner</small><strong>{{ selected_case.owner }}</strong></div>
+                    <div><small>Review date</small><strong>{{ selected_case.review_label }}{% if selected_case.overdue %} · overdue{% endif %}</strong></div>
+                    <div><small>Success metric</small><strong>{{ selected_case.success_metric }}</strong></div>
+                    <div><small>Target outcome</small><strong>{{ selected_case.target_outcome }}</strong></div>
+                </section>
+
+                <form class="outcome-form" method="post" action="{{ url_for('vibedash.update_decision_case_outcome', case_id=selected_case.id) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <div class="form-heading"><small>Measured result</small><h3>What happened after the decision?</h3></div>
+                    <label>Status
+                        <select name="status" required>
+                            <option value="tracking" {% if selected_case.status == 'tracking' %}selected{% endif %}>Still tracking</option>
+                            <option value="validated" {% if selected_case.status == 'validated' %}selected{% endif %}>Target validated</option>
+                            <option value="invalidated" {% if selected_case.status == 'invalidated' %}selected{% endif %}>Target invalidated</option>
+                            <option value="cancelled" {% if selected_case.status == 'cancelled' %}selected{% endif %}>Decision cancelled</option>
+                        </select>
+                    </label>
+                    <label>Actual outcome
+                        <textarea name="actual_outcome" maxlength="1200" rows="4" placeholder="Record the observed metric, period, and important limitations.">{{ selected_case.actual_outcome }}</textarea>
+                    </label>
+                    <button class="button button-primary" type="submit">Update outcome</button>
+                </form>
+
+                <footer class="case-footer">
+                    <div><span>Dataset fingerprint</span><code>{{ source.dataset_sha256 or 'Unavailable' }}</code></div>
+                    <a href="{{ url_for('vibedash.analysis_job_result', job_id=selected_case.job_id) }}">Open source analysis →</a>
+                </footer>
+            </article>
+            {% endif %}
+        </div>
+        {% else %}
+        <section class="empty-state">
+            <span class="empty-icon" aria-hidden="true">↗</span>
+            <h2>No decisions are being tracked</h2>
+            <p>Complete an analysis, choose a Decision Brief priority, and define its owner, success metric, target, and review date.</p>
+            <a class="button button-primary" href="{{ url_for('vibedash.index') }}">Run an analysis</a>
+        </section>
+        {% endif %}
+
+        <p class="privacy-note">Decision cases contain bounded evidence summaries and audit fingerprints, not source dataset rows. Do not enter personal, secret, or regulated information in case fields.</p>
+    </main>
+</body>
+</html>
