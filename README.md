@@ -136,7 +136,24 @@ The public single-instance deployment runs one bounded in-process analysis worke
 
 Decision cases use the same local SQLite database and signed browser scope. Closed cases are retained for 90 days by default, while active cases remain until they are closed. Configure this with `VIBEDASH_DECISION_RETENTION_DAYS` and `VIBEDASH_MAX_DECISION_CASES_PER_SCOPE`. A free Render restart or redeploy can remove them earlier because its filesystem is ephemeral.
 
+## Offline runtime backup and recovery
+
+The local `runtime_backup.py` CLI supports offline `backup`, `verify`, and
+`restore` for a dedicated `DATA_PRISM_STATE_DIR`. Before invoking it, an
+operator must stop the web service, workers, drift jobs, and every other
+writer; `--offline` is only an acknowledgment and does not stop anything.
+Snapshots contain sensitive state, are not encrypted, and SHA-256 checks
+detect corruption but do not prove authenticity. Restore is fail-closed into
+a new directory only; never start the application from a partial restore.
+Preserve `FLASK_SECRET_KEY` and `DATA_PRISM_API_KEY` separately. See the
+[recovery runbook](docs/BACKUP_RECOVERY.md) for retention, withdrawal, and
+trusted-directory requirements. These tools do not provide managed persistent
+storage, off-host copies, encryption, or automatic scheduling for the free
+Render service.
+
 ## Local development
+
+### Development environment
 
 Python 3.11 or 3.12 is recommended.
 

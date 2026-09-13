@@ -13,6 +13,9 @@ datasets/
 outputs/
 reports/
 tmp/
+backups/
+runtime-state/
+runtime-restored*/
 *.log
 
 *.pdf

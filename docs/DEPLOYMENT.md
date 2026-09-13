@@ -43,7 +43,23 @@ Keep `DATA_PRISM_STATE_DIR=/var/lib/data-prism`. Render's disk documentation exp
 
 A persistent disk restricts the service to one instance and prevents zero-downtime deploys. A future multi-instance architecture should instead move uploads and reports to object storage and drift history to PostgreSQL.
 
+## Offline runtime backup and recovery
+
+`runtime_backup.py` provides offline snapshot, verification, and restore commands
+for a dedicated `DATA_PRISM_STATE_DIR`. It snapshots SQLite with its backup API,
+checks file digests, preserves artifact ages, and restores only into a new
+directory. The operator must stop all writers; `--offline` is an acknowledgment,
+not a stop mechanism. SHA-256 detects corruption, not authenticity, and the
+CLI provides no encryption. It does not provision managed persistent hosting,
+paid infrastructure, off-host copies, or automatic scheduling. There are no
+crash or power-loss durability guarantees beyond the implemented file fsyncs.
+Follow the [backup/recovery runbook](BACKUP_RECOVERY.md), including preservation
+of signing/API secrets and post-snapshot deletion requests, before using it on
+real data.
+
 ## Temporary-artifact retention
+
+### Retention settings
 
 VibeDash stores normalized upload copies, dashboard sessions, and generated HTML exports under `DATA_PRISM_STATE_DIR`. Their retention window is controlled by:
 
