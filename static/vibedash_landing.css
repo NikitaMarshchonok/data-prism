@@ -257,6 +257,19 @@ footer > span:first-child { color: var(--text); font: 600 16px var(--display); }
 footer p { margin: 0; text-align: center; }
 .model-status { text-transform: capitalize; }
 
+.pilot-guide { margin-bottom: 40px; padding: 26px; border: 1px solid var(--border); border-radius: 17px; background: rgba(15, 28, 25, 0.66); }
+.pilot-guide h2 { max-width: 800px; font-size: clamp(23px, 3vw, 32px); line-height: 1.2; }
+.pilot-guide ol { padding-left: 22px; display: grid; gap: 14px; color: var(--muted); line-height: 1.65; font-size: 14px; }
+.pilot-guide strong { color: var(--text); }
+.pilot-guide p, .pilot-privacy p { color: var(--muted); font-size: 13px; line-height: 1.65; }
+.pilot-consent { display: flex; align-items: flex-start; gap: 10px; margin: 22px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.pilot-consent input { flex: 0 0 auto; width: 17px; height: 17px; margin-top: 2px; accent-color: var(--accent); }
+.pilot-consent a { color: var(--accent); text-decoration: underline; }
+.analysis-form .form-wide { grid-column: 1 / -1; }
+.pilot-privacy { margin: 0 0 65px; padding: 22px; border: 1px solid var(--border); border-radius: 14px; scroll-margin-top: 30px; }
+.pilot-privacy summary { color: var(--text); cursor: pointer; }
+.pilot-privacy .button { max-width: 100%; white-space: normal; text-align: center; }
+
 @media (max-width: 900px) {
     .nav-links { display: none; }
     .hero { grid-template-columns: 1fr; gap: 44px; padding-top: 60px; }

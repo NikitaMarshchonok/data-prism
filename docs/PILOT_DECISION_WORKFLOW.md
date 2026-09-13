@@ -77,6 +77,11 @@ Evidence of value requires repeated use and willingness to adopt or pay. Demo
 completion, page views, and positive comments are not sufficient evidence of
 product-market fit.
 
+The [onboarding and measurement contract](PILOT_MEASUREMENT.md) implements a
+subset of the measures above. Review-date adherence, actual time saved, and paid
+adoption still require observation and follow-up; the automatic funnel must not
+be substituted for those measures.
+
 ## Not yet supported
 
 - accounts, teams, roles, approvals, or shared ownership;

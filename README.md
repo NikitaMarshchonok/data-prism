@@ -82,6 +82,22 @@ Completed background runs appear under **History** for the same signed browser s
 
 From a completed background result, a user can turn one ranked priority into a decision case before the outcome is known. The case freezes a bounded evidence summary and audit fingerprint together with the owner, decision, success metric, target, and review date. Later, the same browser scope records whether the target was validated, invalidated, or cancelled. This creates an auditable evidence-to-outcome loop; it does not infer causality or prove that the action caused the observed result.
 
+## Pilot onboarding and measurement
+
+The workspace includes a **Weekly SaaS review** guide and prompt preset. Each run
+offers an unchecked, optional usage-measurement checkbox. Consenting background
+analyses record bounded lifecycle milestones and can submit fixed-choice feedback;
+analysis still works without consent. Demo and upload cohorts are reported
+separately, and a browser can delete its pilot measurements without deleting its
+analyses or cases. This is first-party pseudonymous measurement, not proof of
+business value or product-market fit.
+
+Use `python pilot_report.py --database data/jobs/analysis_jobs.sqlite3 --days 7`
+to read aggregate activity from the default local database. Local activity is
+not Render activity. See [the pilot measurement contract](docs/PILOT_MEASUREMENT.md)
+for storage, reporting, and observed-pilot instructions, and
+[release acceptance gates](docs/RELEASE_READINESS.md) for remaining work.
+
 ## Quick start with Docker
 
 ```bash

@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator
 
+from .pilot_metrics import initialize_metrics, mark_stage, purge_metrics, register_analysis
+
 
 JOB_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 MAX_HISTORY_JOBS = 50
@@ -64,6 +66,7 @@ class AnalysisJobStore:
         *,
         max_active_per_scope: int = 2,
         max_active_total: int = 25,
+        pilot_scope_token: str | None = None,
     ) -> Dict[str, Any]:
         normalized_scope_id = _validated_scope_id(scope_id)
         if not isinstance(max_active_per_scope, int) or max_active_per_scope < 1:
@@ -109,6 +112,10 @@ class AnalysisJobStore:
                     created_at,
                     created_at,
                 ),
+            )
+            register_analysis(
+                connection, job_id, pilot_scope_token,
+                'demo' if payload.get('demo_dataset') else 'upload', created_at,
             )
         return self.get(job_id, normalized_scope_id)
 
@@ -180,6 +187,7 @@ class AnalysisJobStore:
             )
             if cursor.rowcount != 1:
                 return None
+            mark_stage(connection, normalized_id, 'started_at', timestamp)
         return self.get(normalized_id)
 
     def complete(
@@ -211,6 +219,8 @@ class AnalysisJobStore:
                     normalized_id,
                 ),
             )
+            if cursor.rowcount == 1:
+                mark_stage(connection, normalized_id, 'completed_at', timestamp)
         return cursor.rowcount == 1
 
     def fail(self, job_id: str, error_code: str = "analysis_failed") -> bool:
@@ -230,6 +240,8 @@ class AnalysisJobStore:
                 """,
                 (error_code, timestamp, timestamp, normalized_id),
             )
+            if cursor.rowcount == 1:
+                mark_stage(connection, normalized_id, 'failed_at', timestamp)
         return cursor.rowcount == 1
 
     def fail_stale_running(self, timeout_seconds: int) -> int:
@@ -240,6 +252,17 @@ class AnalysisJobStore:
         ).isoformat(timespec="milliseconds")
         timestamp = _utc_now()
         with self._connection() as connection:
+            connection.execute('BEGIN IMMEDIATE')
+            connection.execute(
+                """
+                UPDATE pilot_analyses SET failed_at = COALESCE(failed_at, ?)
+                WHERE job_id IN (
+                    SELECT id FROM analysis_jobs
+                    WHERE status = 'running' AND started_at < ?
+                )
+                """,
+                (timestamp, cutoff),
+            )
             cursor = connection.execute(
                 """
                 UPDATE analysis_jobs
@@ -258,6 +281,7 @@ class AnalysisJobStore:
             datetime.now(timezone.utc) - timedelta(hours=retention_hours)
         ).isoformat(timespec="milliseconds")
         with self._connection() as connection:
+            purge_metrics(connection)
             cursor = connection.execute(
                 """
                 DELETE FROM analysis_jobs
@@ -291,6 +315,7 @@ class AnalysisJobStore:
     def _initialize(self) -> None:
         with self._connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
+            initialize_metrics(connection)
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS analysis_jobs (

@@ -142,6 +142,7 @@ tbody tr:last-child td { border-bottom:0; }
 .decision-form input:focus,.decision-form select:focus,.decision-form textarea:focus { border-color:rgba(114,224,182,.55); }
 .decision-form .button { align-self:end; width:100%; }
 .decision-privacy { grid-column:2; margin:0; color:#718980; font-size:9px; }
+.pilot-notice { padding:16px; border:1px solid var(--border); border-radius:12px; color:var(--text); background:#10201c; }
 .chart-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; }
 .chart-card { min-width:0; padding:18px; }
 .chart-card h3 { margin:0 0 8px; font-size:15px; }
