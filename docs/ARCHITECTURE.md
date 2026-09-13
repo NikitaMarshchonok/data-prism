@@ -55,6 +55,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/readiness_engine.py` | Pre-analysis quality, schema, privacy, and coverage contracts | Domain approval or source-data correction |
 | `vibedash/decision_brief.py` | Deterministic ranking of evidence, decision risk, and next actions | Autonomous business decisions |
 | `vibedash/decision_cases.py` | Session-scoped evidence snapshots, decision commitments, outcomes, and bounded retention | Identity, collaboration, or causal attribution |
+| `vibedash/pilot_metrics.py` | Opt-in lifecycle measurement, bounded retention, feedback, and read-only aggregate reports | Customer identity, source rows, or proof of demand |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
@@ -156,6 +157,7 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | Interactive uploads | Local runtime directory | Session working data; ignored by Git |
 | Reports and exports | Local runtime directory | Generated artifact; ignored by Git |
 | Analysis job lifecycle and audit manifest | SQLite | Session-scoped terminal records follow VibeDash retention |
+| Opt-in pilot measurement | Analysis-job SQLite | 30 days from acceptance; 10,000-row cap; current-browser withdrawal |
 | Decision cases and measured outcomes | SQLite | Browser-scoped; closed cases follow decision retention, active cases remain |
 | Drift baselines | JSON aggregate profiles | Persistent until removed by operator |
 | Drift history and alerts | SQLite | Retention-limited per monitoring scope |

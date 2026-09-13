@@ -11,6 +11,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator
 
+from .pilot_metrics import initialize_metrics, mark_stage
+
 
 IDENTIFIER_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 TERMINAL_STATUSES = frozenset({"validated", "invalidated", "cancelled"})
@@ -165,6 +167,7 @@ class DecisionCaseStore:
                         timestamp,
                     ),
                 )
+                mark_stage(connection, normalized_job, 'decision_at', timestamp)
         except sqlite3.IntegrityError as error:
             raise DecisionCaseConflictError(
                 "This analysis priority is already being tracked."
@@ -282,6 +285,12 @@ class DecisionCaseStore:
                     normalized_scope,
                 ),
             )
+            if cursor.rowcount == 1 and status in {'validated', 'invalidated'}:
+                job = connection.execute(
+                    'SELECT job_id FROM decision_cases WHERE id = ? AND scope_id = ?',
+                    (normalized_id, normalized_scope),
+                ).fetchone()
+                mark_stage(connection, job['job_id'], 'outcome_at', timestamp)
         if cursor.rowcount != 1:
             return None
         return self.get(normalized_id, normalized_scope)
@@ -331,6 +340,7 @@ class DecisionCaseStore:
     def _initialize(self) -> None:
         with self._connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
+            initialize_metrics(connection)
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS decision_cases (

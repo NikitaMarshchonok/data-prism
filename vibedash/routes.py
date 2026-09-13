@@ -49,6 +49,7 @@ try:
     )
     from .audit_manifest import build_audit_manifest
     from .decision_brief import build_decision_brief
+    from .pilot_metrics import feedback_available, forget_scope, record_feedback, scope_token
     from .decision_cases import (
         DecisionCaseCapacityError,
         DecisionCaseConflictError,
@@ -443,6 +444,7 @@ if vibedash_bp:
         
         # Предустановленные промпты
         preset_prompts = {
+            "saas_review": "Review weekly SaaS performance: compare revenue, customer count and churn across periods and available segments. Check data quality and show supporting numbers and limitations. Identify what needs investigation before making a business decision.",
             "sales": "Sales dashboard for a monthly CSV: main KPIs (Total Sales, Orders, AOV), top 10 categories, revenue trend by week, bar by region, filter by region, highlight YoY growth.",
             "finance": "Финансы: сумма дохода и расходов, дельта, тренд по неделям, топ-категории расходов, фильтр по отделу, комментарий по выбросам.",
             "real_estate": "Real-estate listing analysis: median price by city, distribution by rooms, time trend by posting date (W), filter by city, show top 10 streets by average price."
@@ -452,6 +454,7 @@ if vibedash_bp:
                              preset_prompts=preset_prompts,
                              demo_prompt=DEMO_PROMPT,
                              retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
+                             pilot_csrf_token=_decision_csrf_token(),
                              ollama_available=ollama_available)
 
 
@@ -662,6 +665,9 @@ if vibedash_bp:
     @vibedash_bp.post('/jobs')
     def create_analysis_job():
         """Queue one bounded VibeDash analysis and return its status URL."""
+        pilot_opt_in = request.form.get('pilot_metrics') == 'yes'
+        if pilot_opt_in and not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Refresh the page before opting into pilot measurement.'}), 400
         prompt = request.form.get('prompt', '').strip()
         if not prompt:
             return jsonify({'error': 'Analysis description is required.'}), 400
@@ -740,6 +746,10 @@ if vibedash_bp:
                 max_active_total=current_app.config[
                     'VIBEDASH_MAX_ACTIVE_JOBS'
                 ],
+                pilot_scope_token=(
+                    scope_token(_analysis_scope_id(), current_app.secret_key)
+                    if pilot_opt_in else None
+                ),
             )
         except AnalysisJobCapacityError:
             upload_path.unlink(missing_ok=True)
@@ -836,7 +846,48 @@ if vibedash_bp:
             ),
             analysis_job_id=job['id'],
             decision_csrf_token=_decision_csrf_token(),
+            pilot_feedback_available=feedback_available(
+                current_app.config['VIBEDASH_JOB_STORE_PATH'], job['id'],
+            ),
         )
+
+
+    @vibedash_bp.post('/jobs/<job_id>/feedback')
+    def pilot_feedback(job_id):
+        if not JOB_ID_PATTERN.fullmatch(job_id):
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Invalid form token.'}), 400
+        job = _analysis_job_store().get(job_id, _analysis_scope_id())
+        if job is None:
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        if job['status'] != 'completed':
+            return jsonify({'error': 'Analysis result is not ready.'}), 409
+        try:
+            saved = record_feedback(
+                current_app.config['VIBEDASH_JOB_STORE_PATH'], job_id,
+                request.form.get('usefulness'), request.form.get('blocker'),
+            )
+            message = (
+                'Thank you. Your feedback was saved.' if saved else
+                'Feedback is unavailable for this run or its measurement has been removed.'
+            )
+            flash(message, 'info')
+        except ValueError:
+            flash('Please select a usefulness rating and a listed blocker.', 'error')
+        return redirect(url_for('vibedash.analysis_job_result', job_id=job_id), code=303)
+
+
+    @vibedash_bp.post('/pilot/forget')
+    def forget_pilot_metrics():
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Invalid form token.'}), 400
+        forget_scope(
+            current_app.config['VIBEDASH_JOB_STORE_PATH'],
+            scope_token(_analysis_scope_id(), current_app.secret_key),
+        )
+        flash('Pilot measurement for this browser was removed. Your analyses and decisions are still available.', 'info')
+        return redirect(url_for('vibedash.index'), code=303)
 
 
     @vibedash_bp.post('/jobs/<job_id>/decisions')

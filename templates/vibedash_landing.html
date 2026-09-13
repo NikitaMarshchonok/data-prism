@@ -54,6 +54,7 @@
                 <div class="hero-actions">
                     <a class="button button-primary" href="#workspace">Analyze your data</a>
                     <form id="demo-form" method="POST" action="{{ url_for('vibedash.preview') }}">
+                        <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
                         <input type="hidden" name="demo_dataset" value="saas_growth">
                         <input type="hidden" name="prompt" value="{{ demo_prompt }}">
                         <button class="button button-secondary demo-submit" id="demo-submit" type="submit" aria-describedby="demo-loading-status">
@@ -65,6 +66,10 @@
                         </span>
                     </form>
                 </div>
+                <label class="pilot-consent">
+                    <input type="checkbox" form="demo-form" name="pilot_metrics" value="yes">
+                    <span>Optional: share usage milestones for this demo. <a href="#pilot-privacy">What is collected?</a></span>
+                </label>
                 <ul class="trust-list" aria-label="Product guarantees">
                     <li><span>✓</span> No demo setup</li>
                     <li><span>✓</span> Synthetic, privacy-safe data</li>
@@ -122,6 +127,16 @@
         </section>
 
         <section class="workspace" id="workspace">
+            <aside class="pilot-guide" aria-labelledby="pilot-guide-heading">
+                <div class="eyebrow"><span></span> Start with one weekly review</div>
+                <h2 id="pilot-guide-heading">What changed in our SaaS metrics—and what should we investigate?</h2>
+                <ol>
+                    <li><strong>Prepare comparable periods.</strong> Use a CSV with one consistent row unit, a date, and numeric business metrics such as revenue, customer count, or an already calculated churn rate. Include plan or region only if available.</li>
+                    <li><strong>Check the evidence.</strong> Review data-quality warnings, trends, and supporting numbers. A relationship is not proof of its cause; metric definitions and denominators still need your review.</li>
+                    <li><strong>Choose one next action.</strong> In the result, track a priority with an owner, a success metric, and a review date. Return to Decisions to record what actually happened.</li>
+                </ol>
+                <p>Start with synthetic or approved, de-identified data. This public pilot is not a secure enterprise workspace.</p>
+            </aside>
             <div class="section-heading">
                 <div>
                     <div class="eyebrow"><span></span> Interactive workspace</div>
@@ -131,6 +146,7 @@
             </div>
 
             <form class="analysis-form" id="analysis-form" method="POST" action="{{ url_for('vibedash.preview') }}" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
                 <div class="field-card upload-card">
                     <label for="datafile">
                         <span class="field-number">1</span>
@@ -147,6 +163,7 @@
                     </label>
                     <textarea id="prompt" name="prompt" rows="5" required placeholder="Example: Compare revenue and churn by plan and region, identify anomalies, validate the strongest differences, and recommend what to investigate next."></textarea>
                     <div class="prompt-presets" aria-label="Prompt templates">
+                        <button type="button" data-prompt="{{ preset_prompts.saas_review|e }}">Weekly SaaS review</button>
                         <button type="button" data-prompt="{{ preset_prompts.sales|e }}">Revenue</button>
                         <button type="button" data-prompt="{{ preset_prompts.finance|e }}">Finance</button>
                         <button type="button" data-prompt="{{ preset_prompts.real_estate|e }}">Real estate</button>
@@ -166,6 +183,10 @@
                     <p class="readiness-privacy">Preflight creates no retained Data Prism working copy of the uploaded rows.</p>
                 </section>
 
+                <label class="pilot-consent form-wide">
+                    <input type="checkbox" name="pilot_metrics" value="yes">
+                    <span>Optional: share usage milestones for this analysis and enable a short feedback form. <a href="#pilot-privacy">What is collected?</a></span>
+                </label>
                 <button class="button button-primary submit-button" id="submit-btn" type="submit">
                     Create evidence dashboard <span aria-hidden="true">→</span>
                 </button>
@@ -174,6 +195,19 @@
                 </div>
             </form>
         </section>
+
+        <details class="pilot-privacy" id="pilot-privacy">
+            <summary>Optional pilot measurement &amp; privacy</summary>
+            <p>Unchecked by default and chosen separately for each run. Analysis works without opting in. Measurement records contain a job ID, a keyed pseudonymous browser token, demo/upload type, milestone timestamps, and optional fixed-choice feedback. They do not contain source rows, filenames, prompts, IP addresses, or decision text. These measurements stay on this service; no third-party analytics tracker is used.</p>
+            <p>This applies only to pilot measurement. The analysis itself temporarily stores your uploaded data and results; decision cases store the evidence summary and text you provide. Measurement records expire 30 days after a run starts and are removed during subsequent application activity. The service keeps at most 10,000 measurement records. Demo activity is reported separately from uploads.</p>
+            <p>Access is tied to this browser, not a user account. Clearing cookies loses access to history and to this deletion control for earlier scopes. Free hosting may erase runtime data on restart or redeploy; do not use it as your only record.</p>
+            <noscript><p>JavaScript is disabled: only synchronous preview is available and pilot usage is not collected.</p></noscript>
+            <form method="post" action="{{ url_for('vibedash.forget_pilot_metrics') }}">
+                <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
+                <button class="button button-secondary" type="submit">Delete this browser’s pilot measurements</button>
+            </form>
+            <p>This deletes measurement records only, not your analyses or decision cases. Future runs are still opt-in.</p>
+        </details>
 
         <section class="capabilities" id="capabilities">
             <div class="section-heading compact-heading">
@@ -217,6 +251,12 @@
         const readinessUrl = {{ url_for('vibedash.dataset_readiness')|tojson }};
         let readinessState = 'idle';
         let readinessRequest = null;
+
+        document.querySelectorAll('a[href="#pilot-privacy"]').forEach((link) => {
+            link.addEventListener('click', () => {
+                document.getElementById('pilot-privacy').open = true;
+            });
+        });
 
         fileInput.addEventListener('change', async (event) => {
             const selectedFile = event.target.files[0];
