@@ -56,6 +56,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/decision_brief.py` | Deterministic ranking of evidence, decision risk, and next actions | Autonomous business decisions |
 | `vibedash/decision_cases.py` | Session-scoped evidence snapshots, decision commitments, outcomes, and bounded retention | Identity, collaboration, or causal attribution |
 | `vibedash/pilot_metrics.py` | Opt-in lifecycle measurement, bounded retention, feedback, and read-only aggregate reports | Customer identity, source rows, or proof of demand |
+| `src/runtime_backup.py` and `runtime_backup.py` | Offline bounded snapshots, integrity verification, and fail-closed restore into a new directory | Hosting persistence, encryption, authenticity, scheduling, or account recovery |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
@@ -164,6 +165,12 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | Secrets | Environment variables | Never committed to the repository |
 
 The storage interfaces are local by design for this stage. Object storage and PostgreSQL adapters are natural extension points for a hosted multi-instance deployment.
+
+Offline runtime backup is operator-controlled local tooling, not a persistence
+service. It requires all writers to be stopped, keeps signing/API secrets
+outside the snapshot, and provides no managed, off-host, encrypted, or scheduled
+backup. A real durable-state and recovery gate therefore remains separate from
+the presence of this CLI.
 
 ## Security controls
 
