@@ -6,6 +6,7 @@ import io
 import os
 import re
 import secrets
+import threading
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -47,7 +48,10 @@ try:
         JOB_ID_PATTERN,
         MAX_HISTORY_JOBS,
     )
-    from .audit_manifest import build_audit_manifest
+    from .audit_manifest import (
+        build_audit_manifest,
+        build_period_comparison_manifest,
+    )
     from .decision_brief import build_decision_brief
     from .pilot_metrics import feedback_available, forget_scope, record_feedback, scope_token
     from .decision_cases import (
@@ -58,6 +62,15 @@ try:
         MAX_DECISION_CASES,
     )
     from .readiness_engine import DatasetReadinessEngine
+    from .period_comparison import (
+        MAX_COLUMNS as COMPARISON_MAX_COLUMNS,
+        MAX_MEMORY_BYTES as COMPARISON_MAX_MEMORY_BYTES,
+        MAX_ROWS as COMPARISON_MAX_ROWS,
+        MAX_REQUEST_BYTES as COMPARISON_MAX_REQUEST_BYTES,
+        MAX_TOTAL_COLUMNS as COMPARISON_MAX_TOTAL_COLUMNS,
+        MAX_TOTAL_ROWS as COMPARISON_MAX_TOTAL_ROWS,
+        build_period_comparison,
+    )
     from . import vibedash_bp
 except ImportError:
     # Flask не установлен, создаем заглушки
@@ -66,6 +79,7 @@ except ImportError:
 
 if vibedash_bp:
     analysis_job_dispatcher = AnalysisJobDispatcher(max_workers=1)
+    _CSV_HEADER_LOCK = threading.Lock()
 
     class DatasetReadinessBlocked(ValueError):
         """The uploaded table failed one or more safe readiness contracts."""
@@ -173,13 +187,20 @@ if vibedash_bp:
         }
 
 
-    def _load_vibedash_csv(source):
+    def _load_vibedash_csv(source, *, nrows=None, max_columns=None):
         last_error = None
         for encoding in ('utf-8', 'latin-1', 'cp1252'):
             try:
                 if hasattr(source, 'seek'):
                     source.seek(0)
-                dataframe = pd.read_csv(source, encoding=encoding)
+                if max_columns is not None:
+                    header = _read_original_csv_header(source, encoding)
+                    if len(header) > max_columns:
+                        raise ValueError('The CSV exceeds the column limit.')
+                read_options = {'encoding': encoding}
+                if nrows is not None:
+                    read_options['nrows'] = nrows
+                dataframe = pd.read_csv(source, **read_options)
                 header = _read_original_csv_header(source, encoding)
                 normalized = [str(column).strip() for column in header]
                 if len(normalized) == len(dataframe.columns) and (
@@ -189,19 +210,256 @@ if vibedash_bp:
                 return dataframe
             except UnicodeDecodeError as error:
                 last_error = error
+            except csv.Error as error:
+                raise ValueError('The CSV header could not be read.') from error
         raise ValueError('The CSV encoding is not supported.') from last_error
 
 
+    def _comparison_label(value, field):
+        if not isinstance(value, str):
+            raise ValueError(f'{field} is invalid.')
+        value = value.strip()
+        if (
+            not value
+            or len(value) > 80
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError(f'{field} is invalid.')
+        return value
+
+
+    def _comparison_filename(value, field):
+        if not isinstance(value, str):
+            raise ValueError(f'{field} is invalid.')
+        normalized = secure_filename(value)
+        if (
+            not normalized
+            or normalized != value
+            or len(value) > 255
+            or Path(value).suffix.lower() != '.csv'
+        ):
+            raise ValueError(f'{field} is invalid.')
+        return value
+
+
+    def _cleanup_comparison_inputs(paths):
+        for path in paths:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                current_app.logger.warning(
+                    'Comparison input cleanup failed',
+                    extra={'event': 'vibedash_comparison_input_cleanup_failed'},
+                )
+
+
+    def _save_comparison_upload(upload, path):
+        """Create an upload without following a pre-existing symlink."""
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, 'O_NOFOLLOW'):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags, 0o600)
+        try:
+            with os.fdopen(descriptor, 'wb') as destination:
+                descriptor = None
+                upload.save(destination)
+        except Exception:
+            if descriptor is not None:
+                os.close(descriptor)
+            path.unlink(missing_ok=True)
+            raise
+
+
+    def _comparison_input_path(stored_filename):
+        if not isinstance(stored_filename, str) or not re.fullmatch(
+            r'vibedash-[0-9a-f]{32}\.csv', stored_filename
+        ):
+            raise ValueError('The comparison input reference is invalid.')
+        upload_directory = Path(current_app.config['UPLOAD_FOLDER'])
+        path = upload_directory / stored_filename
+        if path.is_symlink() or not path.is_file():
+            raise FileNotFoundError('The comparison input is unavailable.')
+        return path
+
+
+    def _comparison_payload_paths(payload):
+        """Resolve only the two generated comparison input references."""
+        if not isinstance(payload, dict) or payload.get('analysis_kind') != 'period_comparison':
+            return []
+        paths = []
+        for key in ('baseline', 'current'):
+            item = payload.get(key)
+            if not isinstance(item, dict):
+                continue
+            stored_filename = item.get('stored_filename')
+            try:
+                paths.append(_comparison_input_path(stored_filename))
+            except (FileNotFoundError, ValueError):
+                # Cleanup should also be attempted for a missing input and
+                # must never trust arbitrary paths from a persisted payload.
+                if isinstance(stored_filename, str) and re.fullmatch(
+                    r'vibedash-[0-9a-f]{32}\.csv', stored_filename
+                ):
+                    paths.append(Path(current_app.config['UPLOAD_FOLDER']) / stored_filename)
+        return paths
+
+
+    def _build_period_comparison_session(payload, *, run_id=None):
+        """Build and persist an aggregate-only two-period comparison."""
+        if not isinstance(payload, dict) or payload.get('analysis_kind') != 'period_comparison':
+            raise ValueError('The comparison request is invalid.')
+        baseline = payload.get('baseline')
+        current = payload.get('current')
+        if not isinstance(baseline, dict) or not isinstance(current, dict):
+            raise ValueError('The comparison inputs are invalid.')
+        paths = []
+        try:
+            if baseline.get('stored_filename') == current.get('stored_filename'):
+                raise ValueError('The comparison inputs must be distinct.')
+            # Register both deterministic paths before checking existence so a
+            # missing first input cannot strand the second upload on a worker
+            # failure/restart.
+            stored_names = (
+                baseline.get('stored_filename'),
+                current.get('stored_filename'),
+            )
+            for stored_name in stored_names:
+                if not isinstance(stored_name, str) or not re.fullmatch(
+                    r'vibedash-[0-9a-f]{32}\.csv', stored_name
+                ):
+                    raise ValueError('The comparison input reference is invalid.')
+            upload_directory = Path(current_app.config['UPLOAD_FOLDER'])
+            paths.extend(upload_directory / stored_name for stored_name in stored_names)
+            baseline_path, current_path = paths
+            for path in paths:
+                if path.is_symlink() or not path.is_file():
+                    raise FileNotFoundError('The comparison input is unavailable.')
+            baseline_label = _comparison_label(baseline.get('label'), 'baseline_label')
+            current_label = _comparison_label(current.get('label'), 'current_label')
+            if baseline_label.casefold() == current_label.casefold():
+                raise ValueError('The comparison labels must be distinct.')
+
+            # nrows=100001 is intentional: one extra row is enough to reject a
+            # file over the hard 100,000-row contract without loading it all.
+            baseline_df = _load_vibedash_csv(
+                baseline_path,
+                nrows=min(COMPARISON_MAX_ROWS, COMPARISON_MAX_TOTAL_ROWS) + 1,
+                max_columns=COMPARISON_MAX_COLUMNS,
+            )
+            if len(baseline_df) > COMPARISON_MAX_ROWS or len(baseline_df) > COMPARISON_MAX_TOTAL_ROWS:
+                raise ValueError('The comparison inputs exceed the row limit.')
+            remaining_rows = COMPARISON_MAX_TOTAL_ROWS - len(baseline_df)
+            remaining_columns = COMPARISON_MAX_TOTAL_COLUMNS - baseline_df.shape[1]
+            if remaining_columns < 1:
+                raise ValueError('The comparison inputs exceed the combined column limit.')
+            current_df = _load_vibedash_csv(
+                current_path,
+                nrows=min(COMPARISON_MAX_ROWS, remaining_rows) + 1,
+                max_columns=min(COMPARISON_MAX_COLUMNS, remaining_columns),
+            )
+            if len(baseline_df) > COMPARISON_MAX_ROWS or len(current_df) > COMPARISON_MAX_ROWS:
+                raise ValueError('The comparison inputs exceed the row limit.')
+            if len(baseline_df) + len(current_df) > COMPARISON_MAX_TOTAL_ROWS:
+                raise ValueError('The comparison inputs exceed the combined row limit.')
+            if baseline_df.shape[1] + current_df.shape[1] > COMPARISON_MAX_TOTAL_COLUMNS:
+                raise ValueError('The comparison inputs exceed the combined column limit.')
+            combined_memory = sum(
+                int(frame.memory_usage(index=True, deep=True).sum())
+                for frame in (baseline_df, current_df)
+            )
+            if combined_memory > COMPARISON_MAX_MEMORY_BYTES:
+                raise ValueError('The comparison inputs exceed the combined memory limit.')
+
+            report = build_period_comparison(
+                baseline_df,
+                current_df,
+                baseline_label=baseline_label,
+                current_label=current_label,
+            )
+            baseline_filename = _comparison_filename(
+                baseline.get('filename'), 'baseline_filename'
+            )
+            current_filename = _comparison_filename(
+                current.get('filename'), 'current_filename'
+            )
+            manifest = build_period_comparison_manifest(
+                baseline_path=baseline_path,
+                current_path=current_path,
+                baseline_dataframe=baseline_df,
+                current_dataframe=current_df,
+                baseline_filename=baseline_filename,
+                current_filename=current_filename,
+                baseline_label=baseline_label,
+                current_label=current_label,
+                comparison_result=report,
+                run_id=run_id,
+                engine_version=current_app.config['SERVICE_VERSION'],
+                retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
+            )
+            session_id = str(uuid.uuid4())
+            session_data = {
+                'analysis_kind': 'period_comparison',
+                'comparison': report,
+                'report': report,
+                'comparison_result': report,
+                'baseline_filename': baseline_filename,
+                'current_filename': current_filename,
+                'baseline_label': baseline_label,
+                'current_label': current_label,
+                'filenames': {
+                    'baseline': baseline_filename,
+                    'current': current_filename,
+                },
+                'labels': {
+                    'baseline': baseline_label,
+                    'current': current_label,
+                },
+                'filename': f'{baseline_filename} vs {current_filename}',
+                'audit_manifest': manifest,
+            }
+            if not save_session_data(session_id, session_data):
+                raise RuntimeError('The comparison session could not be persisted.')
+            return {'session_id': session_id, 'manifest': manifest}
+        finally:
+            # Uploads are worker inputs only. Retention cleanup remains the
+            # fallback for an interrupted process where this finally is skipped.
+            _cleanup_comparison_inputs(paths)
+
+
     def _read_original_csv_header(source, encoding):
-        if hasattr(source, 'seek'):
-            source.seek(0)
-            sample = source.read(64 * 1024)
-            source.seek(0)
-            if isinstance(sample, bytes):
-                sample = sample.decode(encoding)
-            return next(csv.reader(io.StringIO(sample)), [])
-        with Path(source).open('r', encoding=encoding, newline='') as handle:
-            return next(csv.reader(handle), [])
+        # ``read(64 KiB)`` is not a valid CSV-header parser: a single quoted
+        # field or a wide header can legally exceed that buffer and would make
+        # the column-limit check see only a partial row. Parse the complete
+        # first record instead, while bounding csv's field parser to the same
+        # request-size contract used by comparison uploads.
+        # ``csv.field_size_limit`` is process-global. Keep the enlarged limit
+        # scoped to this parser call and serialize callers so another request
+        # never observes a permanently changed parser setting.
+        with _CSV_HEADER_LOCK:
+            previous_limit = csv.field_size_limit()
+            csv.field_size_limit(
+                max(previous_limit, COMPARISON_MAX_REQUEST_BYTES)
+            )
+            try:
+                if hasattr(source, 'seek'):
+                    source.seek(0)
+                    if isinstance(source, io.TextIOBase):
+                        try:
+                            return next(csv.reader(source), [])
+                        finally:
+                            source.seek(0)
+                    wrapper = io.TextIOWrapper(source, encoding=encoding, newline='')
+                    try:
+                        return next(csv.reader(wrapper), [])
+                    finally:
+                        # Keep the caller's file object usable; callers seek it
+                        # before handing it to pandas and after this returns.
+                        wrapper.detach()
+                        source.seek(0)
+                with Path(source).open('r', encoding=encoding, newline='') as handle:
+                    return next(csv.reader(handle), [])
+            finally:
+                csv.field_size_limit(previous_limit)
 
 
     def _build_dashboard_session(payload, *, run_id=None):
@@ -290,6 +548,11 @@ if vibedash_bp:
 
 
     def _process_analysis_job(job):
+        if (job.get('payload') or {}).get('analysis_kind') == 'period_comparison':
+            return _build_period_comparison_session(
+                job.get('payload', {}),
+                run_id=job['id'],
+            )
         result = _build_dashboard_session(
             job.get('payload', {}),
             run_id=job['id'],
@@ -304,6 +567,7 @@ if vibedash_bp:
         manifest = job.get('manifest') or {}
         payload = job.get('payload') or {}
         manifest_dataset = manifest.get('dataset') or {}
+        manifest_inputs = manifest.get('inputs') or {}
         manifest_specification = manifest.get('specification') or {}
         manifest_evidence = manifest.get('evidence') or {}
         created_at = job.get('created_at')
@@ -324,6 +588,63 @@ if vibedash_bp:
         duration_seconds = None
         if started and completed:
             duration_seconds = max(0.0, (completed - started).total_seconds())
+
+        if payload.get('analysis_kind') == 'period_comparison':
+            baseline = payload.get('baseline') or {}
+            current = payload.get('current') or {}
+            baseline_manifest = manifest_inputs.get('baseline') or {}
+            current_manifest = manifest_inputs.get('current') or {}
+            return {
+                'id': job['id'],
+                'short_id': job['id'][:10],
+                'status': job['status'],
+                'filename': (
+                    f"{baseline.get('filename') or baseline_manifest.get('filename') or 'baseline.csv'}"
+                    f" vs {current.get('filename') or current_manifest.get('filename') or 'current.csv'}"
+                ),
+                'prompt': 'Period comparison',
+                'is_demo': False,
+                'title': (
+                    f"{baseline.get('label') or baseline_manifest.get('label') or 'Baseline'}"
+                    f" vs {current.get('label') or current_manifest.get('label') or 'Current'}"
+                ),
+                'created_at': (
+                    created.strftime('%Y-%m-%d %H:%M UTC')
+                    if created else 'Unknown time'
+                ),
+                'duration_seconds': duration_seconds,
+                'manifest': manifest,
+                'audit_available': bool(
+                    (baseline_manifest.get('content_sha256'))
+                    and (current_manifest.get('content_sha256'))
+                ),
+                'analyzed_rows': (
+                    f"{baseline_manifest.get('analyzed_rows', 0)} / "
+                    f"{current_manifest.get('analyzed_rows', 0)}"
+                ) if manifest_inputs else None,
+                'column_count': (
+                    f"{baseline_manifest.get('column_count', 0)} / "
+                    f"{current_manifest.get('column_count', 0)}"
+                ) if manifest_inputs else None,
+                'insight_count': None,
+                'statistical_test_count': (
+                    (manifest.get('comparison') or {}).get('tested_metric_count')
+                    or ((manifest.get('comparison') or {}).get('counts') or {}).get(
+                        'tested_metrics'
+                    )
+                ),
+                'dataset_sha256': None,
+                'result_url': (
+                    url_for('vibedash.analysis_job_result', job_id=job['id'])
+                    if job['status'] == 'completed' and job.get('session_id')
+                    else None
+                ),
+                'manifest_url': (
+                    url_for('vibedash.analysis_job_manifest', job_id=job['id'])
+                    if job['status'] == 'completed' and manifest
+                    else None
+                ),
+            }
 
         return {
             'id': job['id'],
@@ -397,16 +718,23 @@ if vibedash_bp:
             )
 
         store = _analysis_job_store()
-        stale_jobs = store.fail_stale_running(
+        stale_job_records = store.fail_stale_running_jobs(
             current_app.config['VIBEDASH_JOB_TIMEOUT_SECONDS']
         )
+        # A process restart can leave a comparison job in running state while
+        # its worker is gone.  Remove both temporary inputs as part of the
+        # stale-job transition instead of waiting for retention cleanup.
+        for stale_job in stale_job_records:
+            _cleanup_comparison_inputs(
+                _comparison_payload_paths(stale_job.get('payload'))
+            )
         removed_jobs = store.purge_terminal(
             current_app.config['VIBEDASH_RETENTION_HOURS']
         )
         removed_decisions = _decision_case_store().purge_terminal(
             current_app.config['VIBEDASH_DECISION_RETENTION_DAYS']
         )
-        if stale_jobs:
+        if stale_job_records:
             current_app.logger.warning(
                 "Interrupted VibeDash jobs marked as failed",
                 extra={"event": "vibedash_jobs_interrupted"},
@@ -784,6 +1112,171 @@ if vibedash_bp:
         }), 202
 
 
+    @vibedash_bp.post('/comparisons/jobs')
+    def create_period_comparison_job():
+        """Queue one bounded comparison between two uploaded CSV periods."""
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Invalid form token.'}), 400
+        if (
+            request.content_length is not None
+            and request.content_length > COMPARISON_MAX_REQUEST_BYTES
+        ):
+            return jsonify({'error': 'The comparison request exceeds the upload limit.'}), 413
+        baseline_upload = request.files.get('baseline_file')
+        current_upload = request.files.get('current_file')
+        if (
+            baseline_upload is None
+            or not baseline_upload.filename
+            or current_upload is None
+            or not current_upload.filename
+        ):
+            return jsonify({'error': 'Two CSV files are required.'}), 400
+
+        try:
+            baseline_label = _comparison_label(
+                request.form.get('baseline_label', ''), 'baseline_label'
+            )
+            current_label = _comparison_label(
+                request.form.get('current_label', ''), 'current_label'
+            )
+            if baseline_label.casefold() == current_label.casefold():
+                raise ValueError('The comparison labels must be distinct.')
+        except ValueError:
+            return jsonify({'error': 'Comparison labels must be distinct, non-empty, and at most 80 characters.'}), 400
+
+        filenames = [
+            secure_filename(baseline_upload.filename),
+            secure_filename(current_upload.filename),
+        ]
+        if any(
+            not name
+            or len(name) > 255
+            or Path(name).suffix.lower() != '.csv'
+            for name in filenames
+        ):
+            return jsonify({'error': 'VibeDash currently accepts CSV files only.'}), 400
+
+        upload_directory = Path(current_app.config['UPLOAD_FOLDER'])
+        upload_directory.mkdir(parents=True, exist_ok=True)
+        stored_filenames = [
+            f'vibedash-{uuid.uuid4().hex}.csv',
+            f'vibedash-{uuid.uuid4().hex}.csv',
+        ]
+        paths = [upload_directory / name for name in stored_filenames]
+        keep_uploads = False
+        try:
+            # Save sequentially so a failure in the second stream can still
+            # remove the first file deterministically.
+            _save_comparison_upload(baseline_upload, paths[0])
+            _save_comparison_upload(current_upload, paths[1])
+            if sum(path.stat().st_size for path in paths) > COMPARISON_MAX_REQUEST_BYTES:
+                return jsonify({'error': 'The comparison inputs exceed the upload limit.'}), 413
+            baseline_df = _load_vibedash_csv(
+                paths[0],
+                nrows=min(COMPARISON_MAX_ROWS, COMPARISON_MAX_TOTAL_ROWS) + 1,
+                max_columns=COMPARISON_MAX_COLUMNS,
+            )
+            if len(baseline_df) > COMPARISON_MAX_ROWS or len(baseline_df) > COMPARISON_MAX_TOTAL_ROWS:
+                return jsonify({'error': 'The comparison inputs exceed the row limit.'}), 422
+            remaining_rows = COMPARISON_MAX_TOTAL_ROWS - len(baseline_df)
+            remaining_columns = COMPARISON_MAX_TOTAL_COLUMNS - baseline_df.shape[1]
+            if remaining_columns < 1:
+                return jsonify({'error': 'The comparison inputs exceed the combined column limit.'}), 422
+            current_df = _load_vibedash_csv(
+                paths[1],
+                nrows=min(COMPARISON_MAX_ROWS, remaining_rows) + 1,
+                max_columns=min(COMPARISON_MAX_COLUMNS, remaining_columns),
+            )
+            if len(baseline_df) > COMPARISON_MAX_ROWS or len(current_df) > COMPARISON_MAX_ROWS:
+                return jsonify({'error': 'The comparison inputs exceed the row limit.'}), 422
+            if len(baseline_df) + len(current_df) > COMPARISON_MAX_TOTAL_ROWS:
+                return jsonify({'error': 'The comparison inputs exceed the combined row limit.'}), 422
+            if baseline_df.shape[1] + current_df.shape[1] > COMPARISON_MAX_TOTAL_COLUMNS:
+                return jsonify({'error': 'The comparison inputs exceed the combined column limit.'}), 422
+            combined_memory = sum(
+                int(frame.memory_usage(index=True, deep=True).sum())
+                for frame in (baseline_df, current_df)
+            )
+            if combined_memory > COMPARISON_MAX_MEMORY_BYTES:
+                return jsonify({'error': 'The comparison inputs exceed the combined memory limit.'}), 422
+            baseline_readiness = DatasetReadinessEngine(baseline_df).assess()
+            current_readiness = DatasetReadinessEngine(current_df).assess()
+            readiness = {
+                'baseline': baseline_readiness,
+                'current': current_readiness,
+            }
+            if not baseline_readiness['analysis_allowed'] or not current_readiness['analysis_allowed']:
+                return jsonify({
+                    'error': 'One or both comparison inputs are not ready for analysis.',
+                    'readiness': readiness,
+                }), 422
+
+            store = _analysis_job_store()
+            job = store.create(
+                _analysis_scope_id(),
+                {
+                    'analysis_kind': 'period_comparison',
+                    'baseline': {
+                        'stored_filename': stored_filenames[0],
+                        'filename': filenames[0],
+                        'label': baseline_label,
+                    },
+                    'current': {
+                        'stored_filename': stored_filenames[1],
+                        'filename': filenames[1],
+                        'label': current_label,
+                    },
+                },
+                max_active_per_scope=current_app.config[
+                    'VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE'
+                ],
+                max_active_total=current_app.config['VIBEDASH_MAX_ACTIVE_JOBS'],
+            )
+            keep_uploads = True
+        except AnalysisJobCapacityError:
+            return jsonify({
+                'error': 'The analysis queue is busy. Please wait and try again.'
+            }), 429
+        except (pd.errors.ParserError, UnicodeDecodeError, ValueError):
+            current_app.logger.info(
+                'VibeDash comparison input rejected',
+                extra={'event': 'vibedash_comparison_input_rejected'},
+            )
+            return jsonify({
+                'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'
+            }), 422
+        except Exception:
+            current_app.logger.exception(
+                'VibeDash comparison job could not be created',
+                extra={'event': 'vibedash_comparison_job_creation_failed'},
+            )
+            return jsonify({'error': 'The comparison job could not be created.'}), 500
+        finally:
+            if not keep_uploads:
+                _cleanup_comparison_inputs(paths)
+
+        try:
+            analysis_job_dispatcher.submit(
+                current_app._get_current_object(), job['id'], _process_analysis_job
+            )
+        except Exception:
+            # A submission exception is a route-side failure: fail the durable
+            # record and remove both temporary inputs before responding.
+            current_app.logger.exception(
+                'VibeDash comparison dispatcher submission failed',
+                extra={'event': 'vibedash_comparison_dispatch_failed'},
+            )
+            _cleanup_comparison_inputs(paths)
+            _analysis_job_store().fail(job['id'], 'dispatch_failed')
+            return jsonify({'error': 'The comparison job could not be queued.'}), 500
+        return jsonify({
+            'job_id': job['id'],
+            'status': job['status'],
+            'readiness': readiness,
+            'status_url': url_for('vibedash.analysis_job_status', job_id=job['id']),
+        }), 202
+
+
     @vibedash_bp.get('/jobs/<job_id>')
     def analysis_job_status(job_id):
         """Return a scoped, non-sensitive representation of one job."""
@@ -832,6 +1325,29 @@ if vibedash_bp:
         session_data = load_session_data(job['session_id'])
         if not session_data:
             return jsonify({'error': 'Analysis result is no longer available.'}), 410
+        if session_data.get('analysis_kind') == 'period_comparison':
+            return render_template(
+                'vibedash_comparison.html',
+                report=session_data.get('report') or session_data.get('comparison'),
+                filenames={
+                    'baseline': session_data.get('baseline_filename'),
+                    'current': session_data.get('current_filename'),
+                },
+                labels={
+                    'baseline': session_data.get('baseline_label'),
+                    'current': session_data.get('current_label'),
+                },
+                baseline_filename=session_data.get('baseline_filename'),
+                current_filename=session_data.get('current_filename'),
+                baseline_label=session_data.get('baseline_label'),
+                current_label=session_data.get('current_label'),
+                audit_manifest=session_data.get('audit_manifest'),
+                manifest_url=(
+                    url_for('vibedash.analysis_job_manifest', job_id=job['id'])
+                    if job.get('manifest') else None
+                ),
+                analysis_job_id=job['id'],
+            )
         return render_template(
             'vibedash_evidence.html',
             session_id=job['session_id'],

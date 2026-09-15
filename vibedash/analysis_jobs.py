@@ -245,6 +245,17 @@ class AnalysisJobStore:
         return cursor.rowcount == 1
 
     def fail_stale_running(self, timeout_seconds: int) -> int:
+        """Fail stale running jobs, preserving the historical int API."""
+        return len(self.fail_stale_running_jobs(timeout_seconds))
+
+    def fail_stale_running_jobs(self, timeout_seconds: int) -> list[Dict[str, Any]]:
+        """Atomically fail stale jobs and return exactly those transitions.
+
+        Selecting stale rows and transitioning them must share one
+        ``BEGIN IMMEDIATE`` transaction. A pre-read followed by a separate
+        update can race a worker completion and cause cleanup code to delete
+        inputs belonging to a completed job.
+        """
         if not isinstance(timeout_seconds, int) or timeout_seconds < 1:
             raise ValueError("timeout_seconds must be a positive integer.")
         cutoff = (
@@ -253,6 +264,19 @@ class AnalysisJobStore:
         timestamp = _utc_now()
         with self._connection() as connection:
             connection.execute('BEGIN IMMEDIATE')
+            rows = connection.execute(
+                """
+                SELECT id, scope_id, status, payload_json, manifest_json,
+                       session_id, error_code, created_at, updated_at,
+                       started_at, completed_at
+                FROM analysis_jobs
+                WHERE status = 'running' AND started_at < ?
+                ORDER BY started_at ASC
+                """,
+                (cutoff,),
+            ).fetchall()
+            if not rows:
+                return []
             connection.execute(
                 """
                 UPDATE pilot_analyses SET failed_at = COALESCE(failed_at, ?)
@@ -272,7 +296,43 @@ class AnalysisJobStore:
                 """,
                 (timestamp, timestamp, cutoff),
             )
-        return cursor.rowcount
+            if cursor.rowcount != len(rows):
+                raise RuntimeError("Stale analysis job transition was incomplete.")
+            # Read back under the same write transaction so callers receive
+            # the terminal representation of exactly the rows transitioned.
+            placeholders = ", ".join("?" for _ in rows)
+            transitioned_rows = connection.execute(
+                f"""
+                SELECT id, scope_id, status, payload_json, manifest_json,
+                       session_id, error_code, created_at, updated_at,
+                       started_at, completed_at
+                FROM analysis_jobs
+                WHERE id IN ({placeholders})
+                """,
+                tuple(row["id"] for row in rows),
+            ).fetchall()
+        return [self._row_to_job(row) for row in transitioned_rows]
+
+    def list_stale_running(self, timeout_seconds: int) -> list[Dict[str, Any]]:
+        """Return running jobs that will be failed by the stale-job sweep."""
+        if not isinstance(timeout_seconds, int) or timeout_seconds < 1:
+            raise ValueError("timeout_seconds must be a positive integer.")
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(seconds=timeout_seconds)
+        ).isoformat(timespec="milliseconds")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, scope_id, status, payload_json, manifest_json,
+                       session_id, error_code, created_at, updated_at,
+                       started_at, completed_at
+                FROM analysis_jobs
+                WHERE status = 'running' AND started_at < ?
+                ORDER BY started_at ASC
+                """,
+                (cutoff,),
+            ).fetchall()
+        return [self._row_to_job(row) for row in rows]
 
     def purge_terminal(self, retention_hours: int) -> int:
         if not isinstance(retention_hours, int) or retention_hours < 1:
