@@ -80,6 +80,27 @@ class AnalysisJobStoreTests(unittest.TestCase):
         self.assertEqual(self.store.purge_terminal(24), 1)
         self.assertIsNone(self.store.get(job["id"]))
 
+    def test_stale_transition_returns_only_jobs_failed_in_same_transaction(self):
+        job = self.store.create(
+            self.scope_id,
+            {
+                "analysis_kind": "period_comparison",
+                "baseline": {"stored_filename": "vibedash-" + "a" * 32 + ".csv"},
+            },
+        )
+        self.store.claim(job["id"])
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE analysis_jobs SET started_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00.000+00:00", job["id"]),
+            )
+
+        transitioned = self.store.fail_stale_running_jobs(60)
+
+        self.assertEqual([record["id"] for record in transitioned], [job["id"]])
+        self.assertEqual(transitioned[0]["status"], "failed")
+        self.assertEqual(self.store.fail_stale_running(60), 0)
+
     def test_invalid_identifiers_are_rejected(self):
         with self.assertRaises(ValueError):
             self.store.get("../outside")

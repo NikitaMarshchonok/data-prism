@@ -194,6 +194,47 @@
                     Calculating evidence and building the dashboard…
                 </div>
             </form>
+
+            <section class="period-comparison" aria-labelledby="period-comparison-heading">
+                <div class="period-comparison-heading">
+                    <div>
+                        <div class="eyebrow"><span></span> Separate workflow</div>
+                        <h2 id="period-comparison-heading">Compare two periods.</h2>
+                    </div>
+                    <p>Run an independent observational comparison against two CSV snapshots. Keep the same row unit and metric definitions in both files; inputs are CSV-only and processing is temporary.</p>
+                </div>
+                <form class="period-comparison-form" id="period-comparison-form" method="POST" action="{{ url_for('vibedash.create_period_comparison_job') }}" enctype="multipart/form-data" novalidate>
+                    <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
+                    <div class="period-file-grid">
+                        <div class="field-card period-file-card">
+                            <label for="baseline-file">
+                                <span class="field-number">A</span>
+                                <span><strong>Baseline CSV</strong><small>Earlier period · CSV only</small></span>
+                            </label>
+                            <input type="file" name="baseline_file" id="baseline-file" accept=".csv,text/csv" required>
+                            <p class="period-file-name" id="baseline-file-name">No file selected</p>
+                            <label class="period-label" for="baseline-label">Period label</label>
+                            <input class="text-input" type="text" name="baseline_label" id="baseline-label" value="Baseline" maxlength="80" required>
+                        </div>
+                        <div class="field-card period-file-card">
+                            <label for="current-file">
+                                <span class="field-number">B</span>
+                                <span><strong>Current CSV</strong><small>Later period · CSV only</small></span>
+                            </label>
+                            <input type="file" name="current_file" id="current-file" accept=".csv,text/csv" required>
+                            <p class="period-file-name" id="current-file-name">No file selected</p>
+                            <label class="period-label" for="current-label">Period label</label>
+                            <input class="text-input" type="text" name="current_label" id="current-label" value="Current" maxlength="80" required>
+                        </div>
+                    </div>
+                    <p class="period-comparison-note">Use the same row unit and metric definitions in both files. This is an independent observational comparison, not a causal estimate. Source CSVs are removed after worker processing; the aggregate report and session are retained for up to {{ retention_hours }} hours.</p>
+                    <div class="period-comparison-actions">
+                        <button class="button button-primary" id="period-comparison-submit" type="submit"><span id="period-comparison-submit-label">Compare periods</span> <span aria-hidden="true">→</span></button>
+                        <div class="period-comparison-status" id="period-comparison-status" role="status" aria-live="polite" hidden></div>
+                        <div class="period-comparison-error" id="period-comparison-error" role="alert" aria-live="assertive" hidden></div>
+                    </div>
+                </form>
+            </section>
         </section>
 
         <details class="pilot-privacy" id="pilot-privacy">
@@ -249,6 +290,19 @@
         const readinessSummary = document.getElementById('readiness-summary');
         const readinessChecks = document.getElementById('readiness-checks');
         const readinessUrl = {{ url_for('vibedash.dataset_readiness')|tojson }};
+        const comparisonJobsUrl = {{ url_for('vibedash.create_period_comparison_job')|tojson }};
+        const comparisonForm = document.getElementById('period-comparison-form');
+        const baselineFileInput = document.getElementById('baseline-file');
+        const currentFileInput = document.getElementById('current-file');
+        const baselineFileName = document.getElementById('baseline-file-name');
+        const currentFileName = document.getElementById('current-file-name');
+        const baselineLabelInput = document.getElementById('baseline-label');
+        const currentLabelInput = document.getElementById('current-label');
+        const comparisonSubmit = document.getElementById('period-comparison-submit');
+        const comparisonSubmitLabel = document.getElementById('period-comparison-submit-label');
+        const comparisonStatus = document.getElementById('period-comparison-status');
+        const comparisonError = document.getElementById('period-comparison-error');
+        let comparisonBusy = false;
         let readinessState = 'idle';
         let readinessRequest = null;
 
@@ -424,7 +478,7 @@
                 await checkDatasetReadiness(selectedFile);
                 if (readinessState !== 'allowed') return;
             }
-            const originalLabel = submitButton.innerHTML;
+            const originalSubmitNodes = Array.from(submitButton.childNodes, (node) => node.cloneNode(true));
             submitButton.disabled = true;
             loadingIndicator.hidden = false;
             try {
@@ -434,7 +488,68 @@
                 loadingIndicator.textContent = error.message;
                 loadingIndicator.classList.add('has-error');
                 submitButton.disabled = false;
-                submitButton.innerHTML = originalLabel;
+                submitButton.replaceChildren(
+                    ...originalSubmitNodes.map((node) => node.cloneNode(true)),
+                );
+            }
+        });
+
+        function updatePeriodFileName(input, output) {
+            const selectedFile = input.files[0];
+            output.textContent = selectedFile ? selectedFile.name : 'No file selected';
+            output.classList.toggle('has-file', Boolean(selectedFile));
+        }
+
+        baselineFileInput.addEventListener('change', () => updatePeriodFileName(baselineFileInput, baselineFileName));
+        currentFileInput.addEventListener('change', () => updatePeriodFileName(currentFileInput, currentFileName));
+
+        comparisonForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            if (comparisonBusy) return;
+            const baselineFile = baselineFileInput.files[0];
+            const currentFile = currentFileInput.files[0];
+            const baselineLabel = baselineLabelInput.value.trim();
+            const currentLabel = currentLabelInput.value.trim();
+            comparisonError.hidden = true;
+            comparisonError.textContent = '';
+            if (!baselineFile || !currentFile) {
+                comparisonError.textContent = 'Select both a baseline CSV and a current CSV.';
+                comparisonError.hidden = false;
+                return;
+            }
+            if (!baselineLabel || !currentLabel) {
+                comparisonError.textContent = 'Enter a label for each period.';
+                comparisonError.hidden = false;
+                return;
+            }
+            if (baselineLabel.toLocaleLowerCase() === currentLabel.toLocaleLowerCase()) {
+                comparisonError.textContent = 'Use different labels for the baseline and current periods.';
+                comparisonError.hidden = false;
+                return;
+            }
+            comparisonBusy = true;
+            comparisonSubmit.disabled = true;
+            comparisonSubmitLabel.textContent = 'Starting comparison…';
+            comparisonStatus.hidden = false;
+            comparisonStatus.textContent = 'Uploading both CSVs and checking the comparison request…';
+            try {
+                const response = await fetch(comparisonJobsUrl, {
+                    method: 'POST',
+                    body: new FormData(comparisonForm),
+                    headers: {'Accept': 'application/json'},
+                    credentials: 'same-origin',
+                });
+                const job = await readResponse(response);
+                if (!response.ok) throw new Error(job.error || 'The period comparison could not be started.');
+                comparisonStatus.textContent = 'Comparison queued. Waiting for the evidence report…';
+                await waitForJob(job.status_url, comparisonStatus);
+            } catch (error) {
+                comparisonError.textContent = error.message || 'The period comparison could not be completed.';
+                comparisonError.hidden = false;
+                comparisonStatus.textContent = 'Comparison stopped.';
+                comparisonBusy = false;
+                comparisonSubmit.disabled = false;
+                comparisonSubmitLabel.textContent = 'Compare periods';
             }
         });
 
@@ -469,6 +584,16 @@
             loadingIndicator.hidden = true;
             loadingIndicator.classList.remove('has-error');
             loadingIndicator.textContent = 'Calculating evidence and building the dashboard…';
+            comparisonBusy = false;
+            comparisonForm.reset();
+            updatePeriodFileName(baselineFileInput, baselineFileName);
+            updatePeriodFileName(currentFileInput, currentFileName);
+            comparisonSubmit.disabled = false;
+            comparisonSubmitLabel.textContent = 'Compare periods';
+            comparisonStatus.hidden = true;
+            comparisonStatus.textContent = '';
+            comparisonError.hidden = true;
+            comparisonError.textContent = '';
             const selectedFile = fileInput.files[0];
             if (selectedFile) {
                 checkDatasetReadiness(selectedFile);

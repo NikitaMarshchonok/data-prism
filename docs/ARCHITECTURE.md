@@ -105,6 +105,14 @@ On completion, that shared pipeline creates a deterministic decision brief with 
 
 A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed result. Both reads and writes require the same signed browser scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
 
+### Two-period comparison boundary
+
+The VibeDash landing page's **Compare two periods** form accepts two CSV snapshots: a baseline and a current period. The route queues a browser-scoped asynchronous job, and the worker loads both frames, runs readiness checks, and builds an aggregate-only `period-comparison-v1` result. The result combines schema changes and distribution drift with numeric current-minus-baseline mean deltas. Shared numeric metrics that have sufficient finite observations are tested with Welch's independent-samples t-test; each tested metric includes a 95% confidence interval and Hedges' g, and raw p-values are adjusted with Benjamini–Hochberg FDR. The comparison is observational and non-causal: it does not attribute a difference to an intervention, and seasonality, population-mix changes, confounding, or row dependence can account for observed changes.
+
+The comparison resource contract is bounded in both request and process memory: each file is limited to 100,000 rows and 100 columns; the pair is limited to 100,000 combined rows and 100 combined columns, 100 MiB of uploaded bytes, and 256 MiB of combined in-memory frames. Inferential work is capped at 32 candidate metrics, with up to 8 displayed and a minimum of 8 finite observations in each period for a test. These limits apply to the comparison as a whole where stated, so two individually valid files cannot exceed the combined budget.
+
+`POST /vibedash/comparisons/jobs` creates the job. The browser polls `/vibedash/jobs/<job_id>`, then follows `/result`; `/manifest` exposes the aggregate-only reproducibility manifest, and `/history` lists recent jobs for the same signed browser scope. The two source CSVs are removed after worker processing (including failure cleanup). The aggregate result, session record, and manifest are temporary and follow `VIBEDASH_RETENTION_HOURS` (24 hours by default); this flow does not provide durable storage or paid/production guarantees.
+
 ## Model-evaluation boundary
 
 The predictive block is an evaluation pipeline rather than an AutoML deployment service.
