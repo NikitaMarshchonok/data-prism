@@ -8,6 +8,7 @@ import re
 import secrets
 import threading
 import uuid
+from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -16,6 +17,7 @@ try:
         current_app,
         flash,
         jsonify,
+        make_response,
         redirect,
         render_template,
         request,
@@ -53,6 +55,7 @@ try:
         build_period_comparison_manifest,
     )
     from .decision_brief import build_decision_brief
+    from .comparison_report import build_comparison_decision_guidance
     from .pilot_metrics import feedback_available, forget_scope, record_feedback, scope_token
     from .decision_cases import (
         DecisionCaseCapacityError,
@@ -1302,6 +1305,16 @@ if vibedash_bp:
                     'vibedash.analysis_job_manifest',
                     job_id=job['id'],
                 )
+            payload = job.get('payload')
+            if (
+                job.get('session_id')
+                and isinstance(payload, Mapping)
+                and payload.get('analysis_kind') == 'period_comparison'
+            ):
+                response['comparison_report_url'] = url_for(
+                    'vibedash.analysis_job_comparison_report',
+                    job_id=job['id'],
+                )
         elif job['status'] == 'failed':
             response['error'] = (
                 'The analysis was interrupted. Please submit it again.'
@@ -1325,10 +1338,15 @@ if vibedash_bp:
         session_data = load_session_data(job['session_id'])
         if not session_data:
             return jsonify({'error': 'Analysis result is no longer available.'}), 410
+        if not isinstance(session_data, Mapping):
+            return jsonify({'error': 'Analysis result is unavailable for this analysis.'}), 409
         if session_data.get('analysis_kind') == 'period_comparison':
+            report = session_data.get('report') or session_data.get('comparison')
+            if not isinstance(report, Mapping):
+                return jsonify({'error': 'Comparison report is unavailable for this analysis.'}), 409
             return render_template(
                 'vibedash_comparison.html',
-                report=session_data.get('report') or session_data.get('comparison'),
+                report=report,
                 filenames={
                     'baseline': session_data.get('baseline_filename'),
                     'current': session_data.get('current_filename'),
@@ -1347,6 +1365,11 @@ if vibedash_bp:
                     if job.get('manifest') else None
                 ),
                 analysis_job_id=job['id'],
+                comparison_export_url=url_for(
+                    'vibedash.analysis_job_comparison_report',
+                    job_id=job['id'],
+                ),
+                decision_guidance=build_comparison_decision_guidance(report),
             )
         return render_template(
             'vibedash_evidence.html',
@@ -1521,6 +1544,81 @@ if vibedash_bp:
         response = jsonify(job['manifest'])
         response.headers['Content-Disposition'] = (
             f'attachment; filename="data-prism-manifest-{job_id[:12]}.json"'
+        )
+        return response
+
+
+    @vibedash_bp.get('/jobs/<job_id>/comparison-report.html')
+    def analysis_job_comparison_report(job_id):
+        """Download an owned, in-memory standalone period-comparison report."""
+        if not JOB_ID_PATTERN.fullmatch(job_id):
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        job = _analysis_job_store().get(job_id, _analysis_scope_id())
+        if job is None:
+            return jsonify({'error': 'Analysis job not found.'}), 404
+        if job['status'] != 'completed' or not job.get('session_id'):
+            return jsonify({'error': 'Comparison report is not ready.'}), 409
+        payload = job.get('payload')
+        if not isinstance(payload, Mapping) or payload.get('analysis_kind') != 'period_comparison':
+            return jsonify({'error': 'Comparison report is unavailable for this analysis.'}), 409
+
+        session_data = load_session_data(job['session_id'])
+        if not session_data:
+            return jsonify({'error': 'Analysis result is no longer available.'}), 410
+        if not isinstance(session_data, Mapping):
+            return jsonify({'error': 'Comparison report is unavailable for this analysis.'}), 409
+        if session_data.get('analysis_kind') != 'period_comparison':
+            return jsonify({'error': 'Comparison report is unavailable for this analysis.'}), 409
+        report = session_data.get('report') or session_data.get('comparison')
+        if not isinstance(report, Mapping):
+            return jsonify({'error': 'Comparison report is unavailable for this analysis.'}), 409
+
+        css_path = Path(current_app.static_folder or '') / 'vibedash_comparison.css'
+        try:
+            comparison_css = css_path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            current_app.logger.exception(
+                'VibeDash comparison report stylesheet could not be read',
+                extra={'event': 'vibedash_comparison_export_css_failed'},
+            )
+            return jsonify({'error': 'The comparison report could not be exported.'}), 500
+
+        # CSS is trusted application code, but an accidental or compromised
+        # stylesheet containing ``</style`` would terminate the raw-text
+        # element and invalidate the standalone document. Escape the closing
+        # tag boundary while preserving the stylesheet's rendered behavior.
+        comparison_css = re.sub(
+            r'</style', '<\\/style', comparison_css, flags=re.IGNORECASE
+        )
+        html = render_template(
+            'vibedash_comparison.html',
+            report=report,
+            baseline_filename=session_data.get('baseline_filename'),
+            current_filename=session_data.get('current_filename'),
+            baseline_label=session_data.get('baseline_label'),
+            current_label=session_data.get('current_label'),
+            audit_manifest=None,
+            manifest_url=None,
+            analysis_job_id=None,
+            comparison_export_url=None,
+            decision_guidance=build_comparison_decision_guidance(report),
+            comparison_css=comparison_css,
+            export_mode=True,
+        )
+        response = make_response(html)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Content-Disposition'] = (
+            f'attachment; filename="data-prism-comparison-{job_id[:12]}.html"'
+        )
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
+            "style-src-attr 'none'; img-src data:; font-src 'none'; "
+            "base-uri 'none'; form-action 'none'; "
+            "object-src 'none'; frame-ancestors 'none';"
         )
         return response
 

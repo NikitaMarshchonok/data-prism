@@ -5,29 +5,56 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="An aggregate, observational comparison of two CSV periods.">
     <title>Period comparison · Data Prism</title>
+    {% if export_mode|default(false) %}
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; style-src-attr 'none'; img-src data:; font-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none';">
+    <style>{{ comparison_css|default('', true)|safe }}</style>
+    {% else %}
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_comparison.css') }}">
+    {% endif %}
 </head>
 <body>
     <div class="page-glow" aria-hidden="true"></div>
-    {% set comparison = report|default({}, true) %}
-    {% set input_data = comparison.get('input') or {} %}
-    {% set baseline_input = input_data.get('baseline') or {} %}
-    {% set current_input = input_data.get('current') or {} %}
+    {# Retained results are JSON-shaped, but a malformed nested block must not
+       turn either the interactive view or the standalone export into a 500. #}
+    {% set comparison = report if report is mapping else {} %}
+    {% set raw_input_data = comparison.get('input') %}
+    {% set input_data = raw_input_data if raw_input_data is mapping else {} %}
+    {% set raw_baseline_input = input_data.get('baseline') %}
+    {% set raw_current_input = input_data.get('current') %}
+    {% set baseline_input = raw_baseline_input if raw_baseline_input is mapping else {} %}
+    {% set current_input = raw_current_input if raw_current_input is mapping else {} %}
     {% set baseline_display_label = baseline_label|default(baseline_input.get('label') or 'Baseline', true) %}
     {% set current_display_label = current_label|default(current_input.get('label') or 'Current', true) %}
     {% set baseline_display_filename = baseline_filename|default('Baseline CSV', true) %}
     {% set current_display_filename = current_filename|default('Current CSV', true) %}
-    {% set schema = comparison.get('schema_changes') or {} %}
-    {% set metrics_block = comparison.get('numeric_metrics') or {} %}
-    {% set metrics = metrics_block.get('metrics') or [] %}
-    {% set drift = comparison.get('distribution_drift') or {} %}
-    {% set drift_signals = drift.get('signals') or [] %}
+    {% set raw_schema = comparison.get('schema_changes') %}
+    {% set schema = raw_schema if raw_schema is mapping else {} %}
+    {% set raw_new_columns = schema.get('new_columns') %}
+    {% set new_columns = raw_new_columns if raw_new_columns is sequence and raw_new_columns is not string and raw_new_columns is not mapping else [] %}
+    {% set raw_missing_columns = schema.get('missing_columns') %}
+    {% set missing_columns = raw_missing_columns if raw_missing_columns is sequence and raw_missing_columns is not string and raw_missing_columns is not mapping else [] %}
+    {% set raw_metrics_block = comparison.get('numeric_metrics') %}
+    {% set metrics_block = raw_metrics_block if raw_metrics_block is mapping else {} %}
+    {% set raw_metrics = metrics_block.get('metrics') %}
+    {% set metrics = raw_metrics if raw_metrics is sequence and raw_metrics is not string and raw_metrics is not mapping else [] %}
+    {% set raw_drift = comparison.get('distribution_drift') %}
+    {% set drift = raw_drift if raw_drift is mapping else {} %}
+    {% set raw_drift_signals = drift.get('signals') %}
+    {% set drift_signals = raw_drift_signals if raw_drift_signals is sequence and raw_drift_signals is not string and raw_drift_signals is not mapping else [] %}
+    {% set raw_guidance = decision_guidance|default({}, true) %}
+    {% set guidance = raw_guidance if raw_guidance is mapping else {} %}
+    {% set raw_guidance_snapshot = guidance.get('evidence_snapshot') %}
+    {% set guidance_snapshot = raw_guidance_snapshot if raw_guidance_snapshot is mapping else {} %}
+    {% set raw_guidance_questions = guidance.get('questions') %}
+    {% set guidance_questions = raw_guidance_questions if raw_guidance_questions is sequence and raw_guidance_questions is not string and raw_guidance_questions is not mapping else [] %}
+    {% set raw_limitations = comparison.get('limitations') %}
+    {% set limitations = raw_limitations if raw_limitations is sequence and raw_limitations is not string and raw_limitations is not mapping else [] %}
     {% macro value_or_dash(value) %}{% if value is none %}—{% else %}{{ value }}{% endif %}{% endmacro %}
 
-    <nav class="topbar" aria-label="Period comparison navigation">
+    {% if not export_mode|default(false) %}<nav class="topbar" aria-label="Period comparison navigation">
         <a class="brand" href="{{ url_for('vibedash.index') }}" aria-label="Data Prism home">
             <span class="brand-mark" aria-hidden="true">DP</span>
             <span>Data Prism</span>
@@ -36,7 +63,7 @@
             <a class="button button-secondary" href="{{ url_for('vibedash.index') }}">Back to workspace</a>
             <a class="button button-secondary" href="{{ url_for('vibedash.analysis_history') }}">History</a>
         </div>
-    </nav>
+    </nav>{% endif %}
 
     <main class="comparison-shell">
         <header class="comparison-header">
@@ -66,20 +93,24 @@
                     <span class="input-kicker">Baseline period</span>
                     <h3>{{ baseline_display_label }}</h3>
                     <p class="filename">{{ baseline_display_filename }}</p>
+                    {% set raw_baseline_readiness = baseline_input.get('readiness') %}
+                    {% set baseline_readiness = raw_baseline_readiness if raw_baseline_readiness is mapping else {} %}
                     <dl class="input-facts">
                         <div><dt>Rows</dt><dd>{{ value_or_dash(baseline_input.get('rows')) }}</dd></div>
                         <div><dt>Columns</dt><dd>{{ value_or_dash(baseline_input.get('columns')) }}</dd></div>
-                        <div><dt>Readiness</dt><dd>{{ (baseline_input.get('readiness') or {}).get('status_label') or (baseline_input.get('readiness') or {}).get('status') or '—' }}</dd></div>
+                        <div><dt>Readiness</dt><dd>{{ baseline_readiness.get('status_label') or baseline_readiness.get('status') or '—' }}</dd></div>
                     </dl>
                 </article>
                 <article class="input-card input-card-current">
                     <span class="input-kicker">Current period</span>
                     <h3>{{ current_display_label }}</h3>
                     <p class="filename">{{ current_display_filename }}</p>
+                    {% set raw_current_readiness = current_input.get('readiness') %}
+                    {% set current_readiness = raw_current_readiness if raw_current_readiness is mapping else {} %}
                     <dl class="input-facts">
                         <div><dt>Rows</dt><dd>{{ value_or_dash(current_input.get('rows')) }}</dd></div>
                         <div><dt>Columns</dt><dd>{{ value_or_dash(current_input.get('columns')) }}</dd></div>
-                        <div><dt>Readiness</dt><dd>{{ (current_input.get('readiness') or {}).get('status_label') or (current_input.get('readiness') or {}).get('status') or '—' }}</dd></div>
+                        <div><dt>Readiness</dt><dd>{{ current_readiness.get('status_label') or current_readiness.get('status') or '—' }}</dd></div>
                     </dl>
                 </article>
             </div>
@@ -88,9 +119,9 @@
         <section class="report-section" aria-labelledby="schema-heading">
             <div class="section-heading"><div><div class="eyebrow">Schema</div><h2 id="schema-heading">Structure changes</h2></div><p>Column names and inferred types are compared; no raw records are included.</p></div>
             <div class="schema-grid">
-                <article class="report-card"><h3>Added in current</h3>{% if schema.get('new_columns') %}<ul>{% for column in schema.get('new_columns') %}<li>{{ column }}</li>{% endfor %}</ul>{% else %}<p class="empty-copy">No added columns.</p>{% endif %}</article>
-                <article class="report-card"><h3>Removed from current</h3>{% if schema.get('missing_columns') %}<ul>{% for column in schema.get('missing_columns') %}<li>{{ column }}</li>{% endfor %}</ul>{% else %}<p class="empty-copy">No removed columns.</p>{% endif %}</article>
-                <article class="report-card"><h3>Type changes</h3>{% if schema.get('type_changes') %}<ul class="type-change-list">{% for change in schema.get('type_changes') %}<li><strong>{{ change.get('feature') or change.get('column') or 'Column' }}</strong><span>{{ change.get('baseline_type') or '—' }} → {{ change.get('current_type') or '—' }}</span></li>{% endfor %}</ul>{% else %}<p class="empty-copy">No type changes.</p>{% endif %}</article>
+                <article class="report-card"><h3>Added in current</h3>{% if new_columns %}<ul>{% for column in new_columns %}<li>{{ column }}</li>{% endfor %}</ul>{% else %}<p class="empty-copy">No added columns.</p>{% endif %}</article>
+                <article class="report-card"><h3>Removed from current</h3>{% if missing_columns %}<ul>{% for column in missing_columns %}<li>{{ column }}</li>{% endfor %}</ul>{% else %}<p class="empty-copy">No removed columns.</p>{% endif %}</article>
+                <article class="report-card"><h3>Type changes</h3>{% set raw_type_changes = schema.get('type_changes') %}{% set type_changes = raw_type_changes if raw_type_changes is sequence and raw_type_changes is not string and raw_type_changes is not mapping else [] %}{% if type_changes %}<ul class="type-change-list">{% for change in type_changes %}{% set change_data = change if change is mapping else {} %}<li><strong>{{ change_data.get('feature') or change_data.get('column') or 'Column' }}</strong><span>{{ change_data.get('baseline_type') or '—' }} → {{ change_data.get('current_type') or '—' }}</span></li>{% endfor %}</ul>{% else %}<p class="empty-copy">No type changes.</p>{% endif %}</article>
             </div>
         </section>
 
@@ -103,18 +134,22 @@
                     <thead><tr><th scope="col">Metric</th><th scope="col">Baseline mean<br><span>median</span></th><th scope="col">Current mean<br><span>median</span></th><th scope="col">Delta<br><span>percent</span></th><th scope="col">95% CI for delta</th><th scope="col">Adjusted p</th><th scope="col">Hedges g<br><span>magnitude</span></th><th scope="col">Status</th></tr></thead>
                     <tbody>
                     {% for metric in metrics %}
-                        {% set baseline_stats = metric.get('baseline') or {} %}
-                        {% set current_stats = metric.get('current') or {} %}
-                        {% set interval = metric.get('confidence_interval') or {} %}
+                        {% set metric_data = metric if metric is mapping else {} %}
+                        {% set raw_baseline_stats = metric_data.get('baseline') %}
+                        {% set raw_current_stats = metric_data.get('current') %}
+                        {% set raw_interval = metric_data.get('confidence_interval') %}
+                        {% set baseline_stats = raw_baseline_stats if raw_baseline_stats is mapping else {} %}
+                        {% set current_stats = raw_current_stats if raw_current_stats is mapping else {} %}
+                        {% set interval = raw_interval if raw_interval is mapping else {} %}
                         <tr>
-                            <th scope="row">{{ metric.get('column') or 'Unnamed metric' }}</th>
+                            <th scope="row">{{ metric_data.get('column') or 'Unnamed metric' }}</th>
                             <td>{{ value_or_dash(baseline_stats.get('mean')) }}<br><span>{{ value_or_dash(baseline_stats.get('median')) }}</span></td>
                             <td>{{ value_or_dash(current_stats.get('mean')) }}<br><span>{{ value_or_dash(current_stats.get('median')) }}</span></td>
-                            <td>{{ value_or_dash(metric.get('absolute_change')) }}<br><span>{% if metric.get('percent_change') is not none %}{{ metric.get('percent_change') }}%{% else %}—{% endif %}</span>{% if metric.get('percent_change_reason') %}<small>{{ metric.get('percent_change_reason') }}</small>{% endif %}</td>
+                            <td>{{ value_or_dash(metric_data.get('absolute_change')) }}<br><span>{% if metric_data.get('percent_change') is not none %}{{ metric_data.get('percent_change') }}%{% else %}—{% endif %}</span>{% if metric_data.get('percent_change_reason') %}<small>{{ metric_data.get('percent_change_reason') }}</small>{% endif %}</td>
                             <td>{% if interval %}[{{ value_or_dash(interval.get('lower')) }}, {{ value_or_dash(interval.get('upper')) }}]{% else %}—{% endif %}</td>
-                            <td>{{ value_or_dash(metric.get('adjusted_p_value')) }}</td>
-                            <td>{{ value_or_dash(metric.get('hedges_g')) }}<br><span>{{ metric.get('magnitude') or '—' }}</span></td>
-                            <td><span class="metric-status metric-status-{{ metric.get('status', 'unknown') }}">{{ metric.get('status') or '—' }}</span></td>
+                            <td>{{ value_or_dash(metric_data.get('adjusted_p_value')) }}</td>
+                            <td>{{ value_or_dash(metric_data.get('hedges_g')) }}<br><span>{{ metric_data.get('magnitude') or '—' }}</span></td>
+                            <td><span class="metric-status metric-status-{{ metric_data.get('status', 'unknown') }}">{{ metric_data.get('status') or '—' }}</span></td>
                         </tr>
                     {% endfor %}
                     </tbody>
@@ -128,7 +163,7 @@
         <section class="report-section" aria-labelledby="drift-heading">
             <div class="section-heading"><div><div class="eyebrow">Distribution drift</div><h2 id="drift-heading">Signals to review</h2></div><p>These are screening signals based on aggregate distributions and missingness, not proof of a material change.</p></div>
             {% if drift_signals %}
-            <div class="drift-list">{% for signal in drift_signals %}<article class="drift-card"><div><h3>{{ signal.get('feature') or 'Unnamed feature' }}</h3><span>{{ signal.get('feature_type') or 'Feature' }} · {{ signal.get('metric') or 'Screening score' }}</span></div><strong>{{ signal.get('severity') or '—' }}</strong><dl><div><dt>Score</dt><dd>{{ value_or_dash(signal.get('score')) }}</dd></div><div><dt>Missing-rate Δ</dt><dd>{{ value_or_dash(signal.get('missing_rate_delta')) }}</dd></div></dl></article>{% endfor %}</div>
+            <div class="drift-list">{% for signal in drift_signals %}{% set signal_data = signal if signal is mapping else {} %}<article class="drift-card"><div><h3>{{ signal_data.get('feature') or 'Unnamed feature' }}</h3><span>{{ signal_data.get('feature_type') or 'Feature' }} · {{ signal_data.get('metric') or 'Screening score' }}</span></div><strong>{{ signal_data.get('severity') or '—' }}</strong><dl><div><dt>Score</dt><dd>{{ value_or_dash(signal_data.get('score')) }}</dd></div><div><dt>Missing-rate Δ</dt><dd>{{ value_or_dash(signal_data.get('missing_rate_delta')) }}</dd></div></dl></article>{% endfor %}</div>
             {% else %}
             <div class="empty-state"><h3>No distribution drift signals</h3><p>No aggregate drift signal crossed the screening thresholds for the displayed features.</p></div>
             {% endif %}
@@ -137,14 +172,29 @@
         <section class="limitations" aria-labelledby="limitations-heading">
             <div class="eyebrow">Interpret with care</div>
             <h2 id="limitations-heading">Limitations</h2>
-            <ul>{% for limitation in comparison.get('limitations') or [] %}<li>{{ limitation }}</li>{% else %}<li>This is an observational, non-causal comparison and does not establish that period changes caused outcomes.</li><li>Seasonality, changing population mix, confounding, and metric-definition changes may explain differences.</li>{% endfor %}</ul>
+            <ul>{% for limitation in limitations %}<li>{{ limitation }}</li>{% else %}<li>This is an observational, non-causal comparison and does not establish that period changes caused outcomes.</li><li>Seasonality, changing population mix, confounding, and metric-definition changes may explain differences.</li>{% endfor %}</ul>
             <p class="noncausal-note">Do not treat a delta, p-value, confidence interval, or drift signal as causal evidence. Validate the row unit, definitions, sampling process, and business context before acting.</p>
         </section>
 
+        {% if guidance %}
+        <section class="decision-guidance" aria-labelledby="decision-guidance-heading">
+            <div class="eyebrow">Before action</div>
+            <h2 id="decision-guidance-heading">Evidence checks</h2>
+            <div class="guidance-snapshot" aria-label="Evidence snapshot counts">
+                <span>Status <strong>{{ guidance_snapshot.get('status') or 'unknown' }}</strong></span>
+                <span>Metrics tested <strong>{{ guidance_snapshot.get('tested_metrics') or 0 }}</strong></span>
+                <span>Drift signals <strong>{{ guidance_snapshot.get('drift_signals') or 0 }}</strong></span>
+                <span>Schema changes <strong>{{ guidance_snapshot.get('schema_changes') or 0 }}</strong></span>
+            </div>
+            <ul>{% for question in guidance_questions %}<li>{{ question }}</li>{% endfor %}</ul>
+        </section>
+        {% endif %}
+
         <footer class="comparison-footer">
             <span>Data Prism</span>
-            <p>Source CSVs are removed after worker processing. Aggregate evidence and the audit manifest are retained temporarily.</p>
-            {% if manifest_url %}<a class="button button-secondary" href="{{ manifest_url }}">Open audit manifest</a>{% else %}<span class="manifest-unavailable">Audit manifest unavailable</span>{% endif %}
+            {% if export_mode|default(false) %}<p>Source CSVs are removed after worker processing. This standalone report is an in-memory export.</p>{% else %}<p>Source CSVs are removed after worker processing. Aggregate evidence and the audit manifest are retained temporarily.</p>{% endif %}
+            {% if not export_mode|default(false) and comparison_export_url and analysis_job_id %}<a class="button button-primary" href="{{ comparison_export_url }}" download>Download HTML report</a>{% endif %}
+            {% if not export_mode|default(false) and manifest_url %}<a class="button button-secondary" href="{{ manifest_url }}">Open audit manifest</a>{% elif not export_mode|default(false) %}<span class="manifest-unavailable">Audit manifest unavailable</span>{% endif %}
         </footer>
     </main>
 </body>

@@ -12,6 +12,7 @@ h1,h2,h3 { font-family:var(--display); }
 .nav-actions { display:flex; gap:10px; }
 .button { min-height:41px; display:inline-flex; align-items:center; justify-content:center; padding:0 15px; border:1px solid transparent; border-radius:10px; font-size:12px; font-weight:700; }
 .button-secondary { border-color:var(--border); background:rgba(255,255,255,.025); }
+.button-primary { border-color:rgba(114,224,182,.4); background:var(--accent); color:#07130f; }
 .comparison-shell { padding:62px 0 40px; }
 .comparison-header { display:flex; align-items:flex-end; justify-content:space-between; gap:42px; margin-bottom:42px; }
 .eyebrow { margin-bottom:13px; color:var(--accent); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; }
@@ -73,6 +74,12 @@ dd { margin:6px 0 0; color:var(--blue); font:600 14px var(--display); overflow-w
 .limitations h2 { margin-bottom:18px; }
 .limitations ul { display:grid; gap:10px; margin:0 0 20px; padding-left:20px; color:#cbd9d4; line-height:1.55; font-size:13px; }
 .noncausal-note { margin:0; padding-top:17px; border-top:1px solid var(--border); color:var(--warm); font-size:12px; line-height:1.55; }
+.decision-guidance { margin-top:30px; padding:24px 28px; border:1px solid rgba(142,182,247,.27); border-radius:17px; background:rgba(15,31,27,.76); }
+.decision-guidance h2 { margin:0 0 18px; font-size:clamp(26px,3vw,38px); letter-spacing:-.045em; }
+.guidance-snapshot { display:flex; flex-wrap:wrap; gap:9px; margin-bottom:18px; }
+.guidance-snapshot span { padding:9px 12px; border:1px solid var(--border); border-radius:9px; color:var(--muted); font-size:11px; }
+.guidance-snapshot strong { margin-left:4px; color:var(--blue); }
+.decision-guidance ul { display:grid; gap:10px; margin:0; padding-left:20px; color:#cbd9d4; line-height:1.55; font-size:13px; }
 .comparison-footer { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-top:58px; padding-top:20px; border-top:1px solid var(--border); color:var(--muted); font-size:11px; }
 .comparison-footer > span:first-child { color:var(--text); font:600 15px var(--display); }
 .comparison-footer p { margin:0; text-align:center; }
@@ -80,3 +87,16 @@ dd { margin:6px 0 0; color:var(--blue); font:600 14px var(--display); overflow-w
 @media (max-width:850px) { .comparison-header { align-items:flex-start; flex-direction:column; } .status-card { width:100%; } .summary-panel,.section-heading { grid-template-columns:1fr; gap:12px; } .drift-card { grid-template-columns:1fr auto; } .drift-card dl { grid-column:1 / -1; } }
 @media (max-width:620px) { .topbar,.comparison-shell { width:min(100% - 26px,1180px); } .nav-actions .button:first-child { display:none; } .comparison-shell { padding-top:42px; } h1 { font-size:47px; } .summary-panel,.limitations { padding:20px; } .input-grid,.schema-grid { grid-template-columns:1fr; } .input-facts { grid-template-columns:1fr 1fr; } .input-facts div:last-child { grid-column:1 / -1; } .comparison-footer { align-items:center; flex-direction:column; text-align:center; } .comparison-footer p { text-align:center; } }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after { transition:none !important; } }
+@media print {
+    :root { color-scheme: light; --bg:#fff; --surface:#fff; --surface-strong:#fff; --border:#cbd5d1; --text:#15221d; --muted:#52635d; --accent:#176b4d; --blue:#245d91; --warm:#825211; --red:#8c2e32; }
+    body { background:#fff; color:var(--text); font-size:10pt; }
+    .page-glow, .topbar, .nav-actions, .button { display:none !important; }
+    .comparison-shell { width:100%; padding:0; }
+    .comparison-header, .summary-panel, .report-section, .limitations, .decision-guidance, .comparison-footer { break-inside:avoid; }
+    .summary-panel, .limitations, .input-card, .report-card, .empty-state, .drift-card, .table-wrap { background:#fff; border-color:#cbd5d1; }
+    .summary-panel, .limitations { color:var(--text); }
+    .metrics-table { min-width:0; font-size:8pt; }
+    .metrics-table th, .metrics-table td { padding:7px 6px; }
+    .comparison-footer { color:var(--muted); }
+    a { color:inherit; }
+}

@@ -111,7 +111,7 @@ The VibeDash landing page's **Compare two periods** form accepts two CSV snapsho
 
 The comparison resource contract is bounded in both request and process memory: each file is limited to 100,000 rows and 100 columns; the pair is limited to 100,000 combined rows and 100 combined columns, 100 MiB of uploaded bytes, and 256 MiB of combined in-memory frames. Inferential work is capped at 32 candidate metrics, with up to 8 displayed and a minimum of 8 finite observations in each period for a test. These limits apply to the comparison as a whole where stated, so two individually valid files cannot exceed the combined budget.
 
-`POST /vibedash/comparisons/jobs` creates the job. The browser polls `/vibedash/jobs/<job_id>`, then follows `/result`; `/manifest` exposes the aggregate-only reproducibility manifest, and `/history` lists recent jobs for the same signed browser scope. The two source CSVs are removed after worker processing (including failure cleanup). The aggregate result, session record, and manifest are temporary and follow `VIBEDASH_RETENTION_HOURS` (24 hours by default); this flow does not provide durable storage or paid/production guarantees.
+`POST /vibedash/comparisons/jobs` creates the job. The browser polls `/vibedash/jobs/<job_id>`, then follows `/result`; `/manifest` exposes the aggregate-only reproducibility manifest, `/comparison-report.html` downloads a completed comparison as a server-named standalone HTML document, and `/history` lists recent jobs for the same signed browser scope. The report endpoint loads only the job's scoped retained session, renders in memory with trusted CSS inlined, and does not persist an export artifact or extend retention. The two source CSVs are removed after worker processing (including failure cleanup). The aggregate result, session record, manifest, and report availability follow `VIBEDASH_RETENTION_HOURS` (24 hours by default); browser Print/Save as PDF is supported by print CSS, without server-side PDF generation. This flow does not provide durable storage or paid/production guarantees.
 
 ## Model-evaluation boundary
 
@@ -164,7 +164,7 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | Data | Current storage | Lifecycle |
 | --- | --- | --- |
 | Interactive uploads | Local runtime directory | Session working data; ignored by Git |
-| Reports and exports | Local runtime directory | Generated artifact; ignored by Git |
+| Reports and exports | Local runtime directory for legacy exports | Legacy generated artifacts are retention-limited; comparison HTML downloads are streamed and not persisted |
 | Analysis job lifecycle and audit manifest | SQLite | Session-scoped terminal records follow VibeDash retention |
 | Opt-in pilot measurement | Analysis-job SQLite | 30 days from acceptance; 10,000-row cap; current-browser withdrawal |
 | Decision cases and measured outcomes | SQLite | Browser-scoped; closed cases follow decision retention, active cases remain |
