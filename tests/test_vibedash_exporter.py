@@ -17,8 +17,99 @@ from vibedash.exporter import (
 
 
 class VibeDashSessionStorageTests(unittest.TestCase):
+    def test_scoped_session_round_trip_rejects_foreign_and_malformed_owners(self):
+        session_id = str(uuid.uuid4())
+        owner = "a" * 32
+        stranger = "b" * 32
+
+        with TemporaryDirectory() as state_directory:
+            self.assertTrue(
+                save_session_data(
+                    session_id,
+                    {"dashboard": "private"},
+                    state_directory,
+                    owner_id=owner,
+                )
+            )
+            self.assertEqual(
+                load_session_data(
+                    session_id,
+                    state_directory,
+                    owner_id=owner,
+                )["analysis_scope_id"],
+                owner,
+            )
+            self.assertIsNone(load_session_data(session_id, state_directory))
+            self.assertFalse(
+                save_session_data(
+                    str(uuid.uuid4()),
+                    {"dashboard": "unowned"},
+                    state_directory,
+                )
+            )
+            self.assertIsNone(
+                load_session_data(
+                    session_id,
+                    state_directory,
+                    owner_id=stranger,
+                )
+            )
+            self.assertIsNone(
+                load_session_data(
+                    session_id,
+                    state_directory,
+                    owner_id="not-a-scope",
+                )
+            )
+
+            session_path = (
+                Path(state_directory) / f"{session_id}.json"
+            )
+            session_path.write_text('{"dashboard": "ownerless"}', encoding="utf-8")
+            self.assertIsNone(
+                load_session_data(
+                    session_id,
+                    state_directory,
+                    owner_id=owner,
+                )
+            )
+
+    def test_scoped_save_does_not_follow_predictable_temp_symlink(self):
+        session_id = str(uuid.uuid4())
+        owner = "a" * 32
+
+        with TemporaryDirectory() as state_directory:
+            state_path = Path(state_directory)
+            outside = state_path / "outside.json"
+            outside.write_text('{"must": "remain"}', encoding="utf-8")
+            temporary_path = state_path / f"{session_id}.json.tmp"
+            temporary_path.symlink_to(outside)
+
+            self.assertTrue(
+                save_session_data(
+                    session_id,
+                    {"dashboard": "private"},
+                    state_directory,
+                    owner_id=owner,
+                )
+            )
+            self.assertEqual(
+                outside.read_text(encoding="utf-8"),
+                '{"must": "remain"}',
+            )
+            self.assertTrue(temporary_path.is_symlink())
+            self.assertEqual(
+                load_session_data(
+                    session_id,
+                    state_directory,
+                    owner_id=owner,
+                )["dashboard"],
+                "private",
+            )
+
     def test_runtime_state_directory_is_used_for_session_round_trip(self):
         session_id = str(uuid.uuid4())
+        owner = "a" * 32
         session_data = {
             "created_at": pd.Timestamp("2026-09-09T00:00:00Z"),
             "row_count": np.int64(360),
@@ -30,7 +121,9 @@ class VibeDashSessionStorageTests(unittest.TestCase):
                 os.environ,
                 {"DATA_PRISM_STATE_DIR": state_directory},
             ):
-                self.assertTrue(save_session_data(session_id, session_data))
+                self.assertTrue(
+                    save_session_data(session_id, session_data, owner_id=owner)
+                )
                 stored_path = (
                     Path(state_directory)
                     / "sessions"
@@ -38,7 +131,7 @@ class VibeDashSessionStorageTests(unittest.TestCase):
                     / f"{session_id}.json"
                 )
                 self.assertTrue(stored_path.is_file())
-                loaded = load_session_data(session_id)
+                loaded = load_session_data(session_id, owner_id=owner)
 
         self.assertEqual(loaded["created_at"], "2026-09-09T00:00:00+00:00")
         self.assertEqual(loaded["row_count"], 360)
@@ -46,9 +139,16 @@ class VibeDashSessionStorageTests(unittest.TestCase):
 
     def test_invalid_session_identifier_is_rejected(self):
         with TemporaryDirectory() as state_directory:
-            self.assertIsNone(load_session_data("../outside", state_directory))
+            owner = "a" * 32
+            self.assertIsNone(
+                load_session_data(
+                    "../outside", state_directory, owner_id=owner
+                )
+            )
             self.assertFalse(
-                save_session_data("../outside", {}, state_directory)
+                save_session_data(
+                    "../outside", {}, state_directory, owner_id=owner
+                )
             )
 
     def test_runtime_state_directory_is_used_for_export(self):
