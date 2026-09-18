@@ -10,6 +10,7 @@ from unittest.mock import patch
 import web_app
 
 from vibedash.analysis_jobs import AnalysisJobStore
+from vibedash import routes
 
 
 class VibeDashJobRouteTests(unittest.TestCase):
@@ -202,6 +203,8 @@ class VibeDashJobRouteTests(unittest.TestCase):
                 "/vibedash/jobs",
                 data={"demo_dataset": "saas_growth", "prompt": "Analyze"},
             ).get_json()
+            with owner.session_transaction() as browser_session:
+                scope_id = browser_session["vibedash_analysis_scope_id"]
             store = AnalysisJobStore(web_app.app.config["VIBEDASH_JOB_STORE_PATH"])
             store.claim(queued["job_id"])
             session_id = str(uuid.uuid4())
@@ -213,7 +216,41 @@ class VibeDashJobRouteTests(unittest.TestCase):
         self.assertEqual(status["status"], "completed")
         self.assertEqual(result.status_code, 200)
         self.assertIn("Completed evidence dashboard", result.get_data(as_text=True))
-        load_session.assert_called_once_with(session_id)
+        load_session.assert_called_once_with(session_id, owner_id=scope_id)
+
+    @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
+    @patch("vibedash.routes.load_session_data")
+    def test_malformed_owned_dashboard_result_fails_closed(self, load_session, _submit):
+        load_session.return_value = {
+            "analysis_scope_id": "a" * 32,
+            "viz_spec": [],
+            "dashboard_data": "not-an-object",
+            "filename": "demo.csv",
+            "prompt": "Analyze",
+        }
+        with web_app.app.test_client() as owner:
+            queued = owner.post(
+                "/vibedash/jobs",
+                data={"demo_dataset": "saas_growth", "prompt": "Analyze"},
+            ).get_json()
+            store = AnalysisJobStore(web_app.app.config["VIBEDASH_JOB_STORE_PATH"])
+            store.claim(queued["job_id"])
+            store.complete(queued["job_id"], str(uuid.uuid4()))
+            response = owner.get(queued["status_url"] + "/result")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertNotIn("not-an-object", response.get_data(as_text=True))
+
+    def test_worker_rejects_missing_or_malformed_persisted_scope(self):
+        with web_app.app.app_context():
+            with patch("vibedash.routes._build_dashboard_session") as build:
+                with self.assertRaises(ValueError):
+                    routes._process_analysis_job({
+                        "id": "a" * 32,
+                        "scope_id": None,
+                        "payload": {},
+                    })
+                build.assert_not_called()
 
     def test_demo_job_completes_end_to_end_in_background(self):
         state_directory = self.temporary_directory.name

@@ -3,6 +3,8 @@
 """
 import os
 import json
+import secrets
+import tempfile
 import uuid
 from pathlib import Path
 import re
@@ -19,6 +21,7 @@ SESSION_FILE_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$"
 )
+ANALYSIS_SCOPE_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 UPLOAD_FILE_PATTERN = re.compile(r"^vibedash-[0-9a-f]{32}\.csv$")
 EXPORT_FILE_PATTERN = re.compile(
     r"^vibedash_export_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
@@ -200,7 +203,19 @@ def save_export(html_content: str, session_id: str, exports_dir=None) -> str:
     return str(filepath)
 
 
-def load_session_data(session_id: str, sessions_dir=None) -> dict:
+def _validated_analysis_scope_id(scope_id: str) -> str | None:
+    """Return a normalized browser scope or ``None`` for malformed input."""
+    if not isinstance(scope_id, str) or not ANALYSIS_SCOPE_PATTERN.fullmatch(scope_id):
+        return None
+    return scope_id
+
+
+def load_session_data(
+    session_id: str,
+    sessions_dir=None,
+    *,
+    owner_id: str | None = None,
+) -> dict:
     """
     Загружает данные сессии из временного хранилища
     """
@@ -209,26 +224,72 @@ def load_session_data(session_id: str, sessions_dir=None) -> dict:
     except ValueError:
         return None
 
-    if not session_file.exists():
+    # Ownership is mandatory for every retained-session read.  Keeping an
+    # ownerless compatibility mode here would make a future route call a
+    # one-argument helper and silently reintroduce an IDOR.
+    expected_owner = _validated_analysis_scope_id(owner_id)
+    if expected_owner is None:
+        return None
+
+    # A session record must be a regular application-owned file.  In
+    # particular, do not follow a symlink planted at a predictable session
+    # filename while loading retained data.
+    if session_file.is_symlink() or not session_file.is_file():
         return None
 
     try:
         with session_file.open('r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"⚠️ Ошибка загрузки сессии {session_id}: {e}")
+            session_data = json.load(f)
+        if not isinstance(session_data, dict):
+            return None
+        stored_owner = session_data.get('analysis_scope_id')
+        if (
+            _validated_analysis_scope_id(stored_owner) is None
+            or not secrets.compare_digest(stored_owner, expected_owner)
+        ):
+            return None
+        return session_data
+    except Exception:
+        # Do not put session identifiers or stored/user data in logs.  A
+        # malformed/partially-written record is simply unavailable.
         return None
 
 
-def save_session_data(session_id: str, data: dict, sessions_dir=None) -> bool:
+def save_session_data(
+    session_id: str,
+    data: dict,
+    sessions_dir=None,
+    *,
+    owner_id: str | None = None,
+) -> bool:
     """
     Сохраняет данные сессии во временное хранилище
     """
+    temporary_file = None
     try:
         session_file = _session_file(session_id, sessions_dir)
+        if not isinstance(data, dict):
+            return False
+        normalized_owner = _validated_analysis_scope_id(owner_id)
+        if normalized_owner is None:
+            return False
+        # The owner is always assigned here, after route validation, and
+        # never accepted from request payload/session data.
+        data = dict(data)
+        data['analysis_scope_id'] = normalized_owner
+        # Use an exclusive, randomly named file in the same directory.  A
+        # predictable ``<session>.json.tmp`` can be replaced with a symlink
+        # between requests and would otherwise be followed by ``open('w')``.
         session_file.parent.mkdir(parents=True, exist_ok=True)
-        temporary_file = session_file.with_suffix(".json.tmp")
-        with temporary_file.open('w', encoding='utf-8') as f:
+        with tempfile.NamedTemporaryFile(
+            mode='w',
+            encoding='utf-8',
+            dir=session_file.parent,
+            prefix=f'.{session_file.name}.',
+            suffix='.tmp',
+            delete=False,
+        ) as f:
+            temporary_file = Path(f.name)
             json.dump(
                 data,
                 f,
@@ -238,8 +299,11 @@ def save_session_data(session_id: str, data: dict, sessions_dir=None) -> bool:
             )
         os.replace(temporary_file, session_file)
         return True
-    except Exception as e:
-        if 'temporary_file' in locals() and temporary_file.exists():
+    except Exception:
+        if (
+            isinstance(temporary_file, Path)
+            and temporary_file.exists()
+            and not temporary_file.is_symlink()
+        ):
             temporary_file.unlink()
-        print(f"⚠️ Ошибка сохранения сессии {session_id}: {e}")
         return False

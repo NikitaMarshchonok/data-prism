@@ -140,6 +140,8 @@ The free service filesystem is ephemeral. This is suitable for the portfolio dem
 
 VibeDash working copies, session files, and generated HTML exports use a configurable retention window. `VIBEDASH_RETENTION_HOURS` defaults to 24 hours and accepts values from 1 to 720. Expired, application-owned artifacts are removed when VibeDash receives a request; unrelated files and symbolic links are never removed by this cleanup.
 
+Retained VibeDash session records are bound to the signed browser analysis scope that created them. Export, chat-analysis, result, decision, and comparison-report loads fail closed when the owner is missing, malformed, or belongs to another browser scope. This is a deployment boundary: session JSON written by older releases without `analysis_scope_id` is intentionally unavailable after this hardening, so users must rerun those analyses.
+
 The public single-instance deployment runs one bounded in-process analysis worker. Active work is limited per signed browser session and across the service; interrupted jobs are reported as failed rather than remaining indefinitely in `running` state.
 
 Decision cases use the same local SQLite database and signed browser scope. Closed cases are retained for 90 days by default, while active cases remain until they are closed. Configure this with `VIBEDASH_DECISION_RETENTION_DAYS` and `VIBEDASH_MAX_DECISION_CASES_PER_SCOPE`. A free Render restart or redeploy can remove them earlier because its filesystem is ephemeral.

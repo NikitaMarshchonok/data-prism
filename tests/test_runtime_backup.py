@@ -59,6 +59,7 @@ class RuntimeBackupTests(unittest.TestCase):
         session = self.state / 'sessions' / 'vibedash' / f'{self.session_id}.json'
         session.parent.mkdir(parents=True)
         session.write_text(json.dumps({
+            'analysis_scope_id': self.scope,
             'viz_spec': {'title': 'Recovery test'}, 'dashboard_data': {},
             'filename': 'synthetic.csv', 'prompt': 'Synthetic recovery review',
         }), encoding='utf-8')

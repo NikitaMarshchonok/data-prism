@@ -275,8 +275,12 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         with patch.dict(os.environ, {'DATA_PRISM_STATE_DIR': str(state)}):
             with web_app.app.app_context():
                 payload = self._worker_payload(root)
-                result = routes._build_period_comparison_session(payload, run_id='a' * 32)
-            session_data = load_session_data(result['session_id'])
+                result = routes._build_period_comparison_session(
+                    payload, run_id='a' * 32, scope_id='a' * 32
+                )
+            session_data = load_session_data(
+                result['session_id'], owner_id='a' * 32
+            )
         self.assertFalse(list((root / 'uploads').glob('*.csv')))
         self.assertEqual(session_data['analysis_kind'], 'period_comparison')
         self.assertIn('numeric_metrics', session_data['report'])
@@ -292,7 +296,9 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
             with patch('vibedash.routes.build_period_comparison', side_effect=ValueError('engine details')):
                 with web_app.app.app_context():
                     with self.assertRaises(ValueError):
-                        routes._build_period_comparison_session(payload, run_id='b' * 32)
+                        routes._build_period_comparison_session(
+                            payload, run_id='b' * 32, scope_id='b' * 32
+                        )
         self.assertFalse(list((root / 'uploads').glob('*.csv')))
 
     def test_worker_missing_first_input_cleans_second_input(self):
@@ -302,7 +308,9 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         with patch.dict(os.environ, {'DATA_PRISM_STATE_DIR': str(root / 'state')}):
             with web_app.app.app_context():
                 with self.assertRaises(FileNotFoundError):
-                    routes._build_period_comparison_session(payload, run_id='c' * 32)
+                    routes._build_period_comparison_session(
+                        payload, run_id='c' * 32, scope_id='c' * 32
+                    )
         self.assertFalse(list((root / 'uploads').glob('*.csv')))
 
     def _complete_comparison_job(self, client, manifest=None):

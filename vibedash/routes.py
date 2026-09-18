@@ -83,6 +83,7 @@ except ImportError:
 if vibedash_bp:
     analysis_job_dispatcher = AnalysisJobDispatcher(max_workers=1)
     _CSV_HEADER_LOCK = threading.Lock()
+    _UNSET_SCOPE = object()
 
     class DatasetReadinessBlocked(ValueError):
         """The uploaded table failed one or more safe readiness contracts."""
@@ -97,6 +98,33 @@ if vibedash_bp:
             scope_id = uuid.uuid4().hex
             session['vibedash_analysis_scope_id'] = scope_id
         return scope_id
+
+
+    def _load_owned_session_data(session_id, scope_id=_UNSET_SCOPE):
+        """Load one retained result only when it belongs to this browser scope."""
+        expected_scope = (
+            _analysis_scope_id() if scope_id is _UNSET_SCOPE else scope_id
+        )
+        # A scope explicitly carried by a durable job is an ownership
+        # invariant, not a fallback hint.  Missing or malformed job metadata
+        # must fail closed instead of falling back to request state.
+        if not isinstance(expected_scope, str) or not JOB_ID_PATTERN.fullmatch(
+            expected_scope
+        ):
+            return None
+        return load_session_data(session_id, owner_id=expected_scope)
+
+
+    def _session_persist_scope(scope_id=_UNSET_SCOPE):
+        """Resolve the owner for request and worker persistence paths."""
+        expected_scope = (
+            _analysis_scope_id() if scope_id is _UNSET_SCOPE else scope_id
+        )
+        if not isinstance(expected_scope, str) or not JOB_ID_PATTERN.fullmatch(
+            expected_scope
+        ):
+            raise ValueError('The analysis scope is invalid.')
+        return expected_scope
 
 
     def _analysis_job_store():
@@ -307,7 +335,9 @@ if vibedash_bp:
         return paths
 
 
-    def _build_period_comparison_session(payload, *, run_id=None):
+    def _build_period_comparison_session(
+        payload, *, run_id=None, scope_id=_UNSET_SCOPE
+    ):
         """Build and persist an aggregate-only two-period comparison."""
         if not isinstance(payload, dict) or payload.get('analysis_kind') != 'period_comparison':
             raise ValueError('The comparison request is invalid.')
@@ -420,7 +450,12 @@ if vibedash_bp:
                 'filename': f'{baseline_filename} vs {current_filename}',
                 'audit_manifest': manifest,
             }
-            if not save_session_data(session_id, session_data):
+            owner_scope = _session_persist_scope(scope_id)
+            if not save_session_data(
+                session_id,
+                session_data,
+                owner_id=owner_scope,
+            ):
                 raise RuntimeError('The comparison session could not be persisted.')
             return {'session_id': session_id, 'manifest': manifest}
         finally:
@@ -465,7 +500,9 @@ if vibedash_bp:
                 csv.field_size_limit(previous_limit)
 
 
-    def _build_dashboard_session(payload, *, run_id=None):
+    def _build_dashboard_session(
+        payload, *, run_id=None, scope_id=_UNSET_SCOPE
+    ):
         """Build and persist one dashboard through the shared analysis path."""
         stored_filename = payload.get('stored_filename', '')
         if not isinstance(stored_filename, str) or not re.fullmatch(
@@ -539,7 +576,12 @@ if vibedash_bp:
             'file_path': str(upload_path),
             'audit_manifest': audit_manifest,
         }
-        if not save_session_data(session_id, session_data):
+        owner_scope = _session_persist_scope(scope_id)
+        if not save_session_data(
+            session_id,
+            session_data,
+            owner_id=owner_scope,
+        ):
             raise RuntimeError('VibeDash session could not be persisted.')
         return {
             'session_id': session_id,
@@ -551,14 +593,20 @@ if vibedash_bp:
 
 
     def _process_analysis_job(job):
+        scope_id = job.get('scope_id')
+        # Workers have no request session to fall back to.  Validate the
+        # durable owner before touching inputs or writing a retained record.
+        _session_persist_scope(scope_id)
         if (job.get('payload') or {}).get('analysis_kind') == 'period_comparison':
             return _build_period_comparison_session(
                 job.get('payload', {}),
                 run_id=job['id'],
+                scope_id=scope_id,
             )
         result = _build_dashboard_session(
             job.get('payload', {}),
             run_id=job['id'],
+            scope_id=scope_id,
         )
         return {
             'session_id': result['session_id'],
@@ -1335,7 +1383,9 @@ if vibedash_bp:
         if job['status'] != 'completed' or not job['session_id']:
             return jsonify({'error': 'Analysis result is not ready.'}), 409
 
-        session_data = load_session_data(job['session_id'])
+        session_data = _load_owned_session_data(
+            job['session_id'], job.get('scope_id')
+        )
         if not session_data:
             return jsonify({'error': 'Analysis result is no longer available.'}), 410
         if not isinstance(session_data, Mapping):
@@ -1371,6 +1421,13 @@ if vibedash_bp:
                 ),
                 decision_guidance=build_comparison_decision_guidance(report),
             )
+        if (
+            not isinstance(session_data.get('viz_spec'), Mapping)
+            or not isinstance(session_data.get('dashboard_data'), Mapping)
+            or not isinstance(session_data.get('filename'), str)
+            or not isinstance(session_data.get('prompt'), str)
+        ):
+            return jsonify({'error': 'Analysis result is unavailable for this analysis.'}), 409
         return render_template(
             'vibedash_evidence.html',
             session_id=job['session_id'],
@@ -1443,9 +1500,16 @@ if vibedash_bp:
             return jsonify({'error': 'Analysis job not found.'}), 404
         if job['status'] != 'completed' or not job.get('session_id'):
             return jsonify({'error': 'Analysis result is not ready.'}), 409
-        session_data = load_session_data(job['session_id'])
+        session_data = _load_owned_session_data(
+            job['session_id'], job.get('scope_id')
+        )
         if not session_data:
             return jsonify({'error': 'Analysis result is no longer available.'}), 410
+        if (
+            not isinstance(session_data, Mapping)
+            or not isinstance(session_data.get('dashboard_data'), Mapping)
+        ):
+            return jsonify({'error': 'Analysis result is unavailable for this analysis.'}), 409
 
         try:
             priority = int(request.form.get('priority', ''))
@@ -1562,7 +1626,9 @@ if vibedash_bp:
         if not isinstance(payload, Mapping) or payload.get('analysis_kind') != 'period_comparison':
             return jsonify({'error': 'Comparison report is unavailable for this analysis.'}), 409
 
-        session_data = load_session_data(job['session_id'])
+        session_data = _load_owned_session_data(
+            job['session_id'], job.get('scope_id')
+        )
         if not session_data:
             return jsonify({'error': 'Analysis result is no longer available.'}), 410
         if not isinstance(session_data, Mapping):
@@ -1628,7 +1694,7 @@ if vibedash_bp:
         """Экспорт дашборда в single-file HTML"""
         try:
             # Загружаем данные сессии
-            session_data = load_session_data(session_id)
+            session_data = _load_owned_session_data(session_id)
             if not session_data:
                 flash('Session not found!', 'error')
                 return redirect(url_for('vibedash.index'))
@@ -1658,8 +1724,12 @@ if vibedash_bp:
             return send_file(filepath, as_attachment=True, 
                             download_name=f"vibedash_export_{session_id}.html")
         
-        except Exception as e:
-            flash(f'Export error: {str(e)}', 'error')
+        except Exception:
+            current_app.logger.error(
+                'VibeDash export failed',
+                extra={'event': 'vibedash_export_failed'},
+            )
+            flash('Export is unavailable for this session.', 'error')
             return redirect(url_for('vibedash.index'))
 
 
@@ -1691,7 +1761,7 @@ if vibedash_bp:
                 return jsonify({'error': 'Question is required'}), 400
             
             # Загружаем данные сессии
-            session_data = load_session_data(session_id)
+            session_data = _load_owned_session_data(session_id)
             if not session_data:
                 return jsonify({'error': 'Session not found'}), 404
             
@@ -1733,5 +1803,9 @@ if vibedash_bp:
                 'analysis': analysis
             })
             
-        except Exception as e:
-            return jsonify({'error': f'Analysis failed: {str(e)}'}), 500
+        except Exception:
+            current_app.logger.error(
+                'VibeDash chat analysis failed',
+                extra={'event': 'vibedash_chat_analysis_failed'},
+            )
+            return jsonify({'error': 'Analysis is unavailable.'}), 500
