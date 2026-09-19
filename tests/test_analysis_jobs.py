@@ -12,6 +12,7 @@ from vibedash.analysis_jobs import (
     AnalysisJobCapacityError,
     AnalysisJobDispatcher,
     AnalysisJobStore,
+    MAX_HISTORY_JOBS,
 )
 
 
@@ -148,6 +149,57 @@ class AnalysisJobStoreTests(unittest.TestCase):
         self.assertNotIn(other["id"], [job["id"] for job in history])
         with self.assertRaises(ValueError):
             self.store.list_for_scope(self.scope_id, limit=0)
+
+    def test_paginated_history_is_scoped_ordered_and_reports_sentinel(self):
+        older = self.store.create(self.scope_id, {"prompt": "Older"})
+        newer = self.store.create(self.scope_id, {"prompt": "Newer"})
+        other = self.store.create(uuid.uuid4().hex, {"prompt": "Other"})
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE analysis_jobs SET created_at = ? WHERE id IN (?, ?, ?)",
+                (
+                    "2026-01-01T00:00:00.000+00:00",
+                    older["id"],
+                    newer["id"],
+                    other["id"],
+                ),
+            )
+
+        first_page, has_more = self.store.list_for_scope_page(
+            self.scope_id,
+            limit=1,
+        )
+        self.assertEqual([job["id"] for job in first_page], [newer["id"]])
+        self.assertTrue(has_more)
+
+        final_page, has_more = self.store.list_for_scope_page(
+            self.scope_id,
+            limit=2,
+        )
+        self.assertEqual(
+            [job["id"] for job in final_page],
+            [newer["id"], older["id"]],
+        )
+        self.assertFalse(has_more)
+        self.assertNotIn(other["id"], [job["id"] for job in final_page])
+
+    def test_paginated_history_validates_limit_boundaries(self):
+        self.assertEqual(
+            self.store.list_for_scope_page(
+                self.scope_id,
+                limit=MAX_HISTORY_JOBS,
+            ),
+            ([], False),
+        )
+        for invalid_limit in (0, MAX_HISTORY_JOBS + 1, True, 1.5):
+            with self.subTest(limit=invalid_limit):
+                with self.assertRaises(ValueError):
+                    self.store.list_for_scope_page(
+                        self.scope_id,
+                        limit=invalid_limit,
+                    )
+        with self.assertRaises(ValueError):
+            self.store.list_for_scope_page("not-a-scope", limit=1)
 
     def test_existing_job_database_is_migrated_for_manifests(self):
         legacy_path = Path(self.temporary_directory.name) / "legacy.sqlite3"

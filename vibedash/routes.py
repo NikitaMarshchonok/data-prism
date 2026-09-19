@@ -81,6 +81,13 @@ try:
         MAX_TOTAL_ROWS as COMPARISON_MAX_TOTAL_ROWS,
         build_period_comparison,
     )
+    from .account_export import (
+        AccountExportTooLargeError,
+        MAX_ACCOUNT_EXPORT_CASES,
+        MAX_ACCOUNT_EXPORT_JOBS,
+        build_account_export,
+        serialize_account_export,
+    )
     from . import vibedash_bp
 except ImportError:
     # Flask не установлен, создаем заглушки
@@ -1111,6 +1118,87 @@ if vibedash_bp:
             error=error,
             success=success,
         ), status
+
+
+    def _account_export_error(status):
+        """Return a deliberately content-free account-export error response."""
+        message = (
+            'The account export is too large to prepare.'
+            if status == 413
+            else 'The account export is temporarily unavailable.'
+        )
+        response = make_response(jsonify(error=message), status)
+        _set_account_export_headers(response)
+        return response
+
+
+    def _set_account_export_headers(response, *, account_id=None):
+        """Apply the private, download-only policy for account exports."""
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = "default-src 'none'; sandbox"
+        if account_id is not None:
+            response.headers['Content-Type'] = 'application/json; charset=utf-8'
+            response.headers['Content-Disposition'] = (
+                'attachment; filename="data-prism-account-export-'
+                f'{account_id[:12]}.json"'
+            )
+        return response
+
+
+    def _account_export_failure_status(error):
+        """Map only explicit bounded-input failures to HTTP 413."""
+        if isinstance(error, AccountExportTooLargeError):
+            return 413
+        return 500
+
+
+    @vibedash_bp.post('/account/export.json')
+    def account_export():
+        """Download the bounded, aggregate account-owned history in memory."""
+        account = _current_account()
+        if account is None:
+            return redirect(url_for('vibedash.login'))
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return _account_export_error(400)
+
+        try:
+            # Keep authorization entirely scope-derived.  No account, scope,
+            # job, or decision identifiers are accepted from the request.
+            # Derive the scope from the account already authenticated for this
+            # request.  Re-authenticating here could fail transiently and make
+            # the helper fall back to a guest scope while still exporting the
+            # authenticated account envelope.
+            scope_id = account_scope_id(account['id'], current_app.secret_key)
+            jobs, jobs_truncated = _analysis_job_store().list_for_scope_page(
+                scope_id,
+                limit=MAX_ACCOUNT_EXPORT_JOBS,
+            )
+            cases, cases_truncated = _decision_case_store().list_for_scope_page(
+                scope_id,
+                limit=MAX_ACCOUNT_EXPORT_CASES,
+            )
+            document = build_account_export(
+                account,
+                jobs,
+                jobs_truncated=jobs_truncated,
+                decision_cases=cases,
+                decisions_truncated=cases_truncated,
+            )
+            serialized = serialize_account_export(document)
+            if not isinstance(serialized, (str, bytes)):
+                raise TypeError('account export serializer returned an invalid value')
+        except Exception as error:
+            # Deliberately do not log this exception: builder errors may carry
+            # account-owned fields or implementation details.
+            return _account_export_error(_account_export_failure_status(error))
+
+        response = make_response(serialized)
+        _set_account_export_headers(response, account_id=account['id'])
+        return response
 
 
     @vibedash_bp.route('/account', methods=['GET'])

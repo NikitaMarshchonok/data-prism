@@ -150,6 +150,16 @@ class AnalysisJobStore:
         limit: int = 20,
     ) -> list[Dict[str, Any]]:
         """Return recent jobs for one signed VibeDash scope."""
+        items, _has_more = self.list_for_scope_page(scope_id, limit=limit)
+        return items
+
+    def list_for_scope_page(
+        self,
+        scope_id: str,
+        *,
+        limit: int,
+    ) -> tuple[list[Dict[str, Any]], bool]:
+        """Return one recent-job page and whether another row exists."""
         normalized_scope_id = _validated_scope_id(scope_id)
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise ValueError("limit must be an integer.")
@@ -168,9 +178,11 @@ class AnalysisJobStore:
                 ORDER BY created_at DESC, rowid DESC
                 LIMIT ?
                 """,
-                (normalized_scope_id, limit),
+                (normalized_scope_id, limit + 1),
             ).fetchall()
-        return [self._row_to_job(row) for row in rows]
+        has_more = len(rows) > limit
+        items = rows[:limit]
+        return [self._row_to_job(row) for row in items], has_more
 
     def claim(self, job_id: str) -> Dict[str, Any] | None:
         """Atomically move one queued job to running."""

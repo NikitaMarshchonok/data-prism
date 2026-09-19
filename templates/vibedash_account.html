@@ -60,6 +60,16 @@
                 <button type="submit" class="button button-primary">Change password</button>
             </form>
 
+            <section class="export-card" aria-labelledby="account-export-title">
+                <h2 id="account-export-title">Export account data</h2>
+                <p class="form-help">Download the newest 50 jobs and newest 100 decision cases owned by this account.</p>
+                <p class="form-help">Raw datasets, prompts, filenames, schema/session data, and global pilot metrics are excluded. The export is assembled in memory and is not written as an artifact.</p>
+                <form method="post" action="{{ url_for('vibedash.account_export') }}" class="export-form">
+                    <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                    <button type="submit" class="button button-secondary">Download account export</button>
+                </form>
+            </section>
+
             <aside class="disclosure" aria-labelledby="pilot-disclosure-title">
                 <h2 id="pilot-disclosure-title">Pilot account notes</h2>
                 <p>There is no password recovery or email verification in this pilot. Keep your password safe; support cannot reset it.</p>

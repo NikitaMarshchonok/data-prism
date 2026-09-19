@@ -228,6 +228,16 @@ class DecisionCaseStore:
         *,
         limit: int = MAX_DECISION_CASES,
     ) -> list[Dict[str, Any]]:
+        items, _has_more = self.list_for_scope_page(scope_id, limit=limit)
+        return items
+
+    def list_for_scope_page(
+        self,
+        scope_id: str,
+        *,
+        limit: int,
+    ) -> tuple[list[Dict[str, Any]], bool]:
+        """Return one recent decision-case page and whether another row exists."""
         normalized_scope = _validated_identifier(scope_id, "scope")
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise ValueError("limit must be an integer.")
@@ -245,9 +255,11 @@ class DecisionCaseStore:
                 ORDER BY created_at DESC, rowid DESC
                 LIMIT ?
                 """,
-                (normalized_scope, limit),
+                (normalized_scope, limit + 1),
             ).fetchall()
-        return [self._row_to_case(row) for row in rows]
+        has_more = len(rows) > limit
+        items = rows[:limit]
+        return [self._row_to_case(row) for row in items], has_more
 
     def update_outcome(
         self,

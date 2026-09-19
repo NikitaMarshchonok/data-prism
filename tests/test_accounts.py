@@ -744,6 +744,144 @@ class AccountRouteIntegrationTests(unittest.TestCase):
             400,
         )
 
+    def test_account_export_guest_and_csrf_are_rejected_without_export_work(self):
+        guest = web_app.app.test_client()
+        response = guest.post('/vibedash/account/export.json', data={'csrf_token': 'x'})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/vibedash/login', response.location)
+
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'export-csrf@example.com').status_code, 302)
+        before = sorted(path.relative_to(self.directory.name).as_posix() for path in Path(self.directory.name).rglob('*'))
+        response = client.post('/vibedash/account/export.json', data={'csrf_token': '0' * 64})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('temporarily unavailable', response.get_data(as_text=True))
+        after = sorted(path.relative_to(self.directory.name).as_posix() for path in Path(self.directory.name).rglob('*'))
+        self.assertEqual(before, after)
+
+    def test_account_export_is_scoped_bounded_and_has_download_headers(self):
+        from vibedash import account_export
+
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'export-http@example.com').status_code, 302)
+        with client.session_transaction() as browser:
+            account_id = browser['vibedash_account_id']
+
+        with patch('vibedash.routes._analysis_job_store') as job_store_factory, patch(
+            'vibedash.routes._decision_case_store'
+        ) as case_store_factory:
+            job_store_factory.return_value.list_for_scope_page.return_value = ([{
+                'id': 'job',
+                'payload': {'prompt': 'HTTP_PROMPT_SECRET', 'filename': 'HTTP_FILE_SECRET'},
+            }], True)
+            case_store_factory.return_value.list_for_scope_page.return_value = ([{
+                'id': 'case',
+                'evidence_snapshot': {'finding': 'HTTP_SNAPSHOT_SECRET'},
+            }], False)
+            token = self._csrf(client, '/vibedash/account')
+            response = client.post('/vibedash/account/export.json', data={'csrf_token': token})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertEqual(payload['jobs_truncated'], True)
+        self.assertEqual(payload['decisions_truncated'], False)
+        for marker in ('HTTP_PROMPT_SECRET', 'HTTP_FILE_SECRET', 'HTTP_SNAPSHOT_SECRET'):
+            self.assertNotIn(marker, response.get_data(as_text=True))
+        self.assertEqual(response.headers['Content-Type'], 'application/json; charset=utf-8')
+        self.assertIn(f'data-prism-account-export-{account_id[:12]}.json', response.headers['Content-Disposition'])
+        self.assertEqual(response.headers['Cache-Control'], 'private, no-store')
+        self.assertEqual(response.headers['Pragma'], 'no-cache')
+        self.assertEqual(response.headers['Referrer-Policy'], 'no-referrer')
+        self.assertEqual(response.headers['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual(response.headers['X-Frame-Options'], 'DENY')
+        self.assertEqual(response.headers['Content-Security-Policy'], "default-src 'none'; sandbox")
+        job_store_factory.return_value.list_for_scope_page.assert_called_once_with(
+            account_scope_id(account_id, web_app.app.secret_key),
+            limit=account_export.MAX_ACCOUNT_EXPORT_JOBS,
+        )
+        case_store_factory.return_value.list_for_scope_page.assert_called_once_with(
+            account_scope_id(account_id, web_app.app.secret_key),
+            limit=account_export.MAX_ACCOUNT_EXPORT_CASES,
+        )
+
+    def test_account_export_builder_and_size_failures_are_generic_and_safe(self):
+        from vibedash import account_export
+
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'export-failure@example.com').status_code, 302)
+        token = self._csrf(client, '/vibedash/account')
+        with patch('vibedash.routes.build_account_export', side_effect=RuntimeError('sensitive marker')):
+            failed = client.post('/vibedash/account/export.json', data={'csrf_token': token})
+        self.assertEqual(failed.status_code, 500)
+        self.assertNotIn('sensitive marker', failed.get_data(as_text=True))
+
+        size_error = getattr(
+            account_export,
+            'AccountExportTooLargeError',
+            getattr(account_export, 'AccountExportSizeError', None),
+        )
+        if size_error is not None:
+            token = self._csrf(client, '/vibedash/account')
+            with patch('vibedash.routes.build_account_export', side_effect=size_error('too big')):
+                oversized = client.post('/vibedash/account/export.json', data={'csrf_token': token})
+            self.assertEqual(oversized.status_code, 413)
+            self.assertNotIn('too big', oversized.get_data(as_text=True))
+
+    def test_account_export_unknown_failure_is_never_classified_by_name_or_status(self):
+        from vibedash import routes
+
+        class LimitLikeRuntimeError(RuntimeError):
+            status_code = 413
+
+        self.assertEqual(
+            routes._account_export_failure_status(LimitLikeRuntimeError('internal detail')),
+            500,
+        )
+
+    def test_account_export_isolation_and_stale_credentials_fail_closed(self):
+        first = web_app.app.test_client()
+        second = web_app.app.test_client()
+        self.assertEqual(self._register(first, 'export-first@example.com').status_code, 302)
+        self.assertEqual(self._register(second, 'export-second@example.com').status_code, 302)
+        with first.session_transaction() as browser:
+            first_id = browser['vibedash_account_id']
+        with second.session_transaction() as browser:
+            second_id = browser['vibedash_account_id']
+        job_store = AnalysisJobStore(self.job_path)
+        first_job = job_store.create(
+            account_scope_id(first_id, web_app.app.secret_key),
+            {'demo_dataset': 'first-account'},
+        )
+        second_job = job_store.create(
+            account_scope_id(second_id, web_app.app.secret_key),
+            {'demo_dataset': 'second-account'},
+        )
+
+        first_token = self._csrf(first, '/vibedash/account')
+        first_export = first.post('/vibedash/account/export.json', data={'csrf_token': first_token})
+        self.assertEqual(first_export.status_code, 200)
+        self.assertIn(first_job['id'], first_export.get_data(as_text=True))
+        self.assertNotIn(second_job['id'], first_export.get_data(as_text=True))
+        second_token = self._csrf(second, '/vibedash/account')
+        second_export = second.post('/vibedash/account/export.json', data={'csrf_token': second_token})
+        self.assertEqual(second_export.status_code, 200)
+        self.assertIn(second_job['id'], second_export.get_data(as_text=True))
+        self.assertNotIn(first_job['id'], second_export.get_data(as_text=True))
+
+        copied_cookie = first.get_cookie('session')
+        stale = web_app.app.test_client()
+        stale.set_cookie('session', copied_cookie.value)
+        account_store = web_app.app.extensions['vibedash_account_store']
+        account_store.change_password(
+            first_id,
+            self.PASSWORD,
+            'a different long password',
+            credential_secret=web_app.app.secret_key,
+        )
+        stale_export = stale.post('/vibedash/account/export.json', data={'csrf_token': '0' * 64})
+        self.assertEqual(stale_export.status_code, 302)
+        self.assertIn('/vibedash/login', stale_export.location)
+
     def test_account_password_wrong_current_locks_out_and_success_flash_is_visible(self):
         client = web_app.app.test_client()
         self.assertEqual(self._register(client, "settings-lock@example.com").status_code, 302)
