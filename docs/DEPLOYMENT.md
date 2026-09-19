@@ -36,10 +36,17 @@ The free Render service uses an ephemeral filesystem. Uploaded datasets, reports
 VibeDash pilot accounts use a separate local SQLite file under the configured
 state directory. Render sets `SESSION_COOKIE_SECURE=true`; local development
 defaults this flag off unless explicitly enabled. Accounts are optional and
-do not provide enterprise authentication, password recovery, team roles, or a
-durable-account SLA. On the free host, account data and account-owned history
-can reset with the filesystem. Guest analyses remain browser-scoped and are
-never migrated into an account.
+do not provide enterprise authentication, email verification, password
+recovery, team roles, or a durable-account SLA. The signed Flask cookie carries
+the VibeDash account id and opaque credential token; the server checks that pair
+against the current password hash atomically on every authenticated request.
+Existing cookies without a valid token fail closed. Changing a password rotates
+the VibeDash identity/CSRF keys, keeps the current browser authenticated with a
+fresh token, and invalidates independently copied old cookies. Ordinary signed
+cookie rotation cannot revoke copied cookies before a password change; use a
+server-side session/revocation store if that guarantee is required. On the free
+host, account data and account-owned history can reset with the filesystem.
+Guest analyses remain browser-scoped and are never migrated into an account.
 
 For single-instance persistent monitoring, upgrade to a paid service and attach a disk at:
 

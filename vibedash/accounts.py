@@ -32,7 +32,16 @@ DEFAULT_THROTTLE_WINDOW_SECONDS = 15 * 60
 DEFAULT_LOCKOUT_SECONDS = 15 * 60
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 MAX_THROTTLE_ROWS = 10_000
+# These bounds preserve Werkzeug's generated defaults while ensuring that a
+# corrupted database cannot turn an authentication check into an unbounded
+# CPU/RAM allocation.  Werkzeug's scrypt implementation sets maxmem to
+# 132 * n * r * p, so the product bound is the relevant memory contract.
+MAX_SCRYPT_MEMORY_BYTES = 64 * 1024 * 1024
+MAX_PBKDF2_ITERATIONS = 2_000_000
 SCOPE_HMAC_DOMAIN = b"vibedash-account-scope-v1\x00"
+CREDENTIAL_HMAC_DOMAIN = b"vibedash-account-credential-v1\x00"
+CREDENTIAL_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_SESSION_CREDENTIAL_KEY = "_vibedash_session_credential"
 SCHEMA_VERSION = 1
 
 
@@ -101,6 +110,13 @@ def account_scope_id(user_id: str, flask_secret: str | bytes) -> str:
     """Derive a deterministic, domain-separated 32-hex account scope."""
     if not isinstance(user_id, str) or ACCOUNT_ID_PATTERN.fullmatch(user_id) is None:
         raise AccountValidationError("user_id_invalid", "User id is invalid.", field="user_id")
+    secret = _secret_bytes(flask_secret)
+    payload = SCOPE_HMAC_DOMAIN + user_id.encode("ascii")
+    return hmac.new(secret, payload, hashlib.sha256).hexdigest()[:32]
+
+
+def _secret_bytes(flask_secret: str | bytes) -> bytes:
+    """Validate and normalize an application secret for HMAC use."""
     if isinstance(flask_secret, str):
         try:
             secret = flask_secret.encode("utf-8")
@@ -112,8 +128,7 @@ def account_scope_id(user_id: str, flask_secret: str | bytes) -> str:
         raise AccountValidationError("secret_invalid", "Application secret is invalid.")
     if not secret or len(secret) > 4096:
         raise AccountValidationError("secret_invalid", "Application secret is invalid.")
-    payload = SCOPE_HMAC_DOMAIN + user_id.encode("ascii")
-    return hmac.new(secret, payload, hashlib.sha256).hexdigest()[:32]
+    return secret
 
 
 def _utc_iso(seconds: float) -> str:
@@ -246,10 +261,17 @@ class AccountStore:
         except Exception:
             pass
 
-    def register(self, email: str, password: str) -> dict[str, Any] | None:
+    def register(
+        self,
+        email: str,
+        password: str,
+        *,
+        credential_secret: str | bytes | None = None,
+    ) -> dict[str, Any] | None:
         """Create an account, returning its public record or ``None`` on conflict."""
         normalized_email = normalize_email(email)
         validated_password = validate_password(password)
+        secret = _secret_bytes(credential_secret) if credential_secret is not None else None
         account_id = secrets.token_hex(16)
         now = _clock_seconds(self.clock)
         password_hash = generate_password_hash(validated_password)
@@ -268,10 +290,149 @@ class AccountStore:
             if "unique" not in str(error).lower() and "constraint" not in str(error).lower():
                 raise
             return None
+        account = self._public_account(row)
+        return self._attach_credential(account, account_id, password_hash, secret)
+
+    def credential_token(self, account_id: str, flask_secret: str | bytes) -> str | None:
+        """Return the opaque session credential for an account.
+
+        The token is an HMAC over the account id and its current password hash.
+        Consequently, changing the password invalidates every token minted
+        from the previous hash without requiring a schema column or a token
+        table.  Only a fixed-format digest leaves this boundary; the hash is
+        never returned or logged.
+        """
+        if not self._valid_stored_id(account_id):
+            raise AccountValidationError("user_id_invalid", "User id is invalid.", field="user_id")
+        secret = _secret_bytes(flask_secret)
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT password_hash FROM accounts WHERE id = ?", (account_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        password_hash = row["password_hash"]
+        return self._credential_digest(account_id, password_hash, secret)
+
+    # The longer name reads better at call sites that keep multiple kinds of
+    # session token.  Keep one implementation so the invalidation semantics
+    # cannot drift between callers.
+    session_credential_token = credential_token
+
+    def verify_credential_token(
+        self, account_id: str, token: str, flask_secret: str | bytes
+    ) -> bool:
+        """Check a session credential token without exposing account data."""
+        return self.account_for_credential(account_id, token, flask_secret) is not None
+
+    def account_for_credential(
+        self, account_id: str, token: str, flask_secret: str | bytes
+    ) -> dict[str, Any] | None:
+        """Return the public account represented by a current credential.
+
+        The account row and password hash are read exactly once.  The token is
+        derived and compared against that same snapshot before the hash-free
+        public record is returned, avoiding a verify-then-get race during
+        password rotation.
+        """
+        if not isinstance(token, str) or CREDENTIAL_TOKEN_PATTERN.fullmatch(token) is None:
+            return None
+        if not self._valid_stored_id(account_id):
+            return None
+        secret = _secret_bytes(flask_secret)
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT id, email, password_hash, created_at, last_login_at "
+                "FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        password_hash = row["password_hash"]
+        expected = self._credential_digest(account_id, password_hash, secret)
+        if expected is None:
+            return None
+        if not hmac.compare_digest(expected, token):
+            return None
         return self._public_account(row)
 
-    def authenticate(self, email: str, password: str) -> dict[str, Any] | None:
+    def change_password(
+        self,
+        account_id: str,
+        current_password: str,
+        new_password: str,
+        *,
+        credential_secret: str | bytes | None = None,
+    ) -> dict[str, Any] | None:
+        """Change an account password atomically, or return ``None`` safely.
+
+        Missing accounts, invalid account ids, wrong current passwords, and
+        malformed stored hashes intentionally share the same generic failure
+        result.  An unchanged password is rejected as a no-op.  New-password
+        validation remains explicit so callers can give useful form feedback.
+        """
+        validated_password = validate_password(new_password)
+        secret = _secret_bytes(credential_secret) if credential_secret is not None else None
+        if not self._valid_stored_id(account_id):
+            return None
+        now = _clock_seconds(self.clock)
+        with self._transaction() as connection:
+            account = connection.execute(
+                "SELECT id, email, password_hash, created_at, last_login_at "
+                "FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            password_hash = account["password_hash"] if account is not None else self._dummy_hash
+            email_key = self._throttle_key(account["email"]) if account is not None else None
+            throttle = (
+                connection.execute(
+                    "SELECT failure_count, window_started_at, locked_until "
+                    "FROM login_throttle WHERE email_key = ?",
+                    (email_key,),
+                ).fetchone()
+                if email_key is not None
+                else None
+            )
+            locked = throttle is not None and _safe_float(throttle["locked_until"]) > now
+            current_is_well_formed = self._valid_password_input(current_password)
+            password_candidate = current_password if current_is_well_formed else ""
+            password_ok = self._check_password(password_hash, password_candidate) and current_is_well_formed
+            if locked or not password_ok:
+                if not locked and email_key is not None:
+                    self._record_failure(connection, email_key, now, throttle)
+                return None
+            # Explicit same-password policy: a successful verification is not
+            # enough to rotate a hash and all derived session credentials.
+            if isinstance(current_password, str) and hmac.compare_digest(current_password, validated_password):
+                return None
+            if account is None:
+                return None
+            new_hash = generate_password_hash(validated_password)
+            # BEGIN IMMEDIATE serializes writers; the old-hash predicate also
+            # protects this update if the transaction strategy changes later.
+            result = connection.execute(
+                "UPDATE accounts SET password_hash = ? WHERE id = ? AND password_hash = ?",
+                (new_hash, account_id, password_hash),
+            )
+            if result.rowcount != 1:
+                return None
+            connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            refreshed = connection.execute(
+                "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            account = self._public_account(refreshed)
+            return self._attach_credential(account, account_id, new_hash, secret)
+
+    def authenticate(
+        self,
+        email: str,
+        password: str,
+        *,
+        credential_secret: str | bytes | None = None,
+    ) -> dict[str, Any] | None:
         """Authenticate without revealing whether an email exists."""
+        secret = _secret_bytes(credential_secret) if credential_secret is not None else None
         try:
             normalized_email = normalize_email(email)
         except AccountValidationError:
@@ -306,7 +467,15 @@ class AccountStore:
                 refreshed = connection.execute(
                     "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?", (account["id"],)
                 ).fetchone()
-                return self._public_account(refreshed)
+                account = self._public_account(refreshed)
+                # The credential is derived from the hash that was checked and
+                # while BEGIN IMMEDIATE still excludes a concurrent password
+                # rotation.  This snapshot must travel with the authentication
+                # result; minting it in a later transaction creates a TOCTOU
+                # window between password verification and session creation.
+                if account is None:
+                    return None
+                return self._attach_credential(account, account["id"], password_hash, secret)
             self._record_failure(connection, email_key, now, throttle)
             return None
 
@@ -392,17 +561,114 @@ class AccountStore:
             "last_login_at": row["last_login_at"],
         }
 
+    @staticmethod
+    def _attach_credential(
+        account: dict[str, Any] | None,
+        account_id: str,
+        password_hash: Any,
+        secret: bytes | None,
+    ) -> dict[str, Any] | None:
+        """Attach an internal snapshot credential only to auth-operation results."""
+        if account is None or secret is None:
+            return account
+        token = AccountStore._credential_digest(account_id, password_hash, secret)
+        if token is None:
+            return None
+        account[_SESSION_CREDENTIAL_KEY] = token
+        return account
+
+    @staticmethod
+    def _valid_password_input(password: Any) -> bool:
+        if not isinstance(password, str) or len(password) > MAX_PASSWORD_LENGTH or "\x00" in password:
+            return False
+        try:
+            password.encode("utf-8")
+        except UnicodeEncodeError:
+            return False
+        return True
+
+    @staticmethod
+    def _valid_password_hash_shape(password_hash: Any) -> bool:
+        if not isinstance(password_hash, str) or not 1 <= len(password_hash) <= 4096:
+            return False
+        parts = password_hash.split("$")
+        if len(parts) != 3 or not all(parts):
+            return False
+
+        method, salt, digest = parts
+        method_parts = method.split(":")
+        algorithm = method_parts[0]
+        if not algorithm or not salt or not re.fullmatch(r"[0-9a-fA-F]+", digest):
+            return False
+
+        if algorithm == "scrypt":
+            # Werkzeug emits either the default method name or explicit
+            # n/r/p parameters.  Reject malformed parameters before a token
+            # can be minted for a hash that password verification cannot use.
+            if len(method_parts) == 1:
+                parameters = (2**15, 8, 1)
+            elif len(method_parts) == 4:
+                try:
+                    parameters = tuple(int(value) for value in method_parts[1:])
+                except (TypeError, ValueError, OverflowError):
+                    return False
+            else:
+                return False
+            n, r, p = parameters
+            if (
+                n < 2
+                or n & (n - 1)
+                or r < 1
+                or p < 1
+                or n * r * p > MAX_SCRYPT_MEMORY_BYTES // 132
+            ):
+                return False
+            return len(digest) == 128
+
+        if algorithm == "pbkdf2":
+            # Werkzeug supports pbkdf2[:hash_name[:iterations]].
+            if len(method_parts) == 1:
+                hash_name, iterations = "sha256", 1_000_000
+            elif len(method_parts) == 2:
+                hash_name, iterations = method_parts[1], 1_000_000
+            elif len(method_parts) == 3:
+                hash_name = method_parts[1]
+                try:
+                    iterations = int(method_parts[2])
+                except (TypeError, ValueError, OverflowError):
+                    return False
+            else:
+                return False
+            if iterations < 1 or iterations > MAX_PBKDF2_ITERATIONS:
+                return False
+            try:
+                # hashlib.new() accepts digest names that pbkdf2_hmac does
+                # not.  Probe the exact primitive Werkzeug calls, without
+                # doing attacker-controlled work (one iteration only).
+                digest_size = len(hashlib.pbkdf2_hmac(hash_name, b"", b"", 1))
+            except (TypeError, ValueError, OverflowError):
+                return False
+            return len(digest) == digest_size * 2
+
+        # md5/sha1/plain were accepted by older Werkzeug releases but are not
+        # valid methods for the currently supported checker.  In particular,
+        # never mint a credential from an arbitrary three-part legacy-looking
+        # string when password verification would fail closed.
+        return False
+
+    @staticmethod
+    def _credential_digest(account_id: str, password_hash: Any, secret: bytes) -> str | None:
+        if not AccountStore._valid_password_hash_shape(password_hash):
+            return None
+        try:
+            hash_bytes = password_hash.encode("utf-8")
+        except (AttributeError, UnicodeError):
+            return None
+        payload = CREDENTIAL_HMAC_DOMAIN + account_id.encode("ascii") + b"\x00" + hash_bytes
+        return hmac.new(secret, payload, hashlib.sha256).hexdigest()
+
     def _check_password(self, password_hash: Any, password: str) -> bool:
-        parts = password_hash.split("$") if isinstance(password_hash, str) else ()
-        method = parts[0].split(":", 1)[0] if parts else ""
-        valid_shape = (
-            isinstance(password_hash, str)
-            and 1 <= len(password_hash) <= 4096
-            and len(parts) == 3
-            and all(parts)
-            and method in {"scrypt", "pbkdf2", "md5", "sha1", "plain"}
-        )
-        if valid_shape:
+        if self._valid_password_hash_shape(password_hash):
             try:
                 return bool(check_password_hash(password_hash, password))
             except (ValueError, TypeError, UnicodeError, OverflowError, MemoryError, RuntimeError):
@@ -589,6 +855,7 @@ __all__ = [
     "AccountStore",
     "AccountStoreSchemaError",
     "AccountValidationError",
+    "CREDENTIAL_TOKEN_PATTERN",
     "MAX_EMAIL_LENGTH",
     "MAX_PASSWORD_LENGTH",
     "MIN_PASSWORD_LENGTH",

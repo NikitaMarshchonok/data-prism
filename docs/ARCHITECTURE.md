@@ -181,16 +181,26 @@ opened lazily, cached in the Flask application extensions, and never closed by
 a per-request teardown. Registration and login use session-bound CSRF tokens,
 bounded password hashing/throttling, and generic failure responses. A valid
 logged-in account derives a deterministic 32-hex scope from its account id and
-the Flask secret key; guests continue to receive random browser scopes. Logout
-rotates the VibeDash identity and scope keys, preserving unrelated classic
-upload state while preventing fallback to the prior account scope.
-This is a client-side signed-cookie boundary: rotation invalidates the prior
-identity for the browser that receives the replacement cookie, but it cannot
-revoke a separately copied old cookie. Deployments requiring immediate
-revocation of stolen cookies need a server-side session/revocation store. The
-Flask secret is also part of the deterministic account-scope derivation, so a
-secret-key rotation requires users to sign in again and makes prior
-account-owned job history unavailable under the new scope.
+the Flask secret key; guests continue to receive random browser scopes. The
+signed-cookie VibeDash identity contains the account id and an opaque
+credential token derived from the current password hash. Every authenticated
+request validates that pair atomically with `account_for_credential`; cookies
+without a valid token fail closed. Logout and authentication transitions rotate
+VibeDash identity, scope, and CSRF keys while preserving unrelated classic
+upload/report and monitoring state. Password change rotates those keys, keeps
+the changing browser signed in with a fresh token, and invalidates copied old
+cookies because their token was derived from the previous hash. Ordinary
+client-side cookie rotation cannot revoke a separately copied cookie, so
+deployments requiring immediate revocation before a password change need a
+server-side session/revocation store. The Flask secret is also part of the
+deterministic account-scope derivation, so a secret-key rotation requires users
+to sign in again and makes prior account-owned job history unavailable under
+the new scope.
+
+Account settings are intentionally limited to password changes. There is no
+email verification, recovery channel, team access, or account deletion UI in
+this pilot. Free-host storage is ephemeral and account records, jobs, uploads,
+and history may disappear when the host restarts.
 
 This is an optional free-host pilot boundary, not enterprise identity,
 recovery, team access, or a durability guarantee. Guest analyses are not

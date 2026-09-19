@@ -135,6 +135,209 @@ class AccountStoreTests(unittest.TestCase):
             )
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM login_throttle WHERE email_key LIKE '%@%' ").fetchone()[0], 0)
 
+    def test_authenticated_credential_snapshot_cannot_be_replaced_by_concurrent_password_change(self):
+        """A login result must never mint a token from a later password hash."""
+        password = "a sufficiently long password"
+        account = self.store.register("snapshot-race@example.com", password)
+        authenticated = self.store.authenticate(
+            "snapshot-race@example.com",
+            password,
+            credential_secret="flask-secret",
+        )
+        self.assertIsNotNone(authenticated)
+        snapshot_token = authenticated["_vibedash_session_credential"]
+
+        changed = self.store.change_password(
+            account["id"],
+            password,
+            "a different long password",
+        )
+        self.assertIsNotNone(changed)
+        # The token bound during authentication is now stale and cannot be
+        # mistaken for a token minted after the password rotation.
+        self.assertFalse(
+            self.store.verify_credential_token(
+                account["id"], snapshot_token, "flask-secret"
+            )
+        )
+        self.assertNotEqual(
+            snapshot_token,
+            self.store.credential_token(account["id"], "flask-secret"),
+        )
+
+    def test_credential_token_is_opaque_deterministic_separated_and_validated(self):
+        account = self.store.register("token@example.com", "a sufficiently long password")
+        token = self.store.credential_token(account["id"], "flask-secret")
+        self.assertRegex(token, r"^[0-9a-f]{64}$")
+        self.assertNotIn("$", token)
+        self.assertEqual(token, self.store.session_credential_token(account["id"], "flask-secret"))
+        self.assertTrue(self.store.verify_credential_token(account["id"], token, "flask-secret"))
+        self.assertNotEqual(token, self.store.credential_token(account["id"], "other-secret"))
+        self.assertFalse(self.store.verify_credential_token(account["id"], token, "other-secret"))
+        self.assertFalse(self.store.verify_credential_token("not-an-id", token, "flask-secret"))
+        self.assertFalse(self.store.verify_credential_token(account["id"], "not-a-token", "flask-secret"))
+        self.assertIsNone(self.store.credential_token("b" * 32, "flask-secret"))
+        with self.assertRaises(AccountValidationError):
+            self.store.credential_token("not-an-id", "flask-secret")
+        with self.assertRaises(AccountValidationError):
+            self.store.credential_token(account["id"], "\ud800")
+
+    def test_credential_token_fails_closed_for_malformed_hash(self):
+        account = self.store.register("broken-token@example.com", "a sufficiently long password")
+        for malformed_hash in ("not-a-werkzeug-hash", "scrypt$foo$bar", "scrypt:1:1:1$foo$" + "0" * 128):
+            with sqlite3.connect(self.path) as connection:
+                connection.execute(
+                    "UPDATE accounts SET password_hash = ? WHERE id = ?",
+                    (malformed_hash, account["id"]),
+                )
+            self.assertIsNone(self.store.credential_token(account["id"], "flask-secret"))
+            self.assertFalse(self.store.verify_credential_token(account["id"], "0" * 64, "flask-secret"))
+            self.assertIsNone(self.store.account_for_credential(account["id"], "0" * 64, "flask-secret"))
+
+    def test_credential_and_password_checks_bound_corrupt_kdf_parameters(self):
+        account = self.store.register("kdf-bounds@example.com", "a sufficiently long password")
+        malformed_hashes = (
+            # Product exceeds the bounded Werkzeug scrypt memory contract.
+            "scrypt:1048576:8:1$abcdefghijklmnop$" + "0" * 128,
+            # Iteration count exceeds the bounded PBKDF2 CPU contract.
+            "pbkdf2:sha256:10000001$abcdefghijklmnop$" + "0" * 64,
+            # hashlib.new accepts names that Werkzeug's pbkdf2_hmac does not.
+            "pbkdf2:shake_128:1$abcdefghijklmnop$" + "0" * 2,
+        )
+        for malformed_hash in malformed_hashes:
+            with sqlite3.connect(self.path) as connection:
+                connection.execute(
+                    "UPDATE accounts SET password_hash = ? WHERE id = ?",
+                    (malformed_hash, account["id"]),
+                )
+            self.assertFalse(AccountStore._valid_password_hash_shape(malformed_hash))
+            self.assertIsNone(self.store.credential_token(account["id"], "flask-secret"))
+            with patch("vibedash.accounts.check_password_hash", return_value=True) as check:
+                self.assertIsNone(self.store.authenticate("kdf-bounds@example.com", "a sufficiently long password"))
+            # Invalid stored hashes always take the fixed dummy-hash path and
+            # never reach the attacker-controlled KDF parameters.
+            check.assert_called_once_with(self.store._dummy_hash, "a sufficiently long password")
+
+    def test_change_password_rotates_hash_and_invalidates_old_credential(self):
+        old_password = "a sufficiently long password"
+        new_password = "a different long password"
+        account = self.store.register("change@example.com", old_password)
+        old_token = self.store.credential_token(account["id"], "flask-secret")
+        self.assertEqual(self.store.account_for_credential(account["id"], old_token, "flask-secret"), account)
+
+        self.assertIsNone(self.store.change_password(account["id"], "wrong password", new_password))
+        self.assertTrue(self.store.verify_credential_token(account["id"], old_token, "flask-secret"))
+        self.assertIsNone(self.store.change_password("f" * 32, old_password, new_password))
+        changed = self.store.change_password(account["id"], old_password, new_password)
+        self.assertEqual(changed["id"], account["id"])
+        self.assertNotIn("password_hash", changed)
+        self.assertIsNone(self.store.authenticate("change@example.com", old_password))
+        self.assertIsNotNone(self.store.authenticate("change@example.com", new_password))
+        new_token = self.store.credential_token(account["id"], "flask-secret")
+        self.assertNotEqual(old_token, new_token)
+        self.assertFalse(self.store.verify_credential_token(account["id"], old_token, "flask-secret"))
+        self.assertTrue(self.store.verify_credential_token(account["id"], new_token, "flask-secret"))
+        self.assertIsNone(self.store.account_for_credential(account["id"], old_token, "flask-secret"))
+        fresh = self.store.account_for_credential(account["id"], new_token, "flask-secret")
+        self.assertEqual(fresh["id"], account["id"])
+        self.assertEqual(fresh["email"], account["email"])
+        self.assertNotIn("password_hash", fresh)
+        self.assertIsNone(self.store.account_for_credential("f" * 32, new_token, "flask-secret"))
+        self.assertIsNone(self.store.account_for_credential(account["id"], "0" * 64, "flask-secret"))
+
+    def test_change_password_rejects_same_password_without_rotation(self):
+        password = "a sufficiently long password"
+        account = self.store.register("same@example.com", password)
+        token = self.store.credential_token(account["id"], "flask-secret")
+        self.assertIsNone(self.store.change_password(account["id"], password, password))
+        self.assertEqual(token, self.store.credential_token(account["id"], "flask-secret"))
+        self.assertIsNotNone(self.store.authenticate("same@example.com", password))
+
+    def test_change_password_reuses_login_throttle_and_expires_lockout(self):
+        password = "a sufficiently long password"
+        replacement = "a different long password"
+        account = self.store.register("throttled-change@example.com", password)
+        for expected_count in (1, 2):
+            self.assertIsNone(self.store.change_password(account["id"], "wrong password", replacement))
+            self.assertEqual(self.store.throttle_state("throttled-change@example.com")["failure_count"], expected_count)
+
+        self.assertIsNone(self.store.change_password(account["id"], "wrong password", replacement))
+        locked_state = self.store.throttle_state("throttled-change@example.com")
+        self.assertEqual(locked_state["failure_count"], 3)
+        self.assertGreater(locked_state["locked_until"], self.clock.value)
+        self.assertIsNone(self.store.change_password(account["id"], password, replacement))
+        self.assertIsNotNone(self.store.throttle_state("throttled-change@example.com"))
+
+        self.clock.value += 21
+        self.assertIsNotNone(self.store.change_password(account["id"], password, replacement))
+        self.assertIsNone(self.store.throttle_state("throttled-change@example.com"))
+
+    def test_change_password_success_clears_non_locked_failures(self):
+        password = "a sufficiently long password"
+        account = self.store.register("clear-change@example.com", password)
+        self.assertIsNone(self.store.change_password(account["id"], "wrong password", "a new long password"))
+        self.assertEqual(self.store.throttle_state("clear-change@example.com")["failure_count"], 1)
+        self.assertIsNotNone(self.store.change_password(account["id"], password, "a new long password"))
+        self.assertIsNone(self.store.throttle_state("clear-change@example.com"))
+
+    def test_same_password_noop_does_not_increment_change_throttle(self):
+        password = "a sufficiently long password"
+        account = self.store.register("same-throttle@example.com", password)
+        self.assertIsNone(self.store.change_password(account["id"], "wrong password", password))
+        before = self.store.throttle_state("same-throttle@example.com")
+        self.assertEqual(before["failure_count"], 1)
+        self.assertIsNone(self.store.change_password(account["id"], password, password))
+        self.assertEqual(self.store.throttle_state("same-throttle@example.com"), before)
+
+    def test_change_password_malformed_hash_uses_dummy_and_missing_is_generic(self):
+        account = self.store.register("broken-change@example.com", "a sufficiently long password")
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "UPDATE accounts SET password_hash = ? WHERE id = ?",
+                ("not-a-werkzeug-hash", account["id"]),
+            )
+        with patch("vibedash.accounts.check_password_hash", return_value=True) as check:
+            self.assertIsNone(
+                self.store.change_password(account["id"], "a sufficiently long password", "a new long password")
+            )
+        check.assert_called_once_with(self.store._dummy_hash, "a sufficiently long password")
+        self.assertIsNone(
+            self.store.change_password("e" * 32, "a sufficiently long password", "a new long password")
+        )
+
+    def test_change_password_rolls_back_when_hash_generation_fails(self):
+        password = "a sufficiently long password"
+        account = self.store.register("rollback@example.com", password)
+        with patch("vibedash.accounts.generate_password_hash", side_effect=RuntimeError("hash failure")):
+            with self.assertRaisesRegex(RuntimeError, "hash failure"):
+                self.store.change_password(account["id"], password, "a different long password")
+        self.assertIsNotNone(self.store.authenticate("rollback@example.com", password))
+
+    def test_concurrent_password_changes_have_one_winner(self):
+        password = "a sufficiently long password"
+        stores = [AccountStore(self.path), AccountStore(self.path)]
+        account = self.store.register("password-race@example.com", password)
+        barrier = threading.Barrier(2)
+        results = []
+        passwords = ["a first replacement password", "a second replacement password"]
+
+        def change(store, replacement):
+            barrier.wait()
+            results.append(store.change_password(account["id"], password, replacement))
+
+        threads = [threading.Thread(target=change, args=(store, replacement)) for store, replacement in zip(stores, passwords)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        for store in stores:
+            store.close()
+        self.assertEqual(sum(result is not None for result in results), 1)
+        self.assertEqual(
+            sum(self.store.authenticate("password-race@example.com", candidate) is not None for candidate in passwords),
+            1,
+        )
+
     def test_malformed_hash_uses_dummy_hash_path(self):
         account = self.store.register("broken@example.com", "a sufficiently long password")
         with sqlite3.connect(self.path) as connection:
@@ -482,6 +685,300 @@ class AccountRouteIntegrationTests(unittest.TestCase):
             data={"csrf_token": token, "email": "fresh@example.com", "password": self.PASSWORD},
         )
         self.assertEqual(response.status_code, 302)
+
+    def test_account_settings_guest_csrf_mismatch_and_explicit_password_validation(self):
+        client = web_app.app.test_client()
+        self.assertEqual(client.get("/vibedash/account").status_code, 302)
+        self.assertEqual(client.post("/vibedash/account/password").status_code, 302)
+        self.assertEqual(self._register(client, "settings-validation@example.com").status_code, 302)
+
+        settings = client.get("/vibedash/account")
+        token = re.search(r'name="csrf_token" value="([0-9a-f]{64})"', settings.get_data(as_text=True)).group(1)
+        mismatch = client.post(
+            "/vibedash/account/password",
+            data={
+                "csrf_token": token,
+                "current_password": self.PASSWORD,
+                "new_password": "a different long password",
+                "new_password_confirmation": "a mismatched long password",
+            },
+        )
+        self.assertEqual(mismatch.status_code, 400)
+        self.assertIn("New passwords do not match.", mismatch.get_data(as_text=True))
+
+        # Only the documented confirmation field is accepted; aliases must not
+        # accidentally turn into a successful password change.
+        alias = client.post(
+            "/vibedash/account/password",
+            data={
+                "csrf_token": token,
+                "current_password": self.PASSWORD,
+                "new_password": "a different long password",
+                "confirm_password": "a different long password",
+            },
+        )
+        self.assertEqual(alias.status_code, 400)
+        self.assertIn("New passwords do not match.", alias.get_data(as_text=True))
+
+        short = client.post(
+            "/vibedash/account/password",
+            data={
+                "csrf_token": token,
+                "current_password": self.PASSWORD,
+                "new_password": "too short",
+                "new_password_confirmation": "too short",
+            },
+        )
+        self.assertEqual(short.status_code, 400)
+        self.assertIn("at least", short.get_data(as_text=True))
+        self.assertEqual(
+            client.post(
+                "/vibedash/account/password",
+                data={
+                    "csrf_token": "0" * 64,
+                    "current_password": self.PASSWORD,
+                    "new_password": "a different long password",
+                    "new_password_confirmation": "a different long password",
+                },
+            ).status_code,
+            400,
+        )
+
+    def test_account_password_wrong_current_locks_out_and_success_flash_is_visible(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, "settings-lock@example.com").status_code, 302)
+        for _ in range(5):
+            token = self._csrf(client, "/vibedash/account")
+            wrong = client.post(
+                "/vibedash/account/password",
+                data={
+                    "csrf_token": token,
+                    "current_password": "wrong current password",
+                    "new_password": "a different long password",
+                    "new_password_confirmation": "a different long password",
+                },
+            )
+            self.assertEqual(wrong.status_code, 400)
+            self.assertIn("current password or account state is invalid", wrong.get_data(as_text=True))
+        token = self._csrf(client, "/vibedash/account")
+        locked = client.post(
+            "/vibedash/account/password",
+            data={
+                "csrf_token": token,
+                "current_password": self.PASSWORD,
+                "new_password": "a different long password",
+                "new_password_confirmation": "a different long password",
+            },
+        )
+        self.assertEqual(locked.status_code, 400)
+        self.assertIn("current password or account state is invalid", locked.get_data(as_text=True))
+
+    def test_password_change_revokes_copied_cookie_and_preserves_current_session(self):
+        first = web_app.app.test_client()
+        self.assertEqual(self._register(first, "rotate-http@example.com").status_code, 302)
+        with first.session_transaction() as browser:
+            account_id = browser["vibedash_account_id"]
+        shared_scope = account_scope_id(account_id, web_app.app.secret_key)
+        job = AnalysisJobStore(self.job_path).create(
+            shared_scope,
+            {"demo_dataset": "saas_growth", "prompt": "password scope"},
+        )
+        copied_cookie = first.get_cookie("session")
+        second = web_app.app.test_client()
+        second.set_cookie("session", copied_cookie.value)
+        self.assertEqual(second.get("/vibedash/account").status_code, 200)
+
+        token = self._csrf(first, "/vibedash/account")
+        changed = first.post(
+            "/vibedash/account/password",
+            data={
+                "csrf_token": token,
+                "current_password": self.PASSWORD,
+                "new_password": "a different long password",
+                "new_password_confirmation": "a different long password",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(changed.status_code, 200)
+        self.assertIn("Your password was changed.", changed.get_data(as_text=True))
+        self.assertEqual(first.get("/vibedash/account").status_code, 200)
+        self.assertIn(job["id"][:10], first.get("/vibedash/history").get_data(as_text=True))
+        self.assertEqual(second.get("/vibedash/account").status_code, 302)
+        self.assertNotIn(job["id"][:10], second.get("/vibedash/history").get_data(as_text=True))
+
+        relogin = web_app.app.test_client()
+        old_password = self._login(
+            relogin, "rotate-http@example.com", password=self.PASSWORD
+        )
+        self.assertEqual(old_password.status_code, 401)
+        new_password = self._login(
+            relogin, "rotate-http@example.com", password="a different long password"
+        )
+        self.assertEqual(new_password.status_code, 302)
+
+    def test_missing_or_malformed_credential_rotates_vibedash_keys_but_keeps_classic_state(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, "malformed-credential@example.com").status_code, 302)
+        with client.session_transaction() as browser:
+            browser["dataset_filename"] = "classic.csv"
+            browser["report_filename"] = "classic.html"
+            browser["monitoring_scope_id"] = "b" * 32
+            browser["vibedash_analysis_scope_id"] = "c" * 32
+            browser.pop("vibedash_account_credential")
+            browser["vibedash_auth_csrf_token"] = "d" * 64
+            browser["vibedash_decision_csrf_token"] = "e" * 64
+        self.assertEqual(client.get("/vibedash/account").status_code, 302)
+        with client.session_transaction() as browser:
+            self.assertNotIn("vibedash_account_id", browser)
+            self.assertNotIn("vibedash_account_credential", browser)
+            self.assertNotEqual(browser.get("vibedash_analysis_scope_id"), "c" * 32)
+            self.assertNotIn("vibedash_auth_csrf_token", browser)
+            self.assertNotIn("vibedash_decision_csrf_token", browser)
+            self.assertEqual(browser["dataset_filename"], "classic.csv")
+            self.assertEqual(browser["report_filename"], "classic.html")
+            self.assertEqual(browser["monitoring_scope_id"], "b" * 32)
+
+        self.assertEqual(self._login(client, "malformed-credential@example.com").status_code, 302)
+        with client.session_transaction() as browser:
+            browser["vibedash_account_credential"] = "not-a-token"
+            browser["vibedash_analysis_scope_id"] = "f" * 32
+        self.assertEqual(client.get("/vibedash/account").status_code, 302)
+        with client.session_transaction() as browser:
+            self.assertNotIn("vibedash_account_id", browser)
+            self.assertNotIn("vibedash_account_credential", browser)
+            self.assertNotEqual(browser.get("vibedash_analysis_scope_id"), "f" * 32)
+            self.assertEqual(browser["monitoring_scope_id"], "b" * 32)
+
+    def test_token_mint_failure_rotates_identity_without_rendering_stale_account(self):
+        client = web_app.app.test_client()
+        with client.session_transaction() as browser:
+            browser["dataset_filename"] = "classic.csv"
+            browser["report_filename"] = "classic.html"
+            browser["monitoring_scope_id"] = "a" * 32
+        self.assertEqual(self._register(client, "mint-failure@example.com").status_code, 302)
+        store = web_app.app.extensions["vibedash_account_store"]
+        token = self._csrf(client, "/vibedash/account")
+        original_change = store.change_password
+        with patch.object(store, "credential_token", return_value=None), patch.object(
+            store,
+            "change_password",
+            side_effect=lambda account_id, current_password, new_password, **kwargs: {
+                key: value
+                for key, value in (original_change(
+                    account_id,
+                    current_password,
+                    new_password,
+                    **kwargs,
+                ) or {}).items()
+                if key != "_vibedash_session_credential"
+            } or None,
+        ):
+            response = client.post(
+                "/vibedash/account/password",
+                data={
+                    "csrf_token": token,
+                    "current_password": self.PASSWORD,
+                    "new_password": "a different long password",
+                    "new_password_confirmation": "a different long password",
+                },
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.location, "/vibedash/login")
+        with client.session_transaction() as browser:
+            self.assertNotIn("vibedash_account_id", browser)
+            self.assertNotIn("vibedash_account_credential", browser)
+            self.assertNotIn("vibedash_auth_csrf_token", browser)
+            self.assertNotIn("vibedash_decision_csrf_token", browser)
+            self.assertNotIn("vibedash_analysis_scope_id", browser)
+            self.assertEqual(browser["dataset_filename"], "classic.csv")
+            self.assertEqual(browser["report_filename"], "classic.html")
+            self.assertEqual(browser["monitoring_scope_id"], "a" * 32)
+
+    def test_auth_snapshot_race_cannot_establish_session_for_new_password_hash(self):
+        """Interleaving a password rotation must leave the login snapshot stale."""
+        store = web_app.app.extensions.get("vibedash_account_store")
+        if store is None:
+            store = AccountStore(self.account_path)
+            web_app.app.extensions["vibedash_account_store"] = store
+        account = store.register("snapshot-route-race@example.com", self.PASSWORD)
+        authenticated = store.authenticate(
+            "snapshot-route-race@example.com",
+            self.PASSWORD,
+            credential_secret=web_app.app.secret_key,
+        )
+        self.assertIsNotNone(authenticated)
+        self.assertIsNotNone(
+            store.change_password(
+                account["id"], self.PASSWORD, "a different long password"
+            )
+        )
+
+        from flask import session
+        from vibedash.routes import _current_account, _establish_account
+
+        with web_app.app.test_request_context("/vibedash/login"):
+            self.assertTrue(_establish_account(authenticated))
+            # The established snapshot is the old token, never a token minted
+            # from the replacement hash; the next account resolution therefore
+            # rejects and rotates it instead of authorizing the login.
+            self.assertIsNone(_current_account())
+            self.assertNotIn("vibedash_account_id", session)
+            self.assertNotIn("vibedash_account_credential", session)
+
+    def test_account_establishment_session_failure_is_fail_closed(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, "session-failure@example.com").status_code, 302)
+        with client.session_transaction() as browser:
+            browser["dataset_filename"] = "classic.csv"
+            browser["report_filename"] = "classic.html"
+            browser["monitoring_scope_id"] = "a" * 32
+            account_id = browser["vibedash_account_id"]
+            account = {"id": account_id, "email": "session-failure@example.com"}
+
+        from vibedash.routes import _establish_account
+
+        # Simulate a failure after the account id and credential have been
+        # written, but before the new session can be considered complete.
+        with patch("vibedash.routes._auth_csrf_token", side_effect=RuntimeError("csrf failure")):
+            with web_app.app.test_request_context("/vibedash/account"):
+                from flask import session
+
+                session.update(
+                    {
+                        "dataset_filename": "classic.csv",
+                        "report_filename": "classic.html",
+                        "monitoring_scope_id": "a" * 32,
+                    }
+                )
+                self.assertFalse(_establish_account(account))
+                self.assertNotIn("vibedash_account_id", session)
+                self.assertNotIn("vibedash_account_credential", session)
+                self.assertNotIn("vibedash_auth_csrf_token", session)
+                self.assertNotIn("vibedash_decision_csrf_token", session)
+                self.assertEqual(session["dataset_filename"], "classic.csv")
+                self.assertEqual(session["report_filename"], "classic.html")
+                self.assertEqual(session["monitoring_scope_id"], "a" * 32)
+
+    def test_account_establishment_rejects_public_record_without_snapshot_credential(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, "public-record@example.com").status_code, 302)
+        with client.session_transaction() as browser:
+            account_id = browser["vibedash_account_id"]
+
+        from vibedash.routes import _establish_account
+
+        # A public account record must never trigger a later credential_token
+        # read.  Session establishment is valid only for an auth-operation
+        # result carrying the exact transaction-bound hash snapshot credential.
+        public_account = {"id": account_id, "email": "public-record@example.com"}
+        with patch.object(web_app.app.extensions["vibedash_account_store"], "credential_token") as mint:
+            with web_app.app.test_request_context("/vibedash/login"):
+                from flask import session
+
+                self.assertFalse(_establish_account(public_account))
+                mint.assert_not_called()
+                self.assertNotIn("vibedash_account_id", session)
+                self.assertNotIn("vibedash_account_credential", session)
 
 
 if __name__ == "__main__":
