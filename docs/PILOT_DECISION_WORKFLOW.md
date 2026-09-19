@@ -46,14 +46,19 @@ stores only bounded evidence text, audit identifiers, and fields entered by the
 user. Users should not put personal, secret, or regulated information into the
 owner, decision, target, or outcome fields.
 
-Access is isolated by a random identifier in the server-signed browser session.
-This is not user authentication. Clearing the cookie loses access to the case.
-The local SQLite store is suitable for a single-instance pilot. On a free Render
+Guest access is isolated by a random identifier in the server-signed browser
+session. An optional VibeDash pilot account instead supplies a deterministic
+account scope shared across browsers; it is deliberately not enterprise
+identity, recovery, team access, or a durability guarantee. Guest analyses and
+cases are never claimed or migrated when an account is created. Clearing a
+guest cookie loses access to that guest scope; signing out rotates the current
+VibeDash identity but cannot revoke a separately copied signed cookie. The
+local SQLite store is suitable for a single-instance pilot. On a free Render
 instance it is ephemeral and may disappear on restart or redeploy.
 
 Closed cases are removed after `VIBEDASH_DECISION_RETENTION_DAYS` (90 by
 default) when a later VibeDash request triggers cleanup. Active cases remain.
-The number of cases per browser scope is bounded by
+The number of cases per guest-browser or pilot-account scope is bounded by
 `VIBEDASH_MAX_DECISION_CASES_PER_SCOPE` (50 by default).
 
 The source analysis can expire before the decision case. The immutable evidence
@@ -84,7 +89,7 @@ be substituted for those measures.
 
 ## Not yet supported
 
-- accounts, teams, roles, approvals, or shared ownership;
+- teams, roles, approvals, or shared ownership;
 - notifications and scheduled review reminders;
 - managed persistent storage or multi-instance consistency;
 - automatic ingestion from business systems;

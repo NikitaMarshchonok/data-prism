@@ -3,6 +3,7 @@ import re
 import secrets
 import sqlite3
 import uuid
+from datetime import timedelta
 from pathlib import Path
 
 from flask import (
@@ -57,6 +58,7 @@ def resolve_runtime_paths(base_dir, state_dir=None):
             'baselines': str(state_path / 'baselines'),
             'drift_store': str(state_path / 'drift' / 'drift_history.sqlite3'),
             'analysis_jobs': str(state_path / 'jobs' / 'analysis_jobs.sqlite3'),
+            'account_store': str(state_path / 'accounts' / 'accounts.sqlite3'),
         }
     return {
         'state': str(base_path),
@@ -65,6 +67,7 @@ def resolve_runtime_paths(base_dir, state_dir=None):
         'baselines': str(base_path / 'data' / 'baselines'),
         'drift_store': str(base_path / 'data' / 'drift' / 'drift_history.sqlite3'),
         'analysis_jobs': str(base_path / 'data' / 'jobs' / 'analysis_jobs.sqlite3'),
+        'account_store': str(base_path / 'data' / 'accounts' / 'accounts.sqlite3'),
     }
 
 
@@ -79,6 +82,7 @@ REPORT_FOLDER = runtime_paths['reports']
 BASELINE_FOLDER = runtime_paths['baselines']
 DRIFT_STORE_PATH = runtime_paths['drift_store']
 ANALYSIS_JOB_STORE_PATH = runtime_paths['analysis_jobs']
+ACCOUNT_STORE_PATH = runtime_paths['account_store']
 IMAGE_FOLDER = 'images'
 
 # ✅ Создаём папки, если их нет
@@ -88,6 +92,7 @@ for runtime_directory in (
     BASELINE_FOLDER,
     os.path.dirname(DRIFT_STORE_PATH),
     os.path.dirname(ANALYSIS_JOB_STORE_PATH),
+    os.path.dirname(ACCOUNT_STORE_PATH),
 ):
     os.makedirs(runtime_directory, exist_ok=True)
 
@@ -104,15 +109,29 @@ def positive_int_env(name, default, *, minimum=1, maximum=100000):
     return value
 
 
+def safe_bool_env(name, default=False):
+    """Read an opt-in boolean without treating arbitrary text as true."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
 app = Flask(__name__)
 configured_session_key = os.getenv('FLASK_SECRET_KEY')
 app.config['SECRET_KEY'] = configured_session_key or secrets.token_hex(32)
 app.config['SESSION_KEY_PERSISTENT'] = bool(configured_session_key)
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = safe_bool_env('SESSION_COOKIE_SECURE', False)
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=14)
+app.config['SESSION_REFRESH_EACH_REQUEST'] = False
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['REPORT_FOLDER'] = REPORT_FOLDER
 app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
 app.config['DRIFT_STORE_PATH'] = DRIFT_STORE_PATH
 app.config['VIBEDASH_JOB_STORE_PATH'] = ANALYSIS_JOB_STORE_PATH
+app.config['VIBEDASH_ACCOUNT_STORE_PATH'] = ACCOUNT_STORE_PATH
 app.config['DRIFT_HISTORY_RETENTION'] = positive_int_env(
     'DRIFT_HISTORY_RETENTION',
     100,
@@ -259,10 +278,24 @@ def readinesscheck():
         'baselines': Path(app.config['BASELINE_FOLDER']),
         'drift_history': Path(app.config['DRIFT_STORE_PATH']).parent,
         'analysis_jobs': Path(app.config['VIBEDASH_JOB_STORE_PATH']).parent,
+        'account_store': Path(app.config['VIBEDASH_ACCOUNT_STORE_PATH']).parent,
     }
     for label, directory in directories.items():
         if not directory.is_dir() or not os.access(directory, os.W_OK | os.X_OK):
             issues.append(f'{label} directory is not writable.')
+
+    # Account storage is deliberately lazy during ordinary requests, but an
+    # existing database must still be schema-checked by readiness. Otherwise
+    # a partial/corrupt v1 file would make the deployment report ready while
+    # every account operation fails closed.
+    account_path = Path(app.config['VIBEDASH_ACCOUNT_STORE_PATH'])
+    if account_path.exists() and not any(issue.startswith('account_store ') for issue in issues):
+        try:
+            from vibedash.accounts import validate_account_database
+
+            validate_account_database(account_path)
+        except Exception:
+            issues.append('account store is unavailable.')
 
     status = 'ready' if not issues else 'not_ready'
     return jsonify({

@@ -149,7 +149,7 @@ class AnalysisJobStore:
         *,
         limit: int = 20,
     ) -> list[Dict[str, Any]]:
-        """Return recent jobs for one signed browser scope."""
+        """Return recent jobs for one signed VibeDash scope."""
         normalized_scope_id = _validated_scope_id(scope_id)
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise ValueError("limit must be an integer.")

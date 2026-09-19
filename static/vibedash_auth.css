@@ -1,0 +1,21 @@
+:root { color-scheme: dark; --bg: #07100f; --card: #12201e; --border: rgba(173,218,201,.2); --text: #eef8f4; --muted: #a9bbb4; --accent: #72e0b6; --danger: #fecaca; }
+* { box-sizing: border-box; }
+body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: radial-gradient(circle at 20% 0%, rgba(114,224,182,.12), transparent 35rem), var(--bg); color: var(--text); font: 16px/1.5 "DM Sans", system-ui, sans-serif; }
+a { color: var(--accent); }
+.auth-shell { width: min(100% - 32px, 460px); }
+.brand { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 20px; color: var(--text); font-weight: 700; text-decoration: none; }
+.brand span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--accent); color: var(--bg); font-size: 12px; }
+.auth-card { padding: 34px; border: 1px solid var(--border); border-radius: 20px; background: rgba(18,32,30,.94); box-shadow: 0 24px 80px rgba(0,0,0,.24); }
+.eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+h1 { margin: 0 0 10px; font: 700 clamp(30px, 7vw, 42px)/1.05 "Space Grotesk", system-ui, sans-serif; letter-spacing: -.04em; }
+.intro, .hint, .switch, .back { color: var(--muted); }
+.intro { margin: 0 0 24px; }
+form { display: grid; gap: 9px; }
+label { margin-top: 8px; font-weight: 600; }
+input { width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,.05); color: var(--text); }
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+button { min-height: 48px; margin-top: 14px; border: 0; border-radius: 10px; background: var(--accent); color: var(--bg); cursor: pointer; font-weight: 700; }
+.hint { margin: 0; font-size: 13px; }
+.form-error { margin: 0 0 18px; padding: 11px 13px; border: 1px solid rgba(254,202,202,.4); border-radius: 10px; color: var(--danger); }
+.switch { margin: 22px 0 0; }
+.back { margin: 18px 0 0; font-size: 14px; }

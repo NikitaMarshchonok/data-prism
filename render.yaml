@@ -20,6 +20,8 @@ services:
         value: INFO
       - key: FLASK_DEBUG
         value: "false"
+      - key: SESSION_COOKIE_SECURE
+        value: "true"
       - key: MAX_UPLOAD_MB
         value: "25"
       - key: MAX_ROWS_PREVIEW

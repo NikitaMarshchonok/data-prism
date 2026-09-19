@@ -22,6 +22,7 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(Path(paths["baselines"]).parent, state_path)
             self.assertEqual(Path(paths["drift_store"]).parents[1], state_path)
             self.assertEqual(Path(paths["analysis_jobs"]).parents[1], state_path)
+            self.assertEqual(Path(paths["account_store"]).parents[1], state_path)
 
     def test_render_blueprint_is_ci_gated_and_contains_no_secret_values(self):
         blueprint = (REPOSITORY_ROOT / "render.yaml").read_text(encoding="utf-8")
@@ -35,6 +36,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("VIBEDASH_JOB_TIMEOUT_SECONDS", blueprint)
         self.assertIn("VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE", blueprint)
         self.assertIn("VIBEDASH_MAX_ACTIVE_JOBS", blueprint)
+        self.assertIn("SESSION_COOKIE_SECURE", blueprint)
         self.assertNotIn("replace-with", blueprint)
 
     def test_container_uses_mounted_state_and_application_request_logs(self):
@@ -44,6 +46,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("VIBEDASH_RETENTION_HOURS=24", dockerfile)
         self.assertIn("VIBEDASH_JOB_TIMEOUT_SECONDS=600", dockerfile)
         self.assertIn("LOG_FORMAT=json", dockerfile)
+        self.assertIn("/var/lib/data-prism/accounts", dockerfile)
         self.assertNotIn("--access-logfile", dockerfile)
 
     def test_ci_builds_and_exercises_the_production_container(self):

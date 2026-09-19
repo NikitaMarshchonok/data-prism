@@ -101,17 +101,17 @@ The VibeDash landing page also exposes a one-click demonstration path. For user 
 
 The demo generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so it remains reproducible across machines. Both synchronous and background entry points call the same analysis-and-session pipeline.
 
-On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the random scope held in the signed Flask session; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 2 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
+On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the signed guest-browser or pilot-account scope; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 2 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
 
-A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed result. Both reads and writes require the same signed browser scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
+A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed result. Both reads and writes require the same signed guest-browser or pilot-account scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
 
 ### Two-period comparison boundary
 
-The VibeDash landing page's **Compare two periods** form accepts two CSV snapshots: a baseline and a current period. The route queues a browser-scoped asynchronous job, and the worker loads both frames, runs readiness checks, and builds an aggregate-only `period-comparison-v1` result. The result combines schema changes and distribution drift with numeric current-minus-baseline mean deltas. Shared numeric metrics that have sufficient finite observations are tested with Welch's independent-samples t-test; each tested metric includes a 95% confidence interval and Hedges' g, and raw p-values are adjusted with Benjamini–Hochberg FDR. The comparison is observational and non-causal: it does not attribute a difference to an intervention, and seasonality, population-mix changes, confounding, or row dependence can account for observed changes.
+The VibeDash landing page's **Compare two periods** form accepts two CSV snapshots: a baseline and a current period. The route queues a guest-browser or pilot-account-scoped asynchronous job, and the worker loads both frames, runs readiness checks, and builds an aggregate-only `period-comparison-v1` result. The result combines schema changes and distribution drift with numeric current-minus-baseline mean deltas. Shared numeric metrics that have sufficient finite observations are tested with Welch's independent-samples t-test; each tested metric includes a 95% confidence interval and Hedges' g, and raw p-values are adjusted with Benjamini–Hochberg FDR. The comparison is observational and non-causal: it does not attribute a difference to an intervention, and seasonality, population-mix changes, confounding, or row dependence can account for observed changes.
 
 The comparison resource contract is bounded in both request and process memory: each file is limited to 100,000 rows and 100 columns; the pair is limited to 100,000 combined rows and 100 combined columns, 100 MiB of uploaded bytes, and 256 MiB of combined in-memory frames. Inferential work is capped at 32 candidate metrics, with up to 8 displayed and a minimum of 8 finite observations in each period for a test. These limits apply to the comparison as a whole where stated, so two individually valid files cannot exceed the combined budget.
 
-`POST /vibedash/comparisons/jobs` creates the job. The browser polls `/vibedash/jobs/<job_id>`, then follows `/result`; `/manifest` exposes the aggregate-only reproducibility manifest, `/comparison-report.html` downloads a completed comparison as a server-named standalone HTML document, and `/history` lists recent jobs for the same signed browser scope. The report endpoint loads only the job's scoped retained session, renders in memory with trusted CSS inlined, and does not persist an export artifact or extend retention. The two source CSVs are removed after worker processing (including failure cleanup). The aggregate result, session record, manifest, and report availability follow `VIBEDASH_RETENTION_HOURS` (24 hours by default); browser Print/Save as PDF is supported by print CSS, without server-side PDF generation. This flow does not provide durable storage or paid/production guarantees.
+`POST /vibedash/comparisons/jobs` creates the job. The browser polls `/vibedash/jobs/<job_id>`, then follows `/result`; `/manifest` exposes the aggregate-only reproducibility manifest, `/comparison-report.html` downloads a completed comparison as a server-named standalone HTML document, and `/history` lists recent jobs for the same signed guest-browser or pilot-account scope. The report endpoint loads only the job's scoped retained session, renders in memory with trusted CSS inlined, and does not persist an export artifact or extend retention. The two source CSVs are removed after worker processing (including failure cleanup). The aggregate result, session record, manifest, and report availability follow `VIBEDASH_RETENTION_HOURS` (24 hours by default); browser Print/Save as PDF is supported by print CSS, without server-side PDF generation. This flow does not provide durable storage or paid/production guarantees.
 
 ## Model-evaluation boundary
 
@@ -166,11 +166,36 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | Interactive uploads | Local runtime directory | Session working data; ignored by Git |
 | Reports and exports | Local runtime directory for legacy exports | Legacy generated artifacts are retention-limited; comparison HTML downloads are streamed and not persisted |
 | Analysis job lifecycle and audit manifest | SQLite | Session-scoped terminal records follow VibeDash retention |
-| Opt-in pilot measurement | Analysis-job SQLite | 30 days from acceptance; 10,000-row cap; current-browser withdrawal |
-| Decision cases and measured outcomes | SQLite | Browser-scoped; closed cases follow decision retention, active cases remain |
+| Opt-in pilot measurement | Analysis-job SQLite | 30 days from acceptance; 10,000-row cap; guest-browser or pilot-account-scope withdrawal |
+| Decision cases and measured outcomes | SQLite | Guest-browser or pilot-account scoped; closed cases follow decision retention, active cases remain |
 | Drift baselines | JSON aggregate profiles | Persistent until removed by operator |
 | Drift history and alerts | SQLite | Retention-limited per monitoring scope |
+| Pilot accounts and login throttling | Dedicated SQLite | Optional account records; retained until the runtime store is removed |
 | Secrets | Environment variables | Never committed to the repository |
+
+### Optional VibeDash pilot accounts
+
+VibeDash supports a deliberately small first-party pilot account boundary. A
+dedicated SQLite store lives below the configured `DATA_PRISM_STATE_DIR` and is
+opened lazily, cached in the Flask application extensions, and never closed by
+a per-request teardown. Registration and login use session-bound CSRF tokens,
+bounded password hashing/throttling, and generic failure responses. A valid
+logged-in account derives a deterministic 32-hex scope from its account id and
+the Flask secret key; guests continue to receive random browser scopes. Logout
+rotates the VibeDash identity and scope keys, preserving unrelated classic
+upload state while preventing fallback to the prior account scope.
+This is a client-side signed-cookie boundary: rotation invalidates the prior
+identity for the browser that receives the replacement cookie, but it cannot
+revoke a separately copied old cookie. Deployments requiring immediate
+revocation of stolen cookies need a server-side session/revocation store. The
+Flask secret is also part of the deterministic account-scope derivation, so a
+secret-key rotation requires users to sign in again and makes prior
+account-owned job history unavailable under the new scope.
+
+This is an optional free-host pilot boundary, not enterprise identity,
+recovery, team access, or a durability guarantee. Guest analyses are not
+claimed or migrated after registration. Account records, jobs, uploads, and
+history may disappear when an ephemeral host restarts.
 
 The storage interfaces are local by design for this stage. Object storage and PostgreSQL adapters are natural extension points for a hosted multi-instance deployment.
 
@@ -184,8 +209,8 @@ the presence of this CLI.
 
 - Supported file extensions and server-side filenames are validated.
 - Upload and preview sizes are bounded.
-- Active analysis jobs are bounded per signed browser scope and per service instance.
-- Decision writes require a session-bound CSRF token and cases are bounded per browser scope.
+- Active analysis jobs are bounded per signed guest-browser or pilot-account scope and per service instance.
+- Decision writes require a session-bound CSRF token and cases are bounded per guest-browser or pilot-account scope.
 - Monitoring endpoints remain disabled until a sufficiently long API key is configured.
 - API keys are compared with constant-time comparison.
 - Storage scopes are derived from hashes rather than raw secret values.

@@ -65,6 +65,13 @@ try:
         MAX_DECISION_CASES,
     )
     from .readiness_engine import DatasetReadinessEngine
+    from .accounts import (
+        ACCOUNT_ID_PATTERN,
+        AccountStore,
+        AccountValidationError,
+        account_scope_id,
+        normalize_email,
+    )
     from .period_comparison import (
         MAX_COLUMNS as COMPARISON_MAX_COLUMNS,
         MAX_MEMORY_BYTES as COMPARISON_MAX_MEMORY_BYTES,
@@ -83,7 +90,15 @@ except ImportError:
 if vibedash_bp:
     analysis_job_dispatcher = AnalysisJobDispatcher(max_workers=1)
     _CSV_HEADER_LOCK = threading.Lock()
+    _ACCOUNT_STORE_INIT_LOCK = threading.Lock()
     _UNSET_SCOPE = object()
+    _ACCOUNT_SESSION_KEY = 'vibedash_account_id'
+    _VIBEDASH_IDENTITY_SESSION_KEYS = (
+        _ACCOUNT_SESSION_KEY,
+        'vibedash_analysis_scope_id',
+        'vibedash_auth_csrf_token',
+        'vibedash_decision_csrf_token',
+    )
 
     class DatasetReadinessBlocked(ValueError):
         """The uploaded table failed one or more safe readiness contracts."""
@@ -92,7 +107,116 @@ if vibedash_bp:
             super().__init__(report['summary'])
             self.report = report
 
+    def _account_store():
+        """Return the process-cached account store, failing closed on errors."""
+        application = current_app._get_current_object()
+        store = application.extensions.get('vibedash_account_store')
+        if store is not None:
+            return store
+        with _ACCOUNT_STORE_INIT_LOCK:
+            store = application.extensions.get('vibedash_account_store')
+            if store is not None:
+                return store
+            try:
+                store = AccountStore(application.config['VIBEDASH_ACCOUNT_STORE_PATH'])
+            except Exception:
+                application.logger.warning(
+                    'VibeDash account store unavailable',
+                    extra={'event': 'vibedash_account_store_unavailable'},
+                )
+                return None
+            application.extensions['vibedash_account_store'] = store
+            return store
+
+
+    def _current_account():
+        """Resolve only an existing account; malformed state is never trusted."""
+        account_id = session.get(_ACCOUNT_SESSION_KEY)
+        if not isinstance(account_id, str) or ACCOUNT_ID_PATTERN.fullmatch(account_id) is None:
+            if account_id is not None:
+                _rotate_vibedash_identity()
+            return None
+        store = _account_store()
+        if store is None:
+            _rotate_vibedash_identity()
+            return None
+        try:
+            account = store.get_account(account_id)
+        except Exception:
+            account = None
+        if not isinstance(account, dict) or account.get('id') != account_id:
+            _rotate_vibedash_identity()
+            return None
+        try:
+            if normalize_email(account.get('email')) != account.get('email'):
+                raise ValueError('non-canonical account record')
+            # The account must also be usable with this deployment's secret.
+            # Otherwise the landing page must not advertise an identity whose
+            # account-owned scope cannot be resolved.
+            account_scope_id(account_id, current_app.secret_key)
+        except Exception:
+            _rotate_vibedash_identity()
+            return None
+        return account
+
+
+    def _auth_csrf_token():
+        token = session.get('vibedash_auth_csrf_token')
+        if not isinstance(token, str) or not re.fullmatch(r'[0-9a-f]{64}', token):
+            token = secrets.token_hex(32)
+            session['vibedash_auth_csrf_token'] = token
+        return token
+
+
+    def _valid_auth_csrf_token(token):
+        expected = _auth_csrf_token()
+        return (
+            isinstance(token, str)
+            and len(token) == len(expected)
+            and secrets.compare_digest(token, expected)
+        )
+
+
+    def _rotate_vibedash_identity():
+        """Rotate VibeDash identity state without destroying other app state.
+
+        Flask's signed-cookie session has no server-side session identifier to
+        rotate. Removing the VibeDash identity, guest scope, and CSRF tokens
+        prevents guest-scope claiming and replay through the browser's next
+        cookie while leaving the classic upload/report workflow and its
+        independent monitoring scope intact in the same browser. Because
+        Flask signs the whole client-side cookie, a separately copied old
+        cookie cannot be revoked by this key rotation alone.
+        """
+        for key in _VIBEDASH_IDENTITY_SESSION_KEYS:
+            session.pop(key, None)
+
+
+    def _render_auth(mode, *, error=None, status=200):
+        # Resolve the account before minting the form token.  A deleted or
+        # malformed account identity rotates all VibeDash keys; generating the
+        # token first would render a token that the replacement session no
+        # longer accepts, making the next form submission fail once more.
+        account = _current_account()
+        return render_template(
+            'vibedash_auth.html',
+            mode=mode,
+            error=error,
+            csrf_token=_auth_csrf_token(),
+            account=account,
+        ), status
+
+
     def _analysis_scope_id():
+        account = _current_account()
+        if account is not None:
+            try:
+                return account_scope_id(account['id'], current_app.secret_key)
+            except Exception:
+                # A malformed secret must never make an account appear to own
+                # a guest scope.  Discard the account identity and force a
+                # fresh guest scope instead of silently mixing identities.
+                _rotate_vibedash_identity()
         scope_id = session.get('vibedash_analysis_scope_id')
         if not isinstance(scope_id, str) or not JOB_ID_PATTERN.fullmatch(scope_id):
             scope_id = uuid.uuid4().hex
@@ -101,7 +225,7 @@ if vibedash_bp:
 
 
     def _load_owned_session_data(session_id, scope_id=_UNSET_SCOPE):
-        """Load one retained result only when it belongs to this browser scope."""
+        """Load one retained result only when it belongs to this VibeDash scope."""
         expected_scope = (
             _analysis_scope_id() if scope_id is _UNSET_SCOPE else scope_id
         )
@@ -829,17 +953,104 @@ if vibedash_bp:
             "real_estate": "Real-estate listing analysis: median price by city, distribution by rooms, time trend by posting date (W), filter by city, show top 10 streets by average price."
         }
         
+        # Resolve account state before minting VibeDash CSRF tokens.  Invalid
+        # or deleted account identities rotate those keys and must not leave
+        # stale tokens in the rendered forms.
+        account = _current_account()
         return render_template('vibedash_landing.html',
                              preset_prompts=preset_prompts,
                              demo_prompt=DEMO_PROMPT,
                              retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
                              pilot_csrf_token=_decision_csrf_token(),
+                             auth_csrf_token=_auth_csrf_token(),
+                             account=account,
                              ollama_available=ollama_available)
+
+
+    @vibedash_bp.route('/register', methods=['GET', 'POST'])
+    def register():
+        """Create a pilot account and establish its durable analysis scope."""
+        if request.method == 'GET':
+            return _render_auth('register')
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return _render_auth('register', error='This form has expired. Please try again.', status=400)
+        email = request.form.get('email', '')
+        password = request.form.get('password', '')
+        store = _account_store()
+        if store is None:
+            return _render_auth('register', error='Account storage is temporarily unavailable.', status=503)
+        try:
+            account = store.register(email, password)
+        except AccountValidationError as error:
+            return _render_auth('register', error=str(error), status=400)
+        except Exception:
+            current_app.logger.warning(
+                'VibeDash account registration failed',
+                extra={'event': 'vibedash_account_registration_failed'},
+            )
+            return _render_auth('register', error='Account storage is temporarily unavailable.', status=503)
+        if account is None:
+            return _render_auth(
+                'register',
+                error='Unable to create an account with those details.',
+                status=400,
+            )
+        _rotate_vibedash_identity()
+        session.permanent = True
+        session[_ACCOUNT_SESSION_KEY] = account['id']
+        _auth_csrf_token()
+        _decision_csrf_token()
+        flash('Your pilot account is ready.', 'success')
+        return redirect(url_for('vibedash.index'))
+
+
+    @vibedash_bp.route('/login', methods=['GET', 'POST'])
+    def login():
+        """Authenticate a pilot account without disclosing account existence."""
+        if request.method == 'GET':
+            return _render_auth('login')
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return _render_auth('login', error='This form has expired. Please try again.', status=400)
+        store = _account_store()
+        if store is None:
+            return _render_auth('login', error='Login is temporarily unavailable.', status=503)
+        try:
+            account = store.authenticate(
+                request.form.get('email', ''),
+                request.form.get('password', ''),
+            )
+        except Exception:
+            current_app.logger.warning(
+                'VibeDash account login failed',
+                extra={'event': 'vibedash_account_login_failed'},
+            )
+            return _render_auth('login', error='Login is temporarily unavailable.', status=503)
+        if account is None:
+            return _render_auth('login', error='Email or password is incorrect.', status=401)
+        _rotate_vibedash_identity()
+        session.permanent = True
+        session[_ACCOUNT_SESSION_KEY] = account['id']
+        _auth_csrf_token()
+        _decision_csrf_token()
+        flash('Welcome back.', 'success')
+        return redirect(url_for('vibedash.index'))
+
+
+    @vibedash_bp.post('/logout')
+    def logout():
+        """End the account session; a fresh guest scope is created later."""
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return 'This form has expired. Please try again.', 400
+        _rotate_vibedash_identity()
+        _auth_csrf_token()
+        _decision_csrf_token()
+        flash('You are signed out. Guest analyses remain browser-scoped.', 'success')
+        return redirect(url_for('vibedash.index'))
 
 
     @vibedash_bp.get('/history')
     def analysis_history():
-        """Show recent analysis jobs owned by this signed browser session."""
+        """Show recent analysis jobs owned by this signed VibeDash scope."""
         jobs = _analysis_job_store().list_for_scope(
             _analysis_scope_id(),
             limit=MAX_HISTORY_JOBS,
@@ -853,7 +1064,7 @@ if vibedash_bp:
 
     @vibedash_bp.get('/decisions')
     def decision_cases():
-        """Show evidence-linked decisions for this signed browser scope."""
+        """Show evidence-linked decisions for this signed VibeDash scope."""
         list_limit = min(
             current_app.config['VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'],
             MAX_DECISION_CASES,
@@ -875,7 +1086,7 @@ if vibedash_bp:
 
     @vibedash_bp.get('/decisions/<case_id>')
     def decision_case_detail(case_id):
-        """Open one decision case owned by this signed browser scope."""
+        """Open one decision case owned by this signed VibeDash scope."""
         if not DECISION_CASE_ID_PATTERN.fullmatch(case_id):
             return jsonify({'error': 'Decision case not found.'}), 404
         scope_id = _analysis_scope_id()
@@ -1374,7 +1585,7 @@ if vibedash_bp:
 
     @vibedash_bp.get('/jobs/<job_id>/result')
     def analysis_job_result(job_id):
-        """Render a completed job only for its signed browser session."""
+        """Render a completed job only for its signed VibeDash scope."""
         if not JOB_ID_PATTERN.fullmatch(job_id):
             return jsonify({'error': 'Analysis job not found.'}), 404
         job = _analysis_job_store().get(job_id, _analysis_scope_id())
@@ -1482,7 +1693,7 @@ if vibedash_bp:
             current_app.config['VIBEDASH_JOB_STORE_PATH'],
             scope_token(_analysis_scope_id(), current_app.secret_key),
         )
-        flash('Pilot measurement for this browser was removed. Your analyses and decisions are still available.', 'info')
+        flash('Pilot measurement for this VibeDash scope was removed. Your analyses and decisions are still available.', 'info')
         return redirect(url_for('vibedash.index'), code=303)
 
 
@@ -1546,7 +1757,7 @@ if vibedash_bp:
             return jsonify({'error': 'The decision case already exists.'}), 409
         except DecisionCaseCapacityError:
             return jsonify({
-                'error': 'The decision-case limit for this browser has been reached.'
+                'error': 'The decision-case limit for this VibeDash scope has been reached.'
             }), 429
         except (TypeError, ValueError) as error:
             return jsonify({'error': str(error)}), 400
