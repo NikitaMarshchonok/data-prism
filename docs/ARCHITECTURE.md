@@ -55,6 +55,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/readiness_engine.py` | Pre-analysis quality, schema, privacy, and coverage contracts | Domain approval or source-data correction |
 | `vibedash/decision_brief.py` | Deterministic ranking of evidence, decision risk, and next actions | Autonomous business decisions |
 | `vibedash/decision_cases.py` | Session-scoped evidence snapshots, decision commitments, outcomes, and bounded retention | Identity, collaboration, or causal attribution |
+| `vibedash/account_export.py` | In-memory, bounded serialization of account-owned job and decision-case metadata | Raw datasets, prompts, filenames, schema/session data, global pilot metrics, or durable export artifacts |
 | `vibedash/pilot_metrics.py` | Opt-in lifecycle measurement, bounded retention, feedback, and read-only aggregate reports | Customer identity, source rows, or proof of demand |
 | `src/runtime_backup.py` and `runtime_backup.py` | Offline bounded snapshots, integrity verification, and fail-closed restore into a new directory | Hosting persistence, encryption, authenticity, scheduling, or account recovery |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
@@ -104,6 +105,23 @@ The demo generates a fixed synthetic dataset and uses a versioned dashboard spec
 On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the signed guest-browser or pilot-account scope; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 2 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
 
 A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed result. Both reads and writes require the same signed guest-browser or pilot-account scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
+
+### Account export boundary
+
+An authenticated pilot account can submit `POST /vibedash/account/export.json`
+from the account settings page with the account-authentication CSRF token. The
+route resolves the account first, derives its deterministic account scope, and
+reads only that scope from the job and decision-case stores. It requests one
+bounded page from each store: the newest 50 jobs and newest 100 decision cases;
+the serialized document carries explicit truncation flags when older records
+exist. No account, scope, job, or case identifier is accepted from the HTTP
+request.
+
+The export is an in-memory JSON download named from the first 12 characters of
+the account id. It intentionally excludes raw datasets, prompts, filenames,
+schema/session data, and global pilot metrics. Builder or serialization failures
+return a generic response and never log account-owned content. The route does
+not create a file or extend artifact retention.
 
 ### Two-period comparison boundary
 

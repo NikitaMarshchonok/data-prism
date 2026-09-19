@@ -8,6 +8,7 @@ from vibedash.decision_cases import (
     DecisionCaseCapacityError,
     DecisionCaseConflictError,
     DecisionCaseStore,
+    MAX_DECISION_CASES,
 )
 
 
@@ -37,7 +38,8 @@ class DecisionCaseStoreTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def create_case(self, **overrides):
+    def create_case(self, job_id=None, **overrides):
+        effective_job_id = job_id or self.job_id
         values = {
             "priority": 1,
             "owner": "Growth lead",
@@ -45,10 +47,10 @@ class DecisionCaseStoreTests(unittest.TestCase):
             "success_metric": "Activation rate",
             "target_outcome": "Increase activation from 42% to 47%.",
             "review_date": "2026-10-15",
-            "evidence_snapshot": evidence_snapshot(self.job_id),
+            "evidence_snapshot": evidence_snapshot(effective_job_id),
         }
         values.update(overrides)
-        return self.store.create(self.scope_id, self.job_id, **values)
+        return self.store.create(self.scope_id, effective_job_id, **values)
 
     def test_case_round_trips_and_is_isolated_by_scope(self):
         decision_case = self.create_case()
@@ -118,6 +120,67 @@ class DecisionCaseStoreTests(unittest.TestCase):
             self.create_case(owner="x" * 121)
         with self.assertRaises(ValueError):
             self.create_case(review_date="tomorrow")
+
+    def test_paginated_cases_are_scoped_ordered_and_report_sentinel(self):
+        older = self.create_case()
+        newer = self.create_case(job_id=uuid.uuid4().hex)
+        other = self.store.create(
+            uuid.uuid4().hex,
+            uuid.uuid4().hex,
+            priority=1,
+            owner="Revenue lead",
+            decision="Review packaging.",
+            success_metric="Expansion revenue",
+            target_outcome="Increase by 5%.",
+            review_date="2026-11-01",
+            evidence_snapshot=evidence_snapshot(uuid.uuid4().hex),
+        )
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE decision_cases SET created_at = ? WHERE id IN (?, ?, ?)",
+                (
+                    "2026-01-01T00:00:00.000+00:00",
+                    older["id"],
+                    newer["id"],
+                    other["id"],
+                ),
+            )
+
+        first_page, has_more = self.store.list_for_scope_page(
+            self.scope_id,
+            limit=1,
+        )
+        self.assertEqual([case["id"] for case in first_page], [newer["id"]])
+        self.assertTrue(has_more)
+
+        final_page, has_more = self.store.list_for_scope_page(
+            self.scope_id,
+            limit=2,
+        )
+        self.assertEqual(
+            [case["id"] for case in final_page],
+            [newer["id"], older["id"]],
+        )
+        self.assertFalse(has_more)
+        self.assertNotIn(other["id"], [case["id"] for case in final_page])
+
+    def test_paginated_cases_validate_limit_boundaries(self):
+        self.assertEqual(
+            self.store.list_for_scope_page(
+                self.scope_id,
+                limit=MAX_DECISION_CASES,
+            ),
+            ([], False),
+        )
+        for invalid_limit in (0, MAX_DECISION_CASES + 1, True, 1.5):
+            with self.subTest(limit=invalid_limit):
+                with self.assertRaises(ValueError):
+                    self.store.list_for_scope_page(
+                        self.scope_id,
+                        limit=invalid_limit,
+                    )
+        with self.assertRaises(ValueError):
+            self.store.list_for_scope_page("not-a-scope", limit=1)
 
     def test_only_expired_terminal_cases_are_purged(self):
         terminal = self.create_case()

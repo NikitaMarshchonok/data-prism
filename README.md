@@ -93,8 +93,12 @@ From a completed background result, a user can turn one ranked priority into a d
 ## Pilot onboarding and measurement
 
 Optional VibeDash pilot accounts are available from **Create account**. The
-account page (`/vibedash/account`) can change a password; there is currently no
-email verification or password-recovery flow. Account access is represented by
+account page (`/vibedash/account`) can change a password and download a bounded
+account export; there is currently no email verification or password-recovery
+flow. The export contains the newest 50 jobs and newest 100 decision cases for
+that account. It excludes raw datasets, prompts, filenames, schema/session
+data, and global pilot metrics, and is serialized in memory without creating an
+artifact. Account access is represented by
 an id plus an opaque credential token inside Flask's signed client-side cookie.
 The server validates that pair against the current password hash on every
 authenticated request. A password change therefore invalidates copied old

@@ -48,6 +48,16 @@ server-side session/revocation store if that guarantee is required. On the free
 host, account data and account-owned history can reset with the filesystem.
 Guest analyses remain browser-scoped and are never migrated into an account.
 
+Authenticated pilot accounts can download their retained metadata from
+`POST /vibedash/account/export.json`. The export is limited to the newest 50
+analysis jobs and newest 100 decision cases, with truncation flags when older
+records exist. It excludes raw datasets, prompts, filenames, schema/session
+data, and global pilot metrics. JSON is assembled and serialized in memory;
+the request does not create an export artifact or extend retention. The
+download is protected by the account CSRF token and private/no-store response
+headers. Export size or validation failures are reported generically, without
+logging account-owned fields.
+
 For single-instance persistent monitoring, upgrade to a paid service and attach a disk at:
 
 ```text

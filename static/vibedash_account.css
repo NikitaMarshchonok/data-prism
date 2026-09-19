@@ -54,6 +54,12 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .button { border: 0; border-radius: 9px; cursor: pointer; font: inherit; font-weight: 700; margin-top: 24px; padding: 12px 17px; }
 .button-primary { background: var(--accent); color: #09231b; }
 .button-primary:hover, .button-primary:focus-visible { filter: brightness(1.08); }
+.export-card { background: rgba(24, 43, 51, .72); border: 1px solid var(--border); border-radius: 12px; margin-top: 34px; padding: 22px; }
+.export-card h2 { font-size: 20px; margin: 0 0 8px; }
+.export-card .form-help { margin-bottom: 8px; }
+.export-form .button { margin-top: 10px; }
+.button-secondary { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
+.button-secondary:hover, .button-secondary:focus-visible { background: rgba(114, 224, 182, .1); }
 .disclosure { border-top: 1px solid var(--border); color: var(--muted); font-size: 14px; margin-top: 34px; padding-top: 24px; }
 .disclosure h2 { color: var(--text); font-size: 16px; margin: 0 0 8px; }
 .disclosure p { margin: 7px 0; }
