@@ -32,7 +32,7 @@
         </div>
         <div class="account-nav" aria-label="Account">
             {% if account %}
-                <span class="account-email">{{ account.email }}</span>
+                <a class="account-email" href="{{ url_for('vibedash.account_settings') }}">{{ account.email }}</a>
                 <form method="post" action="/vibedash/logout">
                     <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
                     <button type="submit" class="account-link">Sign out</button>

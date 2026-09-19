@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Manage your Data Prism pilot account password.">
+    <title>Account settings · Data Prism</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_account.css') }}">
+</head>
+<body>
+    <header class="site-header">
+        <a class="brand" href="{{ url_for('vibedash.index') }}" aria-label="Data Prism home">
+            <span class="brand-mark" aria-hidden="true">DP</span>
+            <span>Data Prism</span>
+        </a>
+        <nav aria-label="Account navigation">
+            <a href="{{ url_for('vibedash.index') }}">Workspace</a>
+            <a href="{{ url_for('vibedash.analysis_history') }}">History</a>
+        </nav>
+    </header>
+
+    <main class="settings-shell">
+        <section class="settings-card" aria-labelledby="settings-title">
+            <p class="eyebrow">Pilot account</p>
+            <h1 id="settings-title">Account settings</h1>
+            <p class="intro">Update the password used to access your analyses from another browser.</p>
+
+            {% with flashed_messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in flashed_messages %}
+                    <div class="notice {% if category == 'error' %}notice-error{% elif category == 'success' %}notice-success{% else %}notice-info{% endif %}" role="{% if category == 'error' %}alert{% else %}status{% endif %}">{{ message }}</div>
+                {% endfor %}
+            {% endwith %}
+            {% if error %}
+                <div class="notice notice-error" role="alert">{{ error }}</div>
+            {% endif %}
+            {% if success %}
+                <div class="notice notice-success" role="status">{{ success }}</div>
+            {% endif %}
+
+            <dl class="account-summary">
+                <div>
+                    <dt>Email</dt>
+                    <dd>{{ account.email }}</dd>
+                </div>
+            </dl>
+
+            <form method="post" action="{{ url_for('vibedash.account_password') }}" class="password-form">
+                <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                <fieldset>
+                    <legend>Change password</legend>
+                    <p class="form-help">Use at least 12 characters. Your current password is required.</p>
+                    <label for="current-password">Current password</label>
+                    <input id="current-password" name="current_password" type="password" autocomplete="current-password" required>
+                    <label for="new-password">New password</label>
+                    <input id="new-password" name="new_password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required aria-describedby="password-policy">
+                    <p id="password-policy" class="form-help">12–1024 characters; avoid passwords you use elsewhere.</p>
+                    <label for="new-password-confirmation">Confirm new password</label>
+                    <input id="new-password-confirmation" name="new_password_confirmation" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+                </fieldset>
+                <button type="submit" class="button button-primary">Change password</button>
+            </form>
+
+            <aside class="disclosure" aria-labelledby="pilot-disclosure-title">
+                <h2 id="pilot-disclosure-title">Pilot account notes</h2>
+                <p>There is no password recovery or email verification in this pilot. Keep your password safe; support cannot reset it.</p>
+                <p>Free-host storage is ephemeral and may be erased after a restart or redeploy. Keep your own copy of important results.</p>
+            </aside>
+        </section>
+    </main>
+</body>
+</html>

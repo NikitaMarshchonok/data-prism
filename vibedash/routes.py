@@ -93,8 +93,10 @@ if vibedash_bp:
     _ACCOUNT_STORE_INIT_LOCK = threading.Lock()
     _UNSET_SCOPE = object()
     _ACCOUNT_SESSION_KEY = 'vibedash_account_id'
+    _ACCOUNT_CREDENTIAL_SESSION_KEY = 'vibedash_account_credential'
     _VIBEDASH_IDENTITY_SESSION_KEYS = (
         _ACCOUNT_SESSION_KEY,
+        _ACCOUNT_CREDENTIAL_SESSION_KEY,
         'vibedash_analysis_scope_id',
         'vibedash_auth_csrf_token',
         'vibedash_decision_csrf_token',
@@ -130,10 +132,22 @@ if vibedash_bp:
 
 
     def _current_account():
-        """Resolve only an existing account; malformed state is never trusted."""
+        """Resolve an account only from one current id/token snapshot.
+
+        The signed Flask cookie is only a transport envelope.  The account
+        store's credential check binds the id and opaque token to the current
+        password hash in one read, so copied cookies stop working after a
+        password change without a server-side session table.
+        """
         account_id = session.get(_ACCOUNT_SESSION_KEY)
-        if not isinstance(account_id, str) or ACCOUNT_ID_PATTERN.fullmatch(account_id) is None:
-            if account_id is not None:
+        credential = session.get(_ACCOUNT_CREDENTIAL_SESSION_KEY)
+        if (
+            not isinstance(account_id, str)
+            or ACCOUNT_ID_PATTERN.fullmatch(account_id) is None
+            or not isinstance(credential, str)
+            or not re.fullmatch(r'[0-9a-f]{64}', credential)
+        ):
+            if account_id is not None or credential is not None:
                 _rotate_vibedash_identity()
             return None
         store = _account_store()
@@ -141,7 +155,9 @@ if vibedash_bp:
             _rotate_vibedash_identity()
             return None
         try:
-            account = store.get_account(account_id)
+            account = store.account_for_credential(
+                account_id, credential, current_app.secret_key
+            )
         except Exception:
             account = None
         if not isinstance(account, dict) or account.get('id') != account_id:
@@ -158,6 +174,42 @@ if vibedash_bp:
             _rotate_vibedash_identity()
             return None
         return account
+
+
+    def _establish_account(account):
+        """Replace VibeDash identity state and issue a fresh credential."""
+        try:
+            store = _account_store()
+            if store is None or not isinstance(account, dict):
+                raise RuntimeError('account establishment is unavailable')
+            # Login, registration, and password-change operations attach a
+            # credential derived from the exact password-hash snapshot they
+            # verified or wrote while holding the store transaction.  There is
+            # deliberately no fallback to credential_token(): a later hash
+            # read would reintroduce the verification-to-session TOCTOU race
+            # and let a public account record establish an identity without a
+            # transaction-bound authentication result.
+            credential = account.get('_vibedash_session_credential')
+            if not isinstance(credential, str) or not re.fullmatch(r'[0-9a-f]{64}', credential):
+                raise RuntimeError('account credential is unavailable')
+            _rotate_vibedash_identity()
+            session.permanent = True
+            session[_ACCOUNT_SESSION_KEY] = account['id']
+            session[_ACCOUNT_CREDENTIAL_SESSION_KEY] = credential
+            _auth_csrf_token()
+            _decision_csrf_token()
+            return True
+        except Exception:
+            # Establishment must never leave an account id, credential, or
+            # CSRF token behind when any part of minting or session mutation
+            # fails.  Preserve only unrelated classic/monitoring state.
+            try:
+                _rotate_vibedash_identity()
+            except Exception:
+                # A broken session implementation is already fail-closed for
+                # this request; do not surface a secondary exception here.
+                pass
+            return False
 
 
     def _auth_csrf_token():
@@ -184,9 +236,9 @@ if vibedash_bp:
         rotate. Removing the VibeDash identity, guest scope, and CSRF tokens
         prevents guest-scope claiming and replay through the browser's next
         cookie while leaving the classic upload/report workflow and its
-        independent monitoring scope intact in the same browser. Because
-        Flask signs the whole client-side cookie, a separately copied old
-        cookie cannot be revoked by this key rotation alone.
+        independent monitoring scope intact in the same browser. Credential
+        rotation on password change additionally invalidates separately copied
+        old VibeDash cookies because their token is derived from the old hash.
         """
         for key in _VIBEDASH_IDENTITY_SESSION_KEYS:
             session.pop(key, None)
@@ -980,7 +1032,11 @@ if vibedash_bp:
         if store is None:
             return _render_auth('register', error='Account storage is temporarily unavailable.', status=503)
         try:
-            account = store.register(email, password)
+            account = store.register(
+                email,
+                password,
+                credential_secret=current_app.secret_key,
+            )
         except AccountValidationError as error:
             return _render_auth('register', error=str(error), status=400)
         except Exception:
@@ -995,11 +1051,10 @@ if vibedash_bp:
                 error='Unable to create an account with those details.',
                 status=400,
             )
-        _rotate_vibedash_identity()
-        session.permanent = True
-        session[_ACCOUNT_SESSION_KEY] = account['id']
-        _auth_csrf_token()
-        _decision_csrf_token()
+        if not _establish_account(account):
+            return _render_auth(
+                'register', error='Account storage is temporarily unavailable.', status=503
+            )
         flash('Your pilot account is ready.', 'success')
         return redirect(url_for('vibedash.index'))
 
@@ -1018,6 +1073,7 @@ if vibedash_bp:
             account = store.authenticate(
                 request.form.get('email', ''),
                 request.form.get('password', ''),
+                credential_secret=current_app.secret_key,
             )
         except Exception:
             current_app.logger.warning(
@@ -1027,11 +1083,10 @@ if vibedash_bp:
             return _render_auth('login', error='Login is temporarily unavailable.', status=503)
         if account is None:
             return _render_auth('login', error='Email or password is incorrect.', status=401)
-        _rotate_vibedash_identity()
-        session.permanent = True
-        session[_ACCOUNT_SESSION_KEY] = account['id']
-        _auth_csrf_token()
-        _decision_csrf_token()
+        if not _establish_account(account):
+            return _render_auth(
+                'login', error='Login is temporarily unavailable.', status=503
+            )
         flash('Welcome back.', 'success')
         return redirect(url_for('vibedash.index'))
 
@@ -1046,6 +1101,91 @@ if vibedash_bp:
         _decision_csrf_token()
         flash('You are signed out. Guest analyses remain browser-scoped.', 'success')
         return redirect(url_for('vibedash.index'))
+
+
+    def _render_account_settings(account, *, error=None, success=None, status=200):
+        return render_template(
+            'vibedash_account.html',
+            account=account,
+            auth_csrf_token=_auth_csrf_token(),
+            error=error,
+            success=success,
+        ), status
+
+
+    @vibedash_bp.route('/account', methods=['GET'])
+    def account_settings():
+        """Show the authenticated pilot account settings."""
+        account = _current_account()
+        if account is None:
+            return redirect(url_for('vibedash.login'))
+        return _render_account_settings(account)
+
+
+    @vibedash_bp.route('/account/password', methods=['POST'])
+    def account_password():
+        """Change the authenticated account password with CSRF protection."""
+        account = _current_account()
+        if account is None:
+            return redirect(url_for('vibedash.login'))
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return _render_account_settings(
+                account,
+                error='This form has expired. Please try again.',
+                status=400,
+            )
+
+        current_password = request.form.get('current_password', '')
+        new_password = request.form.get('new_password', '')
+        confirmation = request.form.get('new_password_confirmation', '')
+        if new_password != confirmation:
+            return _render_account_settings(
+                account,
+                error='New passwords do not match.',
+                status=400,
+            )
+        store = _account_store()
+        if store is None:
+            return _render_account_settings(
+                account,
+                error='Password change is temporarily unavailable.',
+                status=503,
+            )
+        try:
+            changed = store.change_password(
+                account['id'],
+                current_password,
+                new_password,
+                credential_secret=current_app.secret_key,
+            )
+        except AccountValidationError as error:
+            # Password policy failures are intentionally explicit; current
+            # password and lockout failures below remain generic.
+            return _render_account_settings(account, error=str(error), status=400)
+        except Exception:
+            current_app.logger.warning(
+                'VibeDash password change failed',
+                extra={'event': 'vibedash_account_password_change_failed'},
+            )
+            return _render_account_settings(
+                account,
+                error='Password change is temporarily unavailable.',
+                status=503,
+            )
+        if changed is None:
+            return _render_account_settings(
+                account,
+                error='The current password or account state is invalid.',
+                status=400,
+            )
+        if not _establish_account(changed):
+            # The password hash has already rotated, so the old credential is
+            # no longer usable.  Do not render the old account record with a
+            # stale identity; send the browser through a clean login instead.
+            flash('Your password was changed. Please sign in again.', 'success')
+            return redirect(url_for('vibedash.login'))
+        flash('Your password was changed. Other signed-in browsers must sign in again.', 'success')
+        return redirect(url_for('vibedash.account_settings'))
 
 
     @vibedash_bp.get('/history')

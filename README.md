@@ -92,6 +92,18 @@ From a completed background result, a user can turn one ranked priority into a d
 
 ## Pilot onboarding and measurement
 
+Optional VibeDash pilot accounts are available from **Create account**. The
+account page (`/vibedash/account`) can change a password; there is currently no
+email verification or password-recovery flow. Account access is represented by
+an id plus an opaque credential token inside Flask's signed client-side cookie.
+The server validates that pair against the current password hash on every
+authenticated request. A password change therefore invalidates copied old
+VibeDash cookies, while ordinary cookie rotation cannot revoke a separately
+copied cookie. This is a small pilot boundary, not enterprise authentication.
+Free-host storage is ephemeral: account records and account-owned history may
+disappear after a restart or redeploy, so keep independent copies of important
+results.
+
 The workspace includes a **Weekly SaaS review** guide and prompt preset. Each run
 offers an unchecked, optional usage-measurement checkbox. Consenting background
 analyses record bounded lifecycle milestones and can submit fixed-choice feedback;
