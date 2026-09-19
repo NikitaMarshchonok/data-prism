@@ -32,6 +32,7 @@ RUN mkdir -p /var/lib/data-prism/uploads \
         /var/lib/data-prism/baselines \
         /var/lib/data-prism/jobs \
         /var/lib/data-prism/drift \
+        /var/lib/data-prism/accounts \
     && chown -R data-prism:data-prism /var/lib/data-prism
 
 USER data-prism

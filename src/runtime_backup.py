@@ -13,10 +13,11 @@ import time
 
 
 CONTRACT = 'data-prism-runtime-backup-v1'
-STATE_ROOTS = frozenset({'uploads', 'reports', 'baselines', 'jobs', 'drift', 'sessions', 'exports'})
+STATE_ROOTS = frozenset({'uploads', 'reports', 'baselines', 'jobs', 'drift', 'accounts', 'sessions', 'exports'})
 DATABASES = {
     'jobs/analysis_jobs.sqlite3': {'analysis_jobs'},
     'drift/drift_history.sqlite3': {'drift_runs', 'drift_alerts'},
+    'accounts/accounts.sqlite3': {'accounts', 'login_throttle'},
 }
 MAX_FILES = 20000
 MAX_BYTES = 2 * 1024 ** 3
@@ -110,9 +111,23 @@ def _inventory(root, *, live=False):
                     raise BackupError('Runtime top-level entries must be dedicated directories.')
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise BackupError('Only regular, non-hardlinked files are supported.')
-                sidecar_db = next((db for db in DATABASES if name in {db + '-wal', db + '-shm'}), None)
+                sidecar_match = next(
+                    (
+                        (db, suffix)
+                        for db in DATABASES
+                        for suffix in ('-wal', '-shm', '-journal')
+                        if name == db + suffix
+                    ),
+                    None,
+                )
+                sidecar_db, sidecar_suffix = sidecar_match or (None, None)
                 if sidecar_db:
-                    if not live:
+                    # SQLite backup() incorporates committed WAL pages into
+                    # the copied database.  Rollback journals are never a
+                    # valid standalone payload: retaining one could replay
+                    # an interrupted transaction during recovery and would
+                    # make the snapshot's database/file contract ambiguous.
+                    if sidecar_suffix == '-journal' or not live:
                         raise BackupError('Unexpected SQLite sidecar in snapshot payload.')
                     try:
                         database_info = (root / sidecar_db).lstat()
@@ -254,6 +269,18 @@ def _check_database(path, name):
             active = connection.execute("SELECT COUNT(*) FROM analysis_jobs WHERE status IN ('queued', 'running')").fetchone()[0]
             if active:
                 raise BackupError('Queued or running jobs remain. Drain work before taking an offline snapshot.')
+    if name == 'accounts/accounts.sqlite3':
+        # The generic table-presence check above is intentionally sufficient
+        # for the older runtime databases, whose stores own their own schema
+        # contracts.  AccountStore has a strict v1 contract with no migration
+        # path, so a database containing merely same-named but incompatible
+        # tables must never produce a backup that the application cannot open.
+        try:
+            from vibedash.accounts import validate_account_database
+
+            validate_account_database(path)
+        except Exception as error:
+            raise BackupError('Account database schema verification failed.') from error
 
 
 def _snapshot_database(source, destination):

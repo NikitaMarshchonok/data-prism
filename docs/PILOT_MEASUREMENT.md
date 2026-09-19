@@ -36,7 +36,8 @@ service and no public metrics/admin endpoint.
 
 `pilot_analyses` lives in the analysis-job SQLite database. It contains only:
 
-- a job ID and an HMAC-derived pseudonymous browser token;
+- a job ID and an HMAC-derived pseudonymous guest-browser or pilot-account
+  scope token;
 - the server-selected source cohort (`demo` or `upload`);
 - UTC times for acceptance, start, completion/failure, first decision, and first
   recorded outcome (`validated` or `invalidated`, not cancellation);
@@ -44,7 +45,7 @@ service and no public metrics/admin endpoint.
 
 It contains no dataset rows, prompts, filenames, IP addresses, owner names, or
 decision text. This is pseudonymization, **not anonymization**: the operational
-job table can still link a job to its browser scope. Operational analysis and
+job table can still link a job to its VibeDash scope. Operational analysis and
 case storage are separate purposes and retain their existing data contracts.
 
 Milestones are written in the same transaction as their corresponding lifecycle
@@ -57,9 +58,13 @@ Measurement records expire 30 days after analysis acceptance; subsequent
 application activity removes them. This is not a timer-based deletion SLA. A
 service-wide cap of 10,000 records bounds storage; a full table skips measurement
 for new analyses, without blocking analysis. Consent withdrawal removes records
-for the current signed browser scope but leaves analyses and cases intact.
-Later lifecycle changes never recreate removed records. Future runs remain
-opt-in. Cookie loss or a changed session key loses access to the previous scope.
+for the current signed guest-browser or pilot-account scope but leaves analyses
+and cases intact. Later lifecycle changes never recreate removed records. Future
+runs remain opt-in. Guest cookie loss loses access to the previous guest scope;
+a pilot account can restore its account scope across browsers while a changed
+session key still makes prior signed-cookie identity unavailable. Because the
+Flask secret also derives account scopes, rotating it makes prior account-owned
+job history unavailable after the account signs in again.
 
 ## Read the report on the measured host
 
@@ -102,15 +107,16 @@ acceptance time, not the time of the later decision or outcome.
 | `decision_rate_among_completed` | Completed analyses with ≥1 case / completed analyses |
 | `outcome_rate_among_decision_analyses` | Analyses with ≥1 recorded outcome / analyses with ≥1 case |
 | `median_seconds_to_first_decision` | Acceptance to first case, among analyses with a case |
-| `browser_scopes_with_repeat_completed_analysis` | Browser scopes with ≥2 completed runs in the cohort |
-| `browser_scopes_active_on_multiple_utc_dates` | Browser scopes with completed runs accepted on ≥2 UTC dates |
+| `browser_scopes_with_repeat_completed_analysis` | Guest-browser or pilot-account scopes with ≥2 completed runs in the cohort (the stable field name is retained for report compatibility) |
+| `browser_scopes_active_on_multiple_utc_dates` | Guest-browser or pilot-account scopes with completed runs accepted on ≥2 UTC dates (the stable field name is retained for report compatibility) |
 | `feedback_responses` | Completed analyses with one current response |
 
 Ratios have range 0–1; zero denominator yields `null`, not a failure score.
 Always show denominators. Consent selection, cookie clearing, recent unfinished
-work, deletion, the storage cap, and redeployment bias coverage. A browser is
-neither a person nor a company. An uploaded synthetic CSV is still in the upload
-cohort, so operators must keep their own test uploads out of real-pilot results.
+work, deletion, the storage cap, and redeployment bias coverage. A scope token
+is neither a person nor a company. An uploaded synthetic CSV is still in the
+upload cohort, so operators must keep their own test uploads out of real-pilot
+results.
 
 Review-date adherence, actual time saved versus the old workflow, measurement
 quality of outcome notes, repeat use by a real person, and willingness to pay

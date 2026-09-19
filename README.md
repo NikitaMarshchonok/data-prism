@@ -82,13 +82,13 @@ The landing page also provides **Compare two periods** for an independent, obser
 
 Comparison uploads are bounded to 100 MiB per request, 100,000 rows and 100 columns per file, 100,000 combined rows and columns, and 256 MiB of combined in-memory frames. At most 32 candidate metrics receive inferential processing (up to 8 are displayed), with at least 8 finite observations per period required for a test. The two source CSVs are deleted after worker processing; the aggregate result, session record, and aggregate-only audit manifest are retained temporarily under `VIBEDASH_RETENTION_HOURS` (24 hours by default). They are not durable storage or a production availability guarantee.
 
-The browser workflow submits `POST /vibedash/comparisons/jobs`, polls the scoped asynchronous job at `/vibedash/jobs/<job_id>`, and opens `/vibedash/jobs/<job_id>/result`; the aggregate manifest is available at `/vibedash/jobs/<job_id>/manifest`, and completed comparison results offer an in-memory standalone HTML download at `/vibedash/jobs/<job_id>/comparison-report.html`. Job, history, result, manifest, and report access is restricted to the signed browser session that created the job.
+The browser workflow submits `POST /vibedash/comparisons/jobs`, polls the scoped asynchronous job at `/vibedash/jobs/<job_id>`, and opens `/vibedash/jobs/<job_id>/result`; the aggregate manifest is available at `/vibedash/jobs/<job_id>/manifest`, and completed comparison results offer an in-memory standalone HTML download at `/vibedash/jobs/<job_id>/comparison-report.html`. Job, history, result, manifest, and report access is restricted to the signed guest-browser or pilot-account scope that created the job.
 
 The comparison HTML download is server-named, generated in memory, and is not a second retained artifact. It reuses the comparison template with trusted CSS inlined, no live dependencies, and a restrictive local-document CSP. The standalone page includes print CSS for browser Print/Save as PDF; server-side PDF generation is not part of this flow.
 
-Completed background runs appear under **History** for the same signed browser session. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, request and specification fingerprints, row/column coverage, truncation state, readiness outcome, decision-brief coverage, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
+Completed background runs appear under **History** for the same signed guest-browser or pilot-account scope. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, request and specification fingerprints, row/column coverage, truncation state, readiness outcome, decision-brief coverage, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
 
-From a completed background result, a user can turn one ranked priority into a decision case before the outcome is known. The case freezes a bounded evidence summary and audit fingerprint together with the owner, decision, success metric, target, and review date. Later, the same browser scope records whether the target was validated, invalidated, or cancelled. This creates an auditable evidence-to-outcome loop; it does not infer causality or prove that the action caused the observed result.
+From a completed background result, a user can turn one ranked priority into a decision case before the outcome is known. The case freezes a bounded evidence summary and audit fingerprint together with the owner, decision, success metric, target, and review date. Later, the same guest-browser or pilot-account scope records whether the target was validated, invalidated, or cancelled. This creates an auditable evidence-to-outcome loop; it does not infer causality or prove that the action caused the observed result.
 
 ## Pilot onboarding and measurement
 
@@ -96,8 +96,8 @@ The workspace includes a **Weekly SaaS review** guide and prompt preset. Each ru
 offers an unchecked, optional usage-measurement checkbox. Consenting background
 analyses record bounded lifecycle milestones and can submit fixed-choice feedback;
 analysis still works without consent. Demo and upload cohorts are reported
-separately, and a browser can delete its pilot measurements without deleting its
-analyses or cases. This is first-party pseudonymous measurement, not proof of
+separately, and the current guest-browser or pilot-account scope can delete its
+pilot measurements without deleting its analyses or cases. This is first-party pseudonymous measurement, not proof of
 business value or product-market fit.
 
 Use `python pilot_report.py --database data/jobs/analysis_jobs.sqlite3 --days 7`
@@ -140,11 +140,11 @@ The free service filesystem is ephemeral. This is suitable for the portfolio dem
 
 VibeDash working copies, session files, and generated HTML exports use a configurable retention window. `VIBEDASH_RETENTION_HOURS` defaults to 24 hours and accepts values from 1 to 720. Expired, application-owned artifacts are removed when VibeDash receives a request; unrelated files and symbolic links are never removed by this cleanup.
 
-Retained VibeDash session records are bound to the signed browser analysis scope that created them. Export, chat-analysis, result, decision, and comparison-report loads fail closed when the owner is missing, malformed, or belongs to another browser scope. This is a deployment boundary: session JSON written by older releases without `analysis_scope_id` is intentionally unavailable after this hardening, so users must rerun those analyses.
+Retained VibeDash session records are bound to the signed guest-browser or pilot-account analysis scope that created them. Export, chat-analysis, result, decision, and comparison-report loads fail closed when the owner is missing, malformed, or belongs to another scope. This is a deployment boundary: session JSON written by older releases without `analysis_scope_id` is intentionally unavailable after this hardening, so users must rerun those analyses.
 
-The public single-instance deployment runs one bounded in-process analysis worker. Active work is limited per signed browser session and across the service; interrupted jobs are reported as failed rather than remaining indefinitely in `running` state.
+The public single-instance deployment runs one bounded in-process analysis worker. Active work is limited per signed guest-browser or pilot-account scope and across the service; interrupted jobs are reported as failed rather than remaining indefinitely in `running` state.
 
-Decision cases use the same local SQLite database and signed browser scope. Closed cases are retained for 90 days by default, while active cases remain until they are closed. Configure this with `VIBEDASH_DECISION_RETENTION_DAYS` and `VIBEDASH_MAX_DECISION_CASES_PER_SCOPE`. A free Render restart or redeploy can remove them earlier because its filesystem is ephemeral.
+Decision cases use the same local SQLite database and signed guest-browser or pilot-account scope. Closed cases are retained for 90 days by default, while active cases remain until they are closed. Configure this with `VIBEDASH_DECISION_RETENTION_DAYS` and `VIBEDASH_MAX_DECISION_CASES_PER_SCOPE`. A free Render restart or redeploy can remove them earlier because its filesystem is ephemeral.
 
 ## Offline runtime backup and recovery
 
@@ -285,9 +285,9 @@ data-prism/
 
 - Uploaded datasets, generated reports, local baselines, and SQLite history are runtime artifacts and are excluded from version control.
 - VibeDash uploads, sessions, and exports are server-named and subject to the configured temporary-artifact retention window.
-- Analysis-job status is isolated by a server-signed browser scope; job payloads and internal exceptions are not returned by the status API.
-- Run history, stored results, and audit-manifest downloads require the same signed browser scope that created the analysis.
-- Decision cases are isolated by that browser scope and store bounded evidence snapshots rather than source dataset rows.
+- Analysis-job status is isolated by a server-signed guest browser or pilot-account scope; job payloads and internal exceptions are not returned by the status API.
+- Run history, stored results, and audit-manifest downloads require the same signed scope that created the analysis.
+- Decision cases are isolated by that scope and store bounded evidence snapshots rather than source dataset rows.
 - Audit manifests include schema metadata and cryptographic fingerprints but never source row values.
 - Monitoring API keys are compared using constant-time comparison and are not used directly as storage identifiers.
 - API drift uploads are transient; persisted baselines contain aggregate profiles rather than raw rows.
@@ -300,7 +300,9 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 
 - Classic analysis is synchronous; VibeDash uses a bounded in-process worker intended for the documented single-instance topology.
 - Runtime state uses the local filesystem and SQLite rather than managed object storage and a distributed database.
-- Decision cases are browser-scoped, not account- or team-scoped; clearing the session cookie loses access, and free-host restarts can remove the records.
+- Guest decision cases are browser-scoped; signed-in pilot accounts share their account scope across browsers, while clearing a session cookie removes only that browser's identity. Free-host restarts can remove the records.
+- VibeDash pilot accounts are optional. An account gives the same signed 32-hex analysis scope across browsers, while guest analyses remain browser-scoped and are never migrated into an account. Free-host storage may reset; this is not enterprise authentication or a durable-account guarantee.
+- Preserve `FLASK_SECRET_KEY`: it signs the session and derives account scopes. Rotating it requires sign-in again and makes prior account-owned history unavailable under the new scope.
 - Measured outcomes are user-entered observations. They support learning and accountability but do not establish that a decision caused the result.
 - Temporary-artifact cleanup is request-triggered, so it is not a wall-clock deletion SLA; strict retention guarantees require a scheduler or storage-provider lifecycle policy.
 - Predictive models are fast diagnostic baselines, not automatically deployable production models.

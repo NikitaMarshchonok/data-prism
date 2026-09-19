@@ -22,7 +22,7 @@ MAX_DECISION_CASES = 500
 
 
 class DecisionCaseCapacityError(RuntimeError):
-    """A browser scope has reached the bounded decision-case limit."""
+    """A VibeDash scope has reached the bounded decision-case limit."""
 
 
 class DecisionCaseConflictError(RuntimeError):

@@ -14,6 +14,7 @@ Docker deployment:
 runtime-state/
 ├── jobs/analysis_jobs.sqlite3     # Jobs, decision cases, opt-in pilot measurement
 ├── drift/drift_history.sqlite3   # Monitoring runs and alerts, when present
+├── accounts/accounts.sqlite3     # Optional VibeDash pilot accounts and login throttling
 ├── baselines/                    # Aggregate reference profiles
 ├── uploads/                      # Temporary input files
 ├── sessions/vibedash/            # Stored dashboard results
@@ -110,9 +111,11 @@ or restore. Parent directories must be operator-controlled, not shared scratch s
    hostname/cookie context unchanged when verifying existing access; a different
    domain does not automatically receive the old cookie.
 4. Check `/healthz`, `/readyz`, History, an unexpired dashboard, a decision case,
-   monitoring history, and `pilot_report.py` on the restored job database. Confirm
-   a separate browser cannot read an existing case. An expired source dashboard
-   may be unavailable while its longer-lived case remains readable.
+   monitoring history, and `pilot_report.py` on the restored job database. If
+   `accounts/accounts.sqlite3` is present, verify that a pilot account can sign
+   in and still sees its account-owned history, while a separate guest browser
+   cannot read an existing case. An expired source dashboard may be unavailable
+   while its longer-lived case remains readable.
 5. Original modification times and database timestamps are preserved. Normal
    retention cleanup applies on the next application request, so restoration
    must not be used to extend the life of expired uploads or measurements.
@@ -134,9 +137,10 @@ a rehearsal of your real Render disk, credentials, or backup infrastructure.
 
 ## Security, retention, and hosting limits
 
-- Full snapshots contain uploaded rows, prompts, decision text, and pseudonymous
-  measurement. They are sensitive operational data, unlike the aggregate pilot
-  report. The tools do not upload them anywhere.
+- Full snapshots contain uploaded rows, prompts, decision text, pseudonymous
+  measurement, and (when enabled) pilot account emails and password hashes.
+  They are sensitive operational data, unlike the aggregate pilot report. The
+  tools do not upload them anywhere.
 - New directories use POSIX mode `0700` and files `0600`; these permissions are
   not encryption. Store copies on an encrypted, access-controlled device or
   approved storage service. SHA-256 detects corruption, not authenticity: an

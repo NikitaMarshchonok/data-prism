@@ -80,6 +80,11 @@ footer {
 
 .nav-links { display: flex; gap: 28px; color: var(--muted); font-size: 14px; }
 .nav-links a:hover { color: var(--text); }
+.account-nav { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; }
+.account-nav form { margin: 0; }
+.account-email { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-link, .account-join { padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: transparent; cursor: pointer; font: inherit; text-decoration: none; }
+.account-join { border-color: rgba(114,224,182,.35); color: var(--accent); }
 
 .engine-status,
 .support-badge {
@@ -306,6 +311,7 @@ footer p { margin: 0; text-align: center; }
 @media (max-width: 600px) {
     .site-nav, main, footer { width: min(100% - 28px, 1180px); }
     .engine-status { display: none; }
+    .account-email { display: none; }
     .hero { min-height: auto; padding: 52px 0; }
     h1 { font-size: 48px; }
     .hero-actions { align-items: stretch; flex-direction: column; }

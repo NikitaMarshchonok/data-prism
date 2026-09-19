@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Recent Data Prism analyses and reproducibility manifests for this browser session.">
+    <meta name="description" content="Recent Data Prism analyses and reproducibility manifests for this VibeDash scope.">
     <title>Analysis history · Data Prism</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,7 +18,7 @@
             <span>Data Prism</span>
         </a>
         <div class="nav-actions">
-            <span class="scope-label"><span></span> This browser session</span>
+            <span class="scope-label"><span></span> This VibeDash scope</span>
             <a class="button button-secondary" href="{{ url_for('vibedash.decision_cases') }}">Decision cases</a>
             <a class="button button-secondary" href="{{ url_for('vibedash.index') }}">New analysis</a>
         </div>
@@ -29,7 +29,7 @@
             <div>
                 <div class="eyebrow">Reproducible workspace</div>
                 <h1>Analysis history</h1>
-                <p>Recent runs, evidence counts, and versioned audit metadata for this signed browser session.</p>
+                <p>Recent runs, evidence counts, and versioned audit metadata for this signed VibeDash scope.</p>
             </div>
             <aside class="retention-note">
                 <strong>Temporary by design</strong>
@@ -88,7 +88,7 @@
         {% else %}
         <section class="empty-state">
             <span class="empty-icon" aria-hidden="true">↗</span>
-            <h2>No analyses in this browser yet</h2>
+            <h2>No analyses in this VibeDash scope yet</h2>
             <p>Run the deterministic demo or upload a CSV. Completed work will appear here with its audit manifest.</p>
             <a class="button button-primary" href="{{ url_for('vibedash.index') }}">Start an analysis</a>
         </section>

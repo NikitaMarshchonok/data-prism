@@ -204,7 +204,7 @@ def save_export(html_content: str, session_id: str, exports_dir=None) -> str:
 
 
 def _validated_analysis_scope_id(scope_id: str) -> str | None:
-    """Return a normalized browser scope or ``None`` for malformed input."""
+    """Return a normalized VibeDash scope or ``None`` for malformed input."""
     if not isinstance(scope_id, str) or not ANALYSIS_SCOPE_PATTERN.fullmatch(scope_id):
         return None
     return scope_id

@@ -16,6 +16,7 @@ import uuid
 from src.drift_store import DriftStore
 from src.runtime_backup import BackupError, create_backup, restore_backup, verify_backup
 from vibedash.analysis_jobs import AnalysisJobStore
+from vibedash.accounts import AccountStore
 from vibedash.decision_cases import DecisionCaseStore
 from vibedash.pilot_metrics import build_pilot_report, scope_token
 
@@ -90,6 +91,18 @@ class RuntimeBackupTests(unittest.TestCase):
         self.assertEqual(restored_upload.stat().st_mtime_ns, self.old_mtime)
         self.assertEqual((self.restored / 'baselines' / 'synthetic.json').read_bytes(), self.baseline.read_bytes())
         self.assertNotIn('Synthetic role', json.dumps(result))
+
+    def test_account_database_is_backed_up_and_restored(self):
+        account_path = self.state / 'accounts' / 'accounts.sqlite3'
+        with AccountStore(account_path) as accounts:
+            account = accounts.register('backup@example.com', 'a sufficiently long password')
+            self.assertIsNotNone(account)
+
+        self.snapshot()
+        self.assertIn('accounts/accounts.sqlite3', self.manifest()['files'])
+        restore_backup(self.backup, self.restored, offline=True)
+        with AccountStore(self.restored / 'accounts' / 'accounts.sqlite3') as accounts:
+            self.assertEqual(accounts.get_account(account['id'])['email'], 'backup@example.com')
 
     def test_no_offline_acknowledgment_means_no_output(self):
         with self.assertRaises(BackupError):
@@ -294,6 +307,16 @@ class RuntimeBackupTests(unittest.TestCase):
             self.snapshot()
         self.assertFalse(self.backup.exists())
 
+    def test_incompatible_account_schema_is_rejected(self):
+        account_path = self.state / 'accounts' / 'accounts.sqlite3'
+        account_path.parent.mkdir()
+        with sqlite3.connect(account_path) as connection:
+            connection.execute('CREATE TABLE accounts (id TEXT)')
+            connection.execute('CREATE TABLE login_throttle (email_key TEXT)')
+        with self.assertRaises(BackupError):
+            self.snapshot()
+        self.assertFalse(self.backup.exists())
+
     def test_corrupt_payload_rejected_before_destination_is_created(self):
         self.snapshot()
         (self.backup / 'state' / 'baselines' / 'synthetic.json').write_text('changed')
@@ -310,6 +333,20 @@ class RuntimeBackupTests(unittest.TestCase):
         extra.unlink()
         extra = self.backup / 'state' / 'uploads' / 'extra.txt'
         extra.write_bytes(b'unexpected')
+        with self.assertRaises(BackupError):
+            verify_backup(self.backup)
+
+    def test_sqlite_rollback_journals_are_rejected(self):
+        source_journal = self.state / 'jobs' / 'analysis_jobs.sqlite3-journal'
+        source_journal.write_bytes(b'unexpected')
+        with self.assertRaises(BackupError):
+            self.snapshot()
+        self.assertFalse(self.backup.exists())
+
+        source_journal.unlink()
+        self.snapshot()
+        payload_journal = self.backup / 'state' / 'jobs' / 'analysis_jobs.sqlite3-journal'
+        payload_journal.write_bytes(b'unexpected')
         with self.assertRaises(BackupError):
             verify_backup(self.backup)
 

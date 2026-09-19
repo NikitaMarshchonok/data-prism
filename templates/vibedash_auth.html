@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="VibeDash pilot account access.">
+    <title>{{ 'Create a pilot account' if mode == 'register' else 'Sign in' }} · Data Prism</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_auth.css') }}">
+</head>
+<body>
+    <main class="auth-shell">
+        <a class="brand" href="{{ url_for('vibedash.index') }}"><span aria-hidden="true">DP</span> Data Prism</a>
+        <section class="auth-card" aria-labelledby="auth-title">
+            <p class="eyebrow">VibeDash pilot</p>
+            <h1 id="auth-title">{{ 'Create your account' if mode == 'register' else 'Welcome back' }}</h1>
+            <p class="intro">Use a free pilot account to access your VibeDash analyses from another browser. Free-host storage may reset.</p>
+            {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+            <form method="post" novalidate>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label for="email">Email</label>
+                <input id="email" name="email" type="email" autocomplete="email" required maxlength="254">
+                <label for="password">Password</label>
+                <input id="password" name="password" type="password" autocomplete="{{ 'new-password' if mode == 'register' else 'current-password' }}" required minlength="12" maxlength="1024">
+                {% if mode == 'register' %}<p class="hint">Use at least 12 characters.</p>{% endif %}
+                <button type="submit">{{ 'Create account' if mode == 'register' else 'Sign in' }}</button>
+            </form>
+            <p class="switch">{% if mode == 'register' %}Already have an account? <a href="{{ url_for('vibedash.login') }}">Sign in</a>{% else %}New to the pilot? <a href="{{ url_for('vibedash.register') }}">Create an account</a>{% endif %}</p>
+            <p class="back"><a href="{{ url_for('vibedash.index') }}">← Back to VibeDash</a></p>
+        </section>
+    </main>
+</body>
+</html>

@@ -1,4 +1,5 @@
 import unittest
+import sqlite3
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,16 +17,21 @@ class WebUploadTests(unittest.TestCase):
         self.upload_folder = Path(self.temporary_directory.name) / "uploads"
         self.report_folder = Path(self.temporary_directory.name) / "reports"
         self.baseline_folder = Path(self.temporary_directory.name) / "baselines"
+        self.account_folder = Path(self.temporary_directory.name) / "accounts"
         self.drift_store_path = Path(self.temporary_directory.name) / "drift.sqlite3"
+        self.job_store_path = Path(self.temporary_directory.name) / "jobs.sqlite3"
         self.upload_folder.mkdir()
         self.report_folder.mkdir()
         self.baseline_folder.mkdir()
+        self.account_folder.mkdir()
         self.previous_config = {
             "TESTING": web_app.app.config.get("TESTING"),
             "SESSION_KEY_PERSISTENT": web_app.app.config["SESSION_KEY_PERSISTENT"],
             "UPLOAD_FOLDER": web_app.app.config["UPLOAD_FOLDER"],
             "REPORT_FOLDER": web_app.app.config["REPORT_FOLDER"],
             "BASELINE_FOLDER": web_app.app.config["BASELINE_FOLDER"],
+            "VIBEDASH_ACCOUNT_STORE_PATH": web_app.app.config["VIBEDASH_ACCOUNT_STORE_PATH"],
+            "VIBEDASH_JOB_STORE_PATH": web_app.app.config["VIBEDASH_JOB_STORE_PATH"],
             "DRIFT_STORE_PATH": web_app.app.config["DRIFT_STORE_PATH"],
             "DRIFT_HISTORY_RETENTION": web_app.app.config["DRIFT_HISTORY_RETENTION"],
             "MAX_CONTENT_LENGTH": web_app.app.config["MAX_CONTENT_LENGTH"],
@@ -35,6 +41,8 @@ class WebUploadTests(unittest.TestCase):
             UPLOAD_FOLDER=str(self.upload_folder),
             REPORT_FOLDER=str(self.report_folder),
             BASELINE_FOLDER=str(self.baseline_folder),
+            VIBEDASH_ACCOUNT_STORE_PATH=str(self.account_folder / "accounts.sqlite3"),
+            VIBEDASH_JOB_STORE_PATH=str(self.job_store_path),
             DRIFT_STORE_PATH=str(self.drift_store_path),
             DRIFT_HISTORY_RETENTION=100,
         )
@@ -129,6 +137,17 @@ class WebUploadTests(unittest.TestCase):
         self.assertIn("FLASK_SECRET_KEY", not_ready.get_json()["issues"][0])
         self.assertEqual(ready.status_code, 200)
         self.assertEqual(ready.get_json()["status"], "ready")
+
+    def test_readiness_rejects_existing_invalid_account_store(self):
+        account_path = self.account_folder / "accounts.sqlite3"
+        with sqlite3.connect(account_path) as connection:
+            connection.execute("CREATE TABLE incomplete (value TEXT)")
+
+        with web_app.app.test_client() as client:
+            response = client.get("/readyz")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("account store is unavailable.", response.get_json()["issues"])
 
     def test_positive_integer_environment_value_is_validated(self):
         with patch.dict("os.environ", {"MAX_UPLOAD_MB": "256"}):

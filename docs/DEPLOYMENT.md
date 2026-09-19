@@ -33,6 +33,14 @@ No external AI key is required for the deterministic demo. `OPENAI_API_KEY` can 
 
 The free Render service uses an ephemeral filesystem. Uploaded datasets, reports, baselines, drift history, and decision cases are therefore lost when the instance is restarted or redeployed. This is acceptable for a public portfolio demo, but not for persistent monitoring or a team decision record.
 
+VibeDash pilot accounts use a separate local SQLite file under the configured
+state directory. Render sets `SESSION_COOKIE_SECURE=true`; local development
+defaults this flag off unless explicitly enabled. Accounts are optional and
+do not provide enterprise authentication, password recovery, team roles, or a
+durable-account SLA. On the free host, account data and account-owned history
+can reset with the filesystem. Guest analyses remain browser-scoped and are
+never migrated into an account.
+
 For single-instance persistent monitoring, upgrade to a paid service and attach a disk at:
 
 ```text
@@ -80,18 +88,19 @@ VIBEDASH_MAX_DECISION_CASES_PER_SCOPE=50
 ```
 
 Closed cases are removed after the configured 1–730 day window when a VibeDash
-request triggers cleanup. Active cases remain until closed. The per-browser
-limit accepts 1–500 cases. These settings do not override the free host's
-ephemeral storage behaviour. Case access depends on the signed browser session,
-so this workflow is a single-user pilot rather than account-based persistence.
+request triggers cleanup. Active cases remain until closed. The per-scope limit
+accepts 1–500 cases. Guest access depends on the signed browser session; a
+signed-in pilot account instead supplies one deterministic account scope across
+browsers. These settings do not override the free host's ephemeral storage
+behaviour.
 
 ## Analysis job lifecycle
 
-JavaScript-enabled VibeDash clients submit work to `POST /vibedash/jobs` and poll the returned status URL. Job records move through `queued`, `running`, `completed`, or `failed` in SQLite. Access to status and results is restricted to the server-signed browser session that created the job.
+JavaScript-enabled VibeDash clients submit work to `POST /vibedash/jobs` and poll the returned status URL. Job records move through `queued`, `running`, `completed`, or `failed` in SQLite. Access to status and results is restricted to the server-signed guest-browser or pilot-account scope that created the job.
 
-`GET /vibedash/history` lists recent runs for that same browser scope. Completed jobs expose a downloadable manifest containing the service version, analysis-contract version, request/specification fingerprints, dataset and schema SHA-256 fingerprints, analyzed shape, truncation state, and evidence counts. The manifest contains no source row values. It is temporary metadata: the job record and its manifest are purged with `VIBEDASH_RETENTION_HOURS`, while the associated session and upload follow the same file-retention policy.
+`GET /vibedash/history` lists recent runs for that same guest browser or signed-in account scope. Completed jobs expose a downloadable manifest containing the service version, analysis-contract version, request/specification fingerprints, dataset and schema SHA-256 fingerprints, analyzed shape, truncation state, and evidence counts. The manifest contains no source row values. It is temporary metadata: the job record and its manifest are purged with `VIBEDASH_RETENTION_HOURS`, while the associated session and upload follow the same file-retention policy.
 
-The single-instance deployment intentionally runs one in-process analysis worker. The queue defaults to two active jobs per browser scope and 25 across the service. A job that remains `running` longer than 600 seconds is treated as interrupted and reported as failed. These bounds can be adjusted with:
+The single-instance deployment intentionally runs one in-process analysis worker. The queue defaults to two active jobs per guest-browser or pilot-account scope and 25 across the service. A job that remains `running` longer than 600 seconds is treated as interrupted and reported as failed. These bounds can be adjusted with:
 
 ```text
 VIBEDASH_JOB_TIMEOUT_SECONDS=600

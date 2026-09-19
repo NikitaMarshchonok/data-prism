@@ -21,7 +21,7 @@ BLOCKERS = ("none", "unclear_result", "missing_context", "data_quality", "missin
 def scope_token(scope_id, secret):
     """Domain-separated pseudonym, not an anonymous person identifier."""
     if not isinstance(scope_id, str) or not re.fullmatch(r"[0-9a-f]{32}", scope_id):
-        raise ValueError("Invalid browser scope.")
+        raise ValueError("Invalid VibeDash scope.")
     key = secret.encode() if isinstance(secret, str) else secret
     return hmac.new(key, b"pilot-metrics-v1:" + scope_id.encode(), hashlib.sha256).hexdigest()
 
@@ -162,7 +162,7 @@ def build_pilot_report(database_path, days=30, now=None):
             'Opt-in accepted background analyses only; preflight rejections and synchronous previews are excluded.',
             'Cohorts use analysis creation time. Recent cases may not be due for review yet.',
             'One analysis counts once per stage, regardless of polling, number of cases, or repeated outcome edits.',
-            'Browser scopes are pseudonymous, not people or companies; clearing cookies changes the scope.',
+            'Scope tokens are pseudonymous, not people or companies; clearing cookies changes a guest scope, while a pilot account can restore its account scope by signing in again.',
             'Outcomes are self-reported; recorded outcomes do not prove causal impact or willingness to pay.',
             'Thirty-day retention, record limits, consent withdrawal, and ephemeral storage can reduce coverage.',
         ],
