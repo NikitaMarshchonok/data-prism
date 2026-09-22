@@ -42,6 +42,15 @@ class PilotRouteTests(unittest.TestCase):
     def report(self):
         return build_pilot_report(self.path)['cohorts']['demo']
 
+    def feedback_form(self):
+        return {
+            'csrf_token': self.csrf,
+            'usefulness': 'useful',
+            'blocker': 'none',
+            'perceived_time_saved': '15_to_30_minutes',
+            'next_cycle_intent': 'yes',
+        }
+
     def test_onboarding_and_opt_in_are_visible_and_unchecked(self):
         self.assertIn('Weekly SaaS review', self.landing)
         inputs = re.findall(r'<input[^>]+name="pilot_metrics"[^>]*>', self.landing)
@@ -66,7 +75,7 @@ class PilotRouteTests(unittest.TestCase):
     def test_feedback_is_scoped_csrf_protected_and_requires_completion(self):
         job_id = self.create_job().get_json()['job_id']
         url = f'/vibedash/jobs/{job_id}/feedback'
-        form = {'csrf_token': self.csrf, 'usefulness': 'useful', 'blocker': 'none'}
+        form = self.feedback_form()
         self.assertEqual(self.client.post(url, data=form).status_code, 409)
         self.complete(job_id)
         self.assertEqual(self.client.post(url, data={**form, 'csrf_token': 'bad'}).status_code, 400)
@@ -76,9 +85,19 @@ class PilotRouteTests(unittest.TestCase):
         self.assertEqual(stranger.post(url, data=form).status_code, 404)
         self.assertEqual(self.client.post(url, data=form).status_code, 303)
         self.assertEqual(self.report()['feedback_responses'], 1)
+        self.assertEqual(self.report()['value_feedback_responses'], 1)
         invalid = self.client.post(url, data={**form, 'usefulness': 'free text'})
         self.assertEqual(invalid.status_code, 303)
         self.assertEqual(self.report()['feedback_responses'], 1)
+        invalid_time = self.client.post(
+            url, data={**form, 'perceived_time_saved': 'two hours exactly'}
+        )
+        self.assertEqual(invalid_time.status_code, 303)
+        self.assertEqual(self.report()['perceived_time_saved']['15_to_30_minutes'], 1)
+        missing_intent = dict(form)
+        missing_intent.pop('next_cycle_intent')
+        self.assertEqual(self.client.post(url, data=missing_intent).status_code, 303)
+        self.assertEqual(self.report()['next_cycle_intent']['yes'], 1)
 
     @patch('vibedash.routes.load_session_data')
     def test_feedback_render_and_withdrawal_leave_analysis_available(self, load_session):
@@ -89,9 +108,12 @@ class PilotRouteTests(unittest.TestCase):
         job_id = self.create_job().get_json()['job_id']
         self.complete(job_id)
         result_url = f'/vibedash/jobs/{job_id}/result'
-        self.assertIn('pilot-feedback-heading', self.client.get(result_url).get_data(as_text=True))
+        page = self.client.get(result_url).get_data(as_text=True)
+        self.assertIn('pilot-feedback-heading', page)
+        self.assertIn('name="perceived_time_saved"', page)
+        self.assertIn('name="next_cycle_intent"', page)
         response = self.client.post(f'/vibedash/jobs/{job_id}/feedback', data={
-            'csrf_token': self.csrf, 'usefulness': 'useful', 'blocker': 'none',
+            **self.feedback_form(),
         }, follow_redirects=True)
         self.assertIn('Your feedback was saved', response.get_data(as_text=True))
         self.assertEqual(self.client.post('/vibedash/pilot/forget').status_code, 400)

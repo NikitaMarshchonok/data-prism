@@ -47,6 +47,23 @@ class PilotMetricsTests(unittest.TestCase):
             row = connection.execute('SELECT * FROM pilot_analyses WHERE job_id = ?', (job_id,)).fetchone()
             return dict(row) if row else None
 
+    def feedback(
+        self,
+        job_id,
+        usefulness='useful',
+        blocker='none',
+        perceived_time_saved='15_to_30_minutes',
+        next_cycle_intent='yes',
+    ):
+        return record_feedback(
+            self.path,
+            job_id,
+            usefulness,
+            blocker,
+            perceived_time_saved,
+            next_cycle_intent,
+        )
+
     def case(self, job_id, priority=1):
         return DecisionCaseStore(self.path).create(
             self.scope, job_id, priority=priority, owner='PRIVATE-OWNER',
@@ -94,15 +111,54 @@ class PilotMetricsTests(unittest.TestCase):
 
     def test_feedback_updates_instead_of_accumulating(self):
         job_id = self.job()
-        self.assertTrue(record_feedback(self.path, job_id, 'useful', 'none'))
-        self.assertTrue(record_feedback(self.path, job_id, 'partly_useful', 'missing_context'))
+        self.assertTrue(self.feedback(job_id))
+        self.assertTrue(self.feedback(
+            job_id,
+            'partly_useful',
+            'missing_context',
+            'under_15_minutes',
+            'maybe',
+        ))
         report = self.report()
         self.assertEqual(report['feedback_responses'], 1)
+        self.assertEqual(report['feedback_eligible_analyses'], 1)
+        self.assertEqual(report['feedback_response_rate_among_completed'], 1.0)
+        self.assertEqual(report['value_feedback_responses'], 1)
+        self.assertEqual(report['value_feedback_response_rate_among_completed'], 1.0)
+        self.assertEqual(report['legacy_feedback_responses_without_value_signals'], 0)
         self.assertEqual(report['usefulness']['useful'], 0)
         self.assertEqual(report['usefulness']['partly_useful'], 1)
+        self.assertEqual(report['perceived_time_saved']['under_15_minutes'], 1)
+        self.assertEqual(report['perceived_time_saved']['15_to_30_minutes'], 0)
+        self.assertEqual(report['next_cycle_intent']['maybe'], 1)
+        self.assertEqual(report['next_cycle_intent']['yes'], 0)
         with self.assertRaises(ValueError):
-            record_feedback(self.path, job_id, 'PRIVATE-FREE-TEXT', 'none')
-        self.assertFalse(record_feedback(self.path, uuid.uuid4().hex, 'useful', 'none'))
+            self.feedback(job_id, usefulness='PRIVATE-FREE-TEXT')
+        with self.assertRaises(ValueError):
+            self.feedback(job_id, perceived_time_saved='about an hour')
+        with self.assertRaises(ValueError):
+            self.feedback(job_id, next_cycle_intent='contact me')
+        self.assertFalse(self.feedback(uuid.uuid4().hex))
+
+    def test_value_feedback_is_aggregated_by_source_without_implying_people(self):
+        upload = self.job()
+        demo = self.job(demo=True)
+        self.assertTrue(self.feedback(upload, perceived_time_saved='over_60_minutes'))
+        self.assertTrue(self.feedback(
+            demo,
+            usefulness='partly_useful',
+            blocker='missing_feature',
+            perceived_time_saved='none',
+            next_cycle_intent='no',
+        ))
+        upload_report = self.report('upload')
+        demo_report = self.report('demo')
+        self.assertEqual(upload_report['perceived_time_saved']['over_60_minutes'], 1)
+        self.assertEqual(upload_report['next_cycle_intent']['yes'], 1)
+        self.assertEqual(upload_report['next_cycle_intent']['no'], 0)
+        self.assertEqual(demo_report['perceived_time_saved']['none'], 1)
+        self.assertEqual(demo_report['next_cycle_intent']['no'], 1)
+        self.assertEqual(demo_report['next_cycle_intent']['yes'], 0)
 
     def test_withdrawal_is_scoped_and_does_not_recreate_records(self):
         job_id = self.job()
@@ -110,7 +166,7 @@ class PilotMetricsTests(unittest.TestCase):
         other = self.store.create(other_scope, {}, pilot_scope_token=scope_token(other_scope, 'test-secret'))
         self.assertEqual(forget_scope(self.path, self.token), 1)
         self.case(job_id)
-        self.assertFalse(record_feedback(self.path, job_id, 'useful', 'none'))
+        self.assertFalse(self.feedback(job_id))
         self.assertIsNone(self.row(job_id))
         self.assertIsNotNone(self.row(other['id']))
         self.assertIsNotNone(self.store.get(job_id))
@@ -187,6 +243,78 @@ class PilotMetricsTests(unittest.TestCase):
         for days in (0, 31, True, '7'):
             with self.assertRaises(ValueError):
                 build_pilot_report(self.path, days=days)
+
+    def test_schema_migration_retains_legacy_feedback_and_reports_null_signals(self):
+        legacy = Path(self.directory.name) / 'legacy-metrics.sqlite3'
+        now = datetime.now(timezone.utc).isoformat(timespec='milliseconds')
+        legacy_job = uuid.uuid4().hex
+        with closing(sqlite3.connect(legacy)) as connection, connection:
+            connection.execute("""
+                CREATE TABLE pilot_analyses (
+                    job_id TEXT PRIMARY KEY,
+                    scope_token TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    failed_at TEXT,
+                    decision_at TEXT,
+                    outcome_at TEXT,
+                    usefulness TEXT,
+                    blocker TEXT
+                )
+            """)
+            connection.execute(
+                """
+                INSERT INTO pilot_analyses (
+                    job_id, scope_token, source, created_at, completed_at,
+                    usefulness, blocker
+                ) VALUES (?, ?, 'upload', ?, ?, 'useful', 'none')
+                """,
+                (legacy_job, self.token, now, now),
+            )
+
+        legacy_bytes = legacy.read_bytes()
+        # The read-only report remains compatible before an application store
+        # has had a chance to migrate the database.
+        before = build_pilot_report(legacy)['cohorts']['upload']
+        self.assertEqual(legacy.read_bytes(), legacy_bytes)
+        self.assertEqual(before['feedback_responses'], 1)
+        self.assertEqual(before['value_feedback_responses'], 0)
+        self.assertEqual(before['legacy_feedback_responses_without_value_signals'], 1)
+        self.assertEqual(sum(before['perceived_time_saved'].values()), 0)
+        self.assertEqual(sum(before['next_cycle_intent'].values()), 0)
+
+        AnalysisJobStore(legacy)
+        AnalysisJobStore(legacy)  # The additive migration is idempotent.
+        with closing(sqlite3.connect(legacy)) as connection:
+            columns = {
+                row[1] for row in connection.execute(
+                    'PRAGMA table_info(pilot_analyses)'
+                )
+            }
+            retained = connection.execute(
+                'SELECT usefulness, blocker FROM pilot_analyses WHERE job_id = ?',
+                (legacy_job,),
+            ).fetchone()
+        self.assertIn('perceived_time_saved', columns)
+        self.assertIn('next_cycle_intent', columns)
+        self.assertEqual(retained, ('useful', 'none'))
+        self.assertTrue(record_feedback(
+            legacy,
+            legacy_job,
+            'useful',
+            'none',
+            '30_to_60_minutes',
+            'yes',
+        ))
+        with closing(sqlite3.connect(legacy)) as connection:
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    "UPDATE pilot_analyses SET next_cycle_intent = 'free text' "
+                    "WHERE job_id = ?",
+                    (legacy_job,),
+                )
 
     def test_identifiers_and_stage_allowlist_are_validated(self):
         self.assertEqual(self.token, scope_token(self.scope, 'test-secret'))

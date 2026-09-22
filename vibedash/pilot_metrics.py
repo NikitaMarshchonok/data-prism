@@ -16,6 +16,14 @@ MAX_RECORDS = 10000
 STAGES = frozenset({"started_at", "completed_at", "failed_at", "decision_at", "outcome_at"})
 USEFULNESS = ("useful", "partly_useful", "not_useful")
 BLOCKERS = ("none", "unclear_result", "missing_context", "data_quality", "missing_feature")
+PERCEIVED_TIME_SAVED = (
+    "none",
+    "under_15_minutes",
+    "15_to_30_minutes",
+    "30_to_60_minutes",
+    "over_60_minutes",
+)
+NEXT_CYCLE_INTENT = ("yes", "maybe", "no")
 
 
 def scope_token(scope_id, secret):
@@ -39,9 +47,36 @@ def initialize_metrics(connection):
             decision_at TEXT,
             outcome_at TEXT,
             usefulness TEXT CHECK (usefulness IN ('useful', 'partly_useful', 'not_useful')),
-            blocker TEXT CHECK (blocker IN ('none', 'unclear_result', 'missing_context', 'data_quality', 'missing_feature'))
+            blocker TEXT CHECK (blocker IN ('none', 'unclear_result', 'missing_context', 'data_quality', 'missing_feature')),
+            perceived_time_saved TEXT CHECK (perceived_time_saved IN ('none', 'under_15_minutes', '15_to_30_minutes', '30_to_60_minutes', 'over_60_minutes')),
+            next_cycle_intent TEXT CHECK (next_cycle_intent IN ('yes', 'maybe', 'no'))
         )
     """)
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(pilot_analyses)")
+    }
+    migrations = {
+        "perceived_time_saved": (
+            "ALTER TABLE pilot_analyses ADD COLUMN perceived_time_saved TEXT "
+            "CHECK (perceived_time_saved IN ('none', 'under_15_minutes', "
+            "'15_to_30_minutes', '30_to_60_minutes', 'over_60_minutes'))"
+        ),
+        "next_cycle_intent": (
+            "ALTER TABLE pilot_analyses ADD COLUMN next_cycle_intent TEXT "
+            "CHECK (next_cycle_intent IN ('yes', 'maybe', 'no'))"
+        ),
+    }
+    for column, statement in migrations.items():
+        if column in columns:
+            continue
+        try:
+            connection.execute(statement)
+        except sqlite3.OperationalError as error:
+            # Multiple workers can initialize the same database concurrently.
+            # Only tolerate the exact race where another worker added this
+            # hard-coded column after our PRAGMA snapshot.
+            if "duplicate column name" not in str(error).lower():
+                raise
     connection.execute("CREATE INDEX IF NOT EXISTS idx_pilot_created ON pilot_analyses(created_at)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_pilot_scope ON pilot_analyses(scope_token)")
 
@@ -75,14 +110,37 @@ def mark_stage(connection, job_id, stage, timestamp):
     )
 
 
-def record_feedback(database_path, job_id, usefulness, blocker):
-    if usefulness not in USEFULNESS or blocker not in BLOCKERS:
-        raise ValueError("Choose one usefulness rating and one listed blocker.")
+def record_feedback(
+    database_path,
+    job_id,
+    usefulness,
+    blocker,
+    perceived_time_saved,
+    next_cycle_intent,
+):
+    if (
+        usefulness not in USEFULNESS
+        or blocker not in BLOCKERS
+        or perceived_time_saved not in PERCEIVED_TIME_SAVED
+        or next_cycle_intent not in NEXT_CYCLE_INTENT
+    ):
+        raise ValueError("Choose one value from every listed feedback field.")
     with closing(sqlite3.connect(database_path, timeout=5)) as connection, connection:
         purge_metrics(connection)
         return connection.execute(
-            "UPDATE pilot_analyses SET usefulness = ?, blocker = ? WHERE job_id = ? AND completed_at IS NOT NULL",
-            (usefulness, blocker, job_id),
+            """
+            UPDATE pilot_analyses
+            SET usefulness = ?, blocker = ?, perceived_time_saved = ?,
+                next_cycle_intent = ?
+            WHERE job_id = ? AND completed_at IS NOT NULL
+            """,
+            (
+                usefulness,
+                blocker,
+                perceived_time_saved,
+                next_cycle_intent,
+                job_id,
+            ),
         ).rowcount == 1
 
 
@@ -104,6 +162,11 @@ def _ratio(numerator, denominator):
     return round(numerator / denominator, 4) if denominator else None
 
 
+def _row_value(row, name):
+    """Read an additive report field from both current and legacy schemas."""
+    return row[name] if name in row.keys() else None
+
+
 def _cohort(rows):
     completed = [row for row in rows if row['completed_at']]
     decisions = [row for row in completed if row['decision_at']]
@@ -115,6 +178,12 @@ def _cohort(rows):
     seconds = [
         (datetime.fromisoformat(row['decision_at']) - datetime.fromisoformat(row['created_at'])).total_seconds()
         for row in decisions
+    ]
+    feedback = [row for row in completed if row['usefulness']]
+    value_feedback = [
+        row for row in feedback
+        if _row_value(row, 'perceived_time_saved')
+        and _row_value(row, 'next_cycle_intent')
     ]
     return {
         'accepted_analyses': len(rows),
@@ -130,9 +199,30 @@ def _cohort(rows):
         'browser_scopes_with_completed_analysis': len(scopes),
         'browser_scopes_with_repeat_completed_analysis': sum(count >= 2 for count in scopes.values()),
         'browser_scopes_active_on_multiple_utc_dates': sum(len(values) >= 2 for values in dates.values()),
-        'feedback_responses': sum(bool(row['usefulness']) for row in completed),
+        'feedback_eligible_analyses': len(completed),
+        'feedback_responses': len(feedback),
+        'feedback_response_rate_among_completed': _ratio(len(feedback), len(completed)),
+        'value_feedback_responses': len(value_feedback),
+        'value_feedback_response_rate_among_completed': _ratio(
+            len(value_feedback), len(completed)
+        ),
+        'legacy_feedback_responses_without_value_signals': len(feedback) - len(value_feedback),
         'usefulness': {value: sum(row['usefulness'] == value for row in completed) for value in USEFULNESS},
         'blockers': {value: sum(row['blocker'] == value for row in completed) for value in BLOCKERS},
+        'perceived_time_saved': {
+            value: sum(
+                _row_value(row, 'perceived_time_saved') == value
+                for row in value_feedback
+            )
+            for value in PERCEIVED_TIME_SAVED
+        },
+        'next_cycle_intent': {
+            value: sum(
+                _row_value(row, 'next_cycle_intent') == value
+                for row in value_feedback
+            )
+            for value in NEXT_CYCLE_INTENT
+        },
     }
 
 
@@ -164,6 +254,7 @@ def build_pilot_report(database_path, days=30, now=None):
             'One analysis counts once per stage, regardless of polling, number of cases, or repeated outcome edits.',
             'Scope tokens are pseudonymous, not people or companies; clearing cookies changes a guest scope, while a pilot account can restore its account scope by signing in again.',
             'Outcomes are self-reported; recorded outcomes do not prove causal impact or willingness to pay.',
+            'Perceived time saved and next-cycle intent are optional self-reports, not verified savings, observed repeat use, or adoption commitments.',
             'Thirty-day retention, record limits, consent withdrawal, and ephemeral storage can reduce coverage.',
         ],
     }
