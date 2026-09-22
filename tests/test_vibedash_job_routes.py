@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import time
 import unittest
 import uuid
@@ -82,6 +83,25 @@ class VibeDashJobRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
+    @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=False)
+    def test_dispatcher_decline_fails_job_and_cleans_input(self, _submit):
+        with web_app.app.test_client() as client:
+            response = client.post(
+                "/vibedash/jobs",
+                data={
+                    "demo_dataset": "saas_growth",
+                    "prompt": "Dispatch failure should not strand work.",
+                },
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+        # The test client used a random guest scope; inspect all rows to assert
+        # that no queued/running job was left behind.
+        with sqlite3.connect(web_app.app.config["VIBEDASH_JOB_STORE_PATH"]) as connection:
+            statuses = [row[0] for row in connection.execute("SELECT status FROM analysis_jobs")]
+        self.assertEqual(statuses, ["failed"])
 
     def test_preflight_blocks_duplicate_csv_headers(self):
         rows = "\n".join(f"{index},{index + 1}" for index in range(40))

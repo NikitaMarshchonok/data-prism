@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from vibedash.analysis_jobs import AnalysisJobStore, ScopeClosedError
 from vibedash.decision_cases import (
     DecisionCaseCapacityError,
     DecisionCaseConflictError,
@@ -210,6 +211,26 @@ class DecisionCaseStoreTests(unittest.TestCase):
         self.assertEqual(self.store.purge_terminal(30), 1)
         self.assertIsNone(self.store.get(terminal["id"]))
         self.assertIsNotNone(self.store.get(active["id"]))
+
+    def test_fenced_scope_rejects_new_cases_and_deleted_case_updates_fail(self):
+        jobs = AnalysisJobStore(self.database_path)
+        job = jobs.create(self.scope_id, {})
+        jobs.fail(job["id"])
+        decision_case = self.create_case(job_id=job["id"])
+
+        result = jobs.erase_scope_if_idle(self.scope_id)
+
+        self.assertEqual(result["jobs"], 1)
+        self.assertEqual(result["decision_cases"], 1)
+        with self.assertRaises(ScopeClosedError):
+            self.create_case(job_id=uuid.uuid4().hex)
+        with self.assertRaises(ScopeClosedError):
+            self.store.update_outcome(
+                decision_case["id"],
+                self.scope_id,
+                status="validated",
+                actual_outcome="No longer available.",
+            )
 
 
 if __name__ == "__main__":

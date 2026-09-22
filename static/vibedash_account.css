@@ -8,6 +8,8 @@
     --border: rgba(216, 245, 237, .16);
     --accent: #72e0b6;
     --danger: #ffb3ab;
+    --danger-border: rgba(255, 130, 120, .5);
+    --danger-surface: rgba(103, 35, 39, .34);
 }
 
 * { box-sizing: border-box; }
@@ -60,6 +62,19 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .export-form .button { margin-top: 10px; }
 .button-secondary { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
 .button-secondary:hover, .button-secondary:focus-visible { background: rgba(114, 224, 182, .1); }
+.danger-zone { background: var(--danger-surface); border: 1px solid var(--danger-border); border-radius: 12px; margin-top: 34px; padding: 22px; }
+.danger-eyebrow { color: var(--danger); margin-bottom: 6px; }
+.danger-zone h2 { font-size: 20px; margin: 0 0 8px; }
+.danger-lead { margin: 0 0 18px; }
+.danger-notice { background: rgba(13, 21, 25, .42); border: 1px solid rgba(255, 179, 171, .22); border-radius: 9px; color: var(--muted); font-size: 14px; padding: 13px 16px; }
+.danger-notice h3 { color: var(--text); font-size: 15px; margin: 0 0 8px; }
+.danger-notice ul { margin: 0; padding-left: 20px; }
+.danger-notice li + li { margin-top: 7px; }
+.danger-zone code { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; }
+.delete-form { margin-top: 22px; }
+.delete-form .button { margin-top: 22px; }
+.button-danger { background: var(--danger); color: #35110f; }
+.button-danger:hover, .button-danger:focus-visible { filter: brightness(1.08); }
 .disclosure { border-top: 1px solid var(--border); color: var(--muted); font-size: 14px; margin-top: 34px; padding-top: 24px; }
 .disclosure h2 { color: var(--text); font-size: 16px; margin: 0 0 8px; }
 .disclosure p { margin: 7px 0; }

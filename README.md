@@ -108,6 +108,18 @@ Free-host storage is ephemeral: account records and account-owned history may
 disappear after a restart or redeploy, so keep independent copies of important
 results.
 
+The account page also provides a destructive deletion form. It requires the
+current password, the account CSRF token, and an exact `DELETE` confirmation.
+Deletion is refused while the account has queued or running jobs; retry after
+those jobs finish. An eligible request purges the account-owned job and case
+history, opt-in pilot measurements, and server artifacts that can be safely
+identified with the account scope. It does not delete classic analysis or
+monitoring data, local copies or downloads, or historical offline backups.
+Account-store, job-store, and filesystem cleanup are separate boundaries, so
+this is not a cross-store atomic guarantee; unidentifiable orphan files may
+remain until normal retention cleanup. Free-host ephemerality can remove state
+earlier than either workflow.
+
 The workspace includes a **Weekly SaaS review** guide and prompt preset. Each run
 offers an unchecked, optional usage-measurement checkbox. Consenting background
 analyses record bounded lifecycle milestones and can submit fixed-choice feedback;
@@ -321,6 +333,7 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 - Preserve `FLASK_SECRET_KEY`: it signs the session and derives account scopes. Rotating it requires sign-in again and makes prior account-owned history unavailable under the new scope.
 - Measured outcomes are user-entered observations. They support learning and accountability but do not establish that a decision caused the result.
 - Temporary-artifact cleanup is request-triggered, so it is not a wall-clock deletion SLA; strict retention guarantees require a scheduler or storage-provider lifecycle policy.
+- Account deletion is scoped to account-owned state and identifiable server artifacts; it does not erase user-held copies or historical offline backups, and it does not promise cross-store atomicity or complete removal of unidentifiable orphan files.
 - Predictive models are fast diagnostic baselines, not automatically deployable production models.
 - Statistical findings are observational and must not be interpreted as causal conclusions.
 - External alert delivery, managed scheduling, access-control roles, and production telemetry are not yet implemented.

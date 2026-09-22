@@ -1,6 +1,7 @@
 import os
 import unittest
 import uuid
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -107,6 +108,53 @@ class VibeDashSessionStorageTests(unittest.TestCase):
                 "private",
             )
 
+    def test_scoped_save_does_not_follow_replaced_sessions_directory_symlink(self):
+        session_id = str(uuid.uuid4())
+        owner = "a" * 32
+
+        with TemporaryDirectory() as state_directory:
+            state_path = Path(state_directory)
+            real_sessions = state_path / "real-sessions"
+            real_sessions.mkdir()
+            sessions_link = state_path / "sessions"
+            sessions_link.symlink_to(real_sessions, target_is_directory=True)
+
+            self.assertFalse(
+                save_session_data(
+                    session_id,
+                    {"dashboard": "private"},
+                    sessions_link,
+                    owner_id=owner,
+                )
+            )
+            self.assertEqual(list(real_sessions.iterdir()), [])
+            self.assertTrue(sessions_link.is_symlink())
+
+    def test_scoped_load_does_not_follow_final_symlink_after_check(self):
+        """A swapped session link must not be read outside the state dir."""
+        session_id = str(uuid.uuid4())
+        owner = "a" * 32
+
+        with TemporaryDirectory() as state_directory:
+            state_path = Path(state_directory)
+            outside = state_path / "outside.json"
+            outside.write_text(
+                '{"dashboard": "private", "analysis_scope_id": "' + owner + '"}',
+                encoding="utf-8",
+            )
+            session_path = state_path / f"{session_id}.json"
+            session_path.symlink_to(outside)
+
+            # Simulate an attacker winning the check/open replacement window
+            # in the old pathname-based implementation. The descriptor-based
+            # reader must still reject the link itself.
+            with patch.object(Path, "is_symlink", return_value=False), patch.object(
+                Path, "is_file", return_value=True
+            ):
+                self.assertIsNone(
+                    load_session_data(session_id, state_directory, owner_id=owner)
+                )
+
     def test_runtime_state_directory_is_used_for_session_round_trip(self):
         session_id = str(uuid.uuid4())
         owner = "a" * 32
@@ -167,6 +215,44 @@ class VibeDashSessionStorageTests(unittest.TestCase):
                 Path(state_directory) / "exports" / "vibedash",
             )
             self.assertEqual(export_path.read_text(), "<h1>Dashboard</h1>")
+
+    def test_export_replace_does_not_follow_existing_destination_symlink(self):
+        session_id = str(uuid.uuid4())
+        fixed_now = datetime(2026, 9, 22, 1, 2, 3)
+
+        with TemporaryDirectory() as state_directory:
+            exports_dir = Path(state_directory) / "exports"
+            exports_dir.mkdir()
+            destination = exports_dir / (
+                f"vibedash_export_{session_id}_20260922_010203.html"
+            )
+            outside = Path(state_directory) / "outside.html"
+            outside.write_text("must remain", encoding="utf-8")
+            destination.symlink_to(outside)
+
+            with patch("vibedash.exporter.datetime") as mocked_datetime:
+                mocked_datetime.now.return_value = fixed_now
+                saved = Path(save_export("private", session_id, exports_dir))
+
+            self.assertEqual(saved, destination)
+            self.assertEqual(saved.read_text(encoding="utf-8"), "private")
+            self.assertEqual(outside.read_text(encoding="utf-8"), "must remain")
+
+    def test_export_does_not_follow_replaced_export_directory_symlink(self):
+        session_id = str(uuid.uuid4())
+
+        with TemporaryDirectory() as state_directory:
+            state_path = Path(state_directory)
+            real_exports = state_path / "real-exports"
+            real_exports.mkdir()
+            exports_link = state_path / "exports"
+            exports_link.symlink_to(real_exports, target_is_directory=True)
+
+            with self.assertRaises(OSError):
+                save_export("private", session_id, exports_link)
+
+            self.assertEqual(list(real_exports.iterdir()), [])
+            self.assertTrue(exports_link.is_symlink())
 
     def test_cleanup_removes_only_expired_vibedash_artifacts(self):
         now = 1_800_000_000.0
@@ -252,6 +338,30 @@ class VibeDashSessionStorageTests(unittest.TestCase):
             self.assertEqual(result["removed_uploads"], 0)
             self.assertTrue(target.exists())
             self.assertTrue(symlink.is_symlink())
+
+    def test_cleanup_does_not_follow_an_artifact_directory_symlink(self):
+        with TemporaryDirectory() as state_directory:
+            state_path = Path(state_directory)
+            uploads_dir = state_path / "uploads"
+            outside_dir = state_path / "outside"
+            outside_dir.mkdir()
+            outside = outside_dir / f"vibedash-{'d' * 32}.csv"
+            outside.write_text("must remain", encoding="utf-8")
+            os.utime(outside, (1_700_000_000.0, 1_700_000_000.0))
+            uploads_dir.symlink_to(outside_dir, target_is_directory=True)
+
+            result = cleanup_expired_artifacts(
+                uploads_dir,
+                24,
+                sessions_dir=state_path / "sessions",
+                exports_dir=state_path / "exports",
+                now=1_800_000_000.0,
+            )
+
+            self.assertEqual(result["removed_uploads"], 0)
+            self.assertGreaterEqual(result["errors"], 1)
+            self.assertTrue(outside.exists())
+            self.assertTrue(uploads_dir.is_symlink())
 
 
 if __name__ == "__main__":

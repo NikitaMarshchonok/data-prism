@@ -59,7 +59,7 @@ not a claim about product maturity or production durability.
 | Opt-in pilot measurement with stated limits | Implemented locally | PR24 tests and measurement contract |
 | Release candidate passes CI and production acceptance | Verified for PR24 | Latest merged PR24 revision; backup milestone remains pending |
 | Durable state and tested backup/restore | Pending | Requires configured durable storage and real recovery rehearsal |
-| Recoverable identity and data-access/deletion lifecycle | Pending | Account access and recovery; browser scope is not sufficient |
+| Recoverable identity and data-access/deletion lifecycle | Partially implemented locally | Account deletion requires current password, exact confirmation, and an idle account scope; backup erasure, recovery, and deployed acceptance remain pending |
 | Observed real-user usefulness and repeat use | Pending | 5–10 relevant pilots, two reporting cycles, documented findings |
 | Release operations and user-facing commitments reviewed | Pending | Security/privacy review, cost limits, support, incident handling, onboarding acceptance |
 

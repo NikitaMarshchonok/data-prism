@@ -70,6 +70,31 @@
                 </form>
             </section>
 
+            <section class="danger-zone" aria-labelledby="account-delete-title">
+                <p class="eyebrow danger-eyebrow">Danger zone</p>
+                <h2 id="account-delete-title">Delete pilot account</h2>
+                <p class="danger-lead">This is permanent for the account record. To continue, enter your current password and type <code>DELETE</code> exactly.</p>
+                <div class="danger-notice" role="note">
+                    <h3>What to expect</h3>
+                    <ul>
+                        <li>Deletion is blocked while this account has queued or running jobs. Wait for them to finish, then retry.</li>
+                        <li>Account-owned jobs, decision cases, opt-in pilot measurements, and server artifacts that can be safely identified as this account's are purged.</li>
+                        <li>Classic analysis and monitoring data are not account-owned by this action.</li>
+                        <li>Local copies and downloads, plus historical offline backups, are not erased. Free-host storage may disappear earlier after a restart or redeploy.</li>
+                        <li>Deletion is not cross-store atomic; unidentifiable orphan files may remain until normal retention cleanup.</li>
+                    </ul>
+                </div>
+                <form method="post" action="{{ url_for('vibedash.account_delete') }}" class="delete-form">
+                    <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                    <label for="delete-current-password">Current password</label>
+                    <input id="delete-current-password" name="current_password" type="password" autocomplete="current-password" required>
+                    <label for="delete-confirmation">Type DELETE to confirm</label>
+                    <input id="delete-confirmation" name="delete_confirmation" type="text" value="" autocomplete="off" autocapitalize="characters" spellcheck="false" pattern="DELETE" title="Type DELETE exactly." required aria-describedby="delete-confirmation-help">
+                    <p id="delete-confirmation-help" class="form-help">Enter the uppercase word <code>DELETE</code>. This browser check does not replace server-side validation.</p>
+                    <button type="submit" class="button button-danger">Delete account permanently</button>
+                </form>
+            </section>
+
             <aside class="disclosure" aria-labelledby="pilot-disclosure-title">
                 <h2 id="pilot-disclosure-title">Pilot account notes</h2>
                 <p>There is no password recovery or email verification in this pilot. Keep your password safe; support cannot reset it.</p>

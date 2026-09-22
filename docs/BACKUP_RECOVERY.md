@@ -121,8 +121,12 @@ or restore. Parent directories must be operator-controlled, not shared scratch s
    must not be used to extend the life of expired uploads or measurements.
 6. Apply any deletion/withdrawal requests made **after** the snapshot before
    reopening access. An older backup can otherwise reintroduce removed data.
-   This tool has no external deletion ledger and does not erase older backups
-   when a user deletes pilot measurement.
+   This includes pilot-account deletion: the restore operator must replay the
+   account deletion against the restored state. This tool has no external
+   deletion ledger and does not erase older backups when a user deletes pilot
+   measurement or a pilot account. Historical offline backups therefore remain
+   outside the account deletion workflow until the operator's backup-retention
+   procedure removes them.
 7. Record the snapshot age (potential lost work), measured recovery duration,
    revision, verification results, and responsible operator. Resume traffic only
    after acceptance; on failure, return to the intact original state/configuration.
@@ -151,6 +155,10 @@ a rehearsal of your real Render disk, credentials, or backup infrastructure.
   Avoid backups inside a public web directory or repository. Conventional
   `backups/`, `runtime-state/`, and `runtime-restored*/` directories are excluded
   from Git and Docker context, but that is not a general data-loss-prevention rule.
+- The in-app account deletion flow does not erase local downloads/copies or
+  historical snapshots. Keep a documented process for applying deletion
+  requests to retained backups; free-host restarts and redeploys may remove
+  live state before that process runs.
 - A persistent disk protects state only under its configured mount path. Render
   documents [disk persistence and constraints](https://render.com/docs/disks).
   It does not turn a snapshot on the same disk into an off-host backup or provide

@@ -58,6 +58,20 @@ download is protected by the account CSRF token and private/no-store response
 headers. Export size or validation failures are reported generically, without
 logging account-owned fields.
 
+The account settings page also exposes `POST /vibedash/account/delete`. A
+deletion request requires the account CSRF token, current password, and an
+exactly typed `DELETE`. The route refuses to proceed when the account scope has
+queued or running jobs; retry after those jobs complete. When the scope is
+idle, the local implementation removes the account-owned jobs, decision cases,
+opt-in pilot measurements, and safely identifiable scoped VibeDash artifacts.
+Classic analysis and monitoring data are outside this account-owned scope.
+
+Deletion spans an account store, an analysis-job store, and filesystem cleanup,
+so it is not a cross-store atomic operation. Files with unidentifiable
+ownership are left for normal retention cleanup. Local copies/downloads and
+historical offline backups are not erased by the request, and a free-host
+restart or redeploy can remove state earlier than the application workflow.
+
 For single-instance persistent monitoring, upgrade to a paid service and attach a disk at:
 
 ```text
