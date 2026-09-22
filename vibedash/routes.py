@@ -2065,6 +2065,8 @@ if vibedash_bp:
             saved = record_feedback(
                 current_app.config['VIBEDASH_JOB_STORE_PATH'], job_id,
                 request.form.get('usefulness'), request.form.get('blocker'),
+                request.form.get('perceived_time_saved'),
+                request.form.get('next_cycle_intent'),
             )
             message = (
                 'Thank you. Your feedback was saved.' if saved else
@@ -2072,7 +2074,7 @@ if vibedash_bp:
             )
             flash(message, 'info')
         except ValueError:
-            flash('Please select a usefulness rating and a listed blocker.', 'error')
+            flash('Please select one option in every feedback field.', 'error')
         return redirect(url_for('vibedash.analysis_job_result', job_id=job_id), code=303)
 
 

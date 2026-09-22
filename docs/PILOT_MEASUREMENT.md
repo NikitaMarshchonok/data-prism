@@ -17,9 +17,11 @@ target, and follow-up reduce the work of deciding what to investigate.
    and can explain one finding using its evidence, including its limitations.
 4. Ask them to select a priority and commit to a next action, owner, success
    metric, target, and review date. Record assistance and time separately.
-5. Offer the optional usefulness/blocker form. At the next reporting cycle, ask
-   what they actually used and what outcome they observed. Do not treat a demo
-   run or a compliment as adoption.
+5. Offer the optional fixed-choice feedback form: usefulness, primary blocker,
+   estimated time saved, and intent to use the workflow in the next review
+   cycle. At that next cycle, ask what they actually used and what outcome they
+   observed. A self-reported estimate or intention is not verified savings,
+   repeat use, or adoption.
 
 Recruit 5–10 relevant participants through a separate, consented process. Do not
 put interview transcripts, contact information, customer CSVs, or private notes
@@ -41,7 +43,8 @@ service and no public metrics/admin endpoint.
 - the server-selected source cohort (`demo` or `upload`);
 - UTC times for acceptance, start, completion/failure, first decision, and first
   recorded outcome (`validated` or `invalidated`, not cancellation);
-- optional fixed-choice usefulness and blocker values.
+- optional fixed-choice usefulness, blocker, perceived-time-saved, and
+  next-cycle-intent values.
 
 It contains no dataset rows, prompts, filenames, IP addresses, owner names, or
 decision text. This is pseudonymization, **not anonymization**: the operational
@@ -53,6 +56,11 @@ change. Polling, refreshing, multiple cases for one analysis, and repeated edits
 do not increment them. Feedback is replaced, not appended. An outcome timestamp
 means an outcome was recorded at least once; reopening a case does not erase
 that event. It does not represent the latest case state or causal effectiveness.
+The time-saved ranges are subjective estimates. Next-cycle intent is stated
+intent, not observed return behavior or an adoption commitment. Databases created
+before these two fields remain readable and are migrated without rewriting prior
+responses; the report identifies those legacy responses instead of interpreting
+missing values as negative answers.
 
 Measurement records expire 30 days after analysis acceptance; subsequent
 application activity removes them. This is not a timer-based deletion SLA. A
@@ -109,7 +117,14 @@ acceptance time, not the time of the later decision or outcome.
 | `median_seconds_to_first_decision` | Acceptance to first case, among analyses with a case |
 | `browser_scopes_with_repeat_completed_analysis` | Guest-browser or pilot-account scopes with ≥2 completed runs in the cohort (the stable field name is retained for report compatibility) |
 | `browser_scopes_active_on_multiple_utc_dates` | Guest-browser or pilot-account scopes with completed runs accepted on ≥2 UTC dates (the stable field name is retained for report compatibility) |
+| `feedback_eligible_analyses` | Completed opted-in analyses that could provide feedback; denominator for feedback rates |
 | `feedback_responses` | Completed analyses with one current response |
+| `feedback_response_rate_among_completed` | Responses / completed opted-in analyses |
+| `value_feedback_responses` | Responses containing both a perceived-time-saved range and next-cycle intent |
+| `value_feedback_response_rate_among_completed` | Complete value responses / completed opted-in analyses |
+| `legacy_feedback_responses_without_value_signals` | Earlier responses that lack one or both additive value fields; these are not counted as zero time saved or no intent |
+| `perceived_time_saved` | Counts by fixed self-reported time range, among complete value responses |
+| `next_cycle_intent` | Counts by fixed stated-intent choice, among complete value responses |
 
 Ratios have range 0–1; zero denominator yields `null`, not a failure score.
 Always show denominators. Consent selection, cookie clearing, recent unfinished
@@ -118,11 +133,12 @@ is neither a person nor a company. An uploaded synthetic CSV is still in the
 upload cohort, so operators must keep their own test uploads out of real-pilot
 results.
 
-Review-date adherence, actual time saved versus the old workflow, measurement
-quality of outcome notes, repeat use by a real person, and willingness to pay
-remain **interview/manual follow-up measures**, not automatically measured by
-this table. Existing Decision Brief priorities are heuristic; the prompt does not
-guarantee a tailored business recommendation.
+Review-date adherence, objectively measured time saved versus the old workflow,
+measurement quality of outcome notes, observed repeat use by a real person, and
+willingness to adopt or pay remain **interview/manual follow-up measures**, not
+automatically measured by this table. The new fixed-choice fields record only an
+estimate and intention. Existing Decision Brief priorities are heuristic; the
+prompt does not guarantee a tailored business recommendation.
 
 ## Make a decision after two reporting cycles
 

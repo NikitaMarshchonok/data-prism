@@ -138,7 +138,7 @@
             <div class="decision-capture-copy">
                 <small>Optional pilot feedback</small>
                 <h2 id="pilot-feedback-heading">Did this help you choose a next step?</h2>
-                <p>One response per analysis; submitting again updates it. This is your assessment, not a verified business result.</p>
+                <p>One response per analysis; submitting again updates it. These are your estimates and intentions, not verified savings or observed adoption.</p>
             </div>
             <form class="decision-form" method="post" action="{{ url_for('vibedash.pilot_feedback', job_id=analysis_job_id) }}">
                 <input type="hidden" name="csrf_token" value="{{ decision_csrf_token }}">
@@ -158,6 +158,24 @@
                         <option value="missing_context">Missing business context</option>
                         <option value="data_quality">Data quality</option>
                         <option value="missing_feature">Missing capability</option>
+                    </select>
+                </label>
+                <label>Estimated time saved vs. your usual review
+                    <select name="perceived_time_saved" required>
+                        <option value="">Choose an estimate</option>
+                        <option value="none">No time saved</option>
+                        <option value="under_15_minutes">Under 15 minutes</option>
+                        <option value="15_to_30_minutes">15–30 minutes</option>
+                        <option value="30_to_60_minutes">30–60 minutes</option>
+                        <option value="over_60_minutes">More than 60 minutes</option>
+                    </select>
+                </label>
+                <label>Would you use this in your next review cycle?
+                    <select name="next_cycle_intent" required>
+                        <option value="">Choose an intention</option>
+                        <option value="yes">Yes</option>
+                        <option value="maybe">Maybe</option>
+                        <option value="no">No</option>
                     </select>
                 </label>
                 <button class="button button-secondary form-wide" type="submit">Save feedback</button>
