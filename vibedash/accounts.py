@@ -12,6 +12,7 @@ import hmac
 import re
 import secrets
 import sqlite3
+import threading
 import time
 import unicodedata
 from contextlib import contextmanager
@@ -209,6 +210,14 @@ _THROTTLE_SQL = _sql_norm(
 class AccountStore:
     """Persist accounts and bounded login throttling in one SQLite database."""
 
+    # Account deletion spans this store and the analysis/artifact stores.  A
+    # process-wide striped lock prevents a password rotation in another
+    # request from landing between deletion's credential check and its final
+    # identity removal.  The fixed stripes avoid retaining one lock per
+    # account forever; the SQLite write transaction remains the authority
+    # across separate worker processes.
+    _DELETION_LOCKS = tuple(threading.RLock() for _ in range(64))
+
     def __init__(
         self,
         database_path: str | Path,
@@ -240,6 +249,16 @@ class AccountStore:
         self.busy_timeout_ms = busy_timeout_ms
         self._dummy_hash = generate_password_hash(secrets.token_urlsafe(24))
         self._initialize()
+
+    @classmethod
+    @contextmanager
+    def deletion_lock(cls, account_id: str) -> Iterator[None]:
+        """Serialize deletion with password mutations for one account."""
+        if not cls._valid_stored_id(account_id):
+            raise ValueError("Invalid account identifier.")
+        lock = cls._DELETION_LOCKS[hash(account_id) % len(cls._DELETION_LOCKS)]
+        with lock:
+            yield
 
     def close(self) -> None:
         if self._closed:
@@ -376,7 +395,7 @@ class AccountStore:
         if not self._valid_stored_id(account_id):
             return None
         now = _clock_seconds(self.clock)
-        with self._transaction() as connection:
+        with self._account_transaction(account_id) as connection:
             account = connection.execute(
                 "SELECT id, email, password_hash, created_at, last_login_at "
                 "FROM accounts WHERE id = ?",
@@ -423,6 +442,146 @@ class AccountStore:
             ).fetchone()
             account = self._public_account(refreshed)
             return self._attach_credential(account, account_id, new_hash, secret)
+
+    def verify_deletion_password(self, account_id: str, password: str) -> bool:
+        """Verify the current password for an account deletion.
+
+        This deliberately has the same generic failure and bounded password
+        checking behavior as password rotation: an invalid account, wrong or
+        malformed password, missing account, malformed stored hash, and an
+        active lockout all return ``False``.  Failed checks contribute to the
+        account's normal login throttle; a successful check clears stale,
+        non-locked failures.
+        """
+        if not self._valid_stored_id(account_id):
+            return False
+        now = _clock_seconds(self.clock)
+        with self._account_transaction(account_id) as connection:
+            account = connection.execute(
+                "SELECT id, email, password_hash, created_at, last_login_at "
+                "FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            password_hash = account["password_hash"] if account is not None else self._dummy_hash
+            email_key = self._throttle_key(account["email"]) if account is not None else None
+            throttle = (
+                connection.execute(
+                    "SELECT failure_count, window_started_at, locked_until "
+                    "FROM login_throttle WHERE email_key = ?",
+                    (email_key,),
+                ).fetchone()
+                if email_key is not None
+                else None
+            )
+            locked = throttle is not None and _safe_float(throttle["locked_until"]) > now
+            password_is_well_formed = self._valid_password_input(password)
+            password_candidate = password if password_is_well_formed else ""
+            password_ok = self._check_password(password_hash, password_candidate) and password_is_well_formed
+            if locked or not password_ok or account is None:
+                if not locked and email_key is not None:
+                    self._record_failure(connection, email_key, now, throttle)
+                return False
+            connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            return True
+
+    def delete_account(self, account_id: str, password: str) -> bool:
+        """Delete an account after verifying its current password atomically.
+
+        The account row and its hashed login-throttle key are removed in the
+        same ``BEGIN IMMEDIATE`` transaction that verifies the password.  A
+        password is required by the signature and there is no credential-only
+        or unauthenticated deletion path.
+        """
+        if not self._valid_stored_id(account_id):
+            return False
+        now = _clock_seconds(self.clock)
+        with self._account_transaction(account_id) as connection:
+            account = connection.execute(
+                "SELECT id, email, password_hash, created_at, last_login_at "
+                "FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            password_hash = account["password_hash"] if account is not None else self._dummy_hash
+            email_key = self._throttle_key(account["email"]) if account is not None else None
+            throttle = (
+                connection.execute(
+                    "SELECT failure_count, window_started_at, locked_until "
+                    "FROM login_throttle WHERE email_key = ?",
+                    (email_key,),
+                ).fetchone()
+                if email_key is not None
+                else None
+            )
+            locked = throttle is not None and _safe_float(throttle["locked_until"]) > now
+            password_is_well_formed = self._valid_password_input(password)
+            password_candidate = password if password_is_well_formed else ""
+            password_ok = self._check_password(password_hash, password_candidate) and password_is_well_formed
+            if locked or not password_ok or account is None:
+                if not locked and email_key is not None:
+                    self._record_failure(connection, email_key, now, throttle)
+                return False
+            result = connection.execute(
+                "DELETE FROM accounts WHERE id = ? AND password_hash = ?",
+                (account_id, password_hash),
+            )
+            if result.rowcount != 1:
+                return False
+            connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            return True
+
+    def delete_account_with_cleanup(
+        self,
+        account_id: str,
+        password: str,
+        cleanup: Callable[[], Any],
+    ) -> bool:
+        """Verify, run a retryable cleanup, and delete in one account txn.
+
+        The callback runs while this store's ``BEGIN IMMEDIATE`` transaction
+        is open.  A password rotation in another process therefore cannot
+        commit between verification and identity deletion; a callback error
+        rolls the account transaction back so the caller can retry.
+        """
+        if not self._valid_stored_id(account_id):
+            return False
+        if not callable(cleanup):
+            raise TypeError("cleanup must be callable.")
+        now = _clock_seconds(self.clock)
+        with self._account_transaction(account_id) as connection:
+            account = connection.execute(
+                "SELECT id, email, password_hash, created_at, last_login_at "
+                "FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            password_hash = account["password_hash"] if account is not None else self._dummy_hash
+            email_key = self._throttle_key(account["email"]) if account is not None else None
+            throttle = (
+                connection.execute(
+                    "SELECT failure_count, window_started_at, locked_until "
+                    "FROM login_throttle WHERE email_key = ?",
+                    (email_key,),
+                ).fetchone()
+                if email_key is not None
+                else None
+            )
+            locked = throttle is not None and _safe_float(throttle["locked_until"]) > now
+            password_is_well_formed = self._valid_password_input(password)
+            password_candidate = password if password_is_well_formed else ""
+            password_ok = self._check_password(password_hash, password_candidate) and password_is_well_formed
+            if locked or not password_ok or account is None:
+                if not locked and email_key is not None:
+                    self._record_failure(connection, email_key, now, throttle)
+                return False
+
+            cleanup()
+            result = connection.execute(
+                "DELETE FROM accounts WHERE id = ? AND password_hash = ?",
+                (account_id, password_hash),
+            )
+            if result.rowcount != 1:
+                return False
+            connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            return True
 
     def authenticate(
         self,
@@ -718,6 +877,13 @@ class AccountStore:
                 except BaseException:
                     connection.rollback()
                     raise
+
+    @contextmanager
+    def _account_transaction(self, account_id: str) -> Iterator[sqlite3.Connection]:
+        """Serialize account credential mutations for one account."""
+        with self.deletion_lock(account_id):
+            with self._transaction() as connection:
+                yield connection
 
     def _initialize(self) -> None:
         try:

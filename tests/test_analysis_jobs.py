@@ -3,6 +3,7 @@ import threading
 import time
 import unittest
 import uuid
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -13,7 +14,10 @@ from vibedash.analysis_jobs import (
     AnalysisJobDispatcher,
     AnalysisJobStore,
     MAX_HISTORY_JOBS,
+    ScopeClosedError,
+    ScopeHasActiveJobsError,
 )
+from vibedash.decision_cases import DecisionCaseStore
 
 
 class AnalysisJobStoreTests(unittest.TestCase):
@@ -129,6 +133,203 @@ class AnalysisJobStoreTests(unittest.TestCase):
                 {},
                 max_active_per_scope=10,
                 max_active_total=1,
+            )
+
+    def test_scope_erase_rejects_active_jobs_without_mutation(self):
+        job = self.store.create(self.scope_id, {})
+
+        with self.assertRaises(ScopeHasActiveJobsError):
+            self.store.erase_scope_if_idle(self.scope_id)
+
+        self.assertIsNotNone(self.store.get(job["id"], self.scope_id))
+        with sqlite3.connect(self.database_path) as connection:
+            self.assertIsNone(
+                connection.execute(
+                    "SELECT 1 FROM deleted_scopes WHERE scope_id = ?",
+                    (self.scope_id,),
+                ).fetchone()
+            )
+
+    def test_scope_erase_rolls_back_callback_failure_then_is_retryable(self):
+        pilot_token = "a" * 64
+        job = self.store.create(
+            self.scope_id,
+            {"stored_filename": f"vibedash-{'a' * 32}.csv"},
+            pilot_scope_token=pilot_token,
+        )
+        self.store.fail(job["id"])
+        calls = []
+
+        def fail_cleanup(jobs):
+            calls.append(list(jobs))
+            raise RuntimeError("cleanup failed")
+
+        with self.assertRaisesRegex(RuntimeError, "cleanup failed"):
+            self.store.erase_scope_if_idle(
+                self.scope_id,
+                pilot_token,
+                fail_cleanup,
+            )
+        self.assertIsNotNone(self.store.get(job["id"], self.scope_id))
+
+        result = self.store.erase_scope_if_idle(
+            self.scope_id,
+            pilot_token,
+            lambda jobs: calls.append(list(jobs)),
+        )
+        self.assertEqual(result, {"jobs": 1, "decision_cases": 0, "pilot_analyses": 1})
+        self.assertEqual([item["id"] for item in calls[-1]], [job["id"]])
+        with self.assertRaises(ScopeClosedError):
+            self.store.create(self.scope_id, {})
+
+        # A fenced scope can safely be retried after partial file cleanup.
+        self.assertEqual(
+            self.store.erase_scope_if_idle(self.scope_id),
+            {"jobs": 0, "decision_cases": 0, "pilot_analyses": 0},
+        )
+
+    def test_scope_erase_preserves_other_scope_and_exposes_foreign_uploads(self):
+        other_scope = uuid.uuid4().hex
+        shared_name = f"vibedash-{'b' * 32}.csv"
+        owned = self.store.create(
+            self.scope_id,
+            {"stored_filename": shared_name},
+        )
+        other = self.store.create(
+            other_scope,
+            {
+                "analysis_kind": "period_comparison",
+                "baseline": {"stored_filename": shared_name},
+                "current": {"stored_filename": "../unsafe.csv"},
+            },
+        )
+        self.store.fail(owned["id"])
+        self.store.fail(other["id"])
+        received = []
+
+        result = self.store.erase_scope_if_idle(
+            self.scope_id,
+            artifact_cleanup=lambda jobs: received.append(jobs),
+        )
+
+        self.assertEqual(result["jobs"], 1)
+        self.assertEqual([job["id"] for job in received[0]], [owned["id"]])
+        self.assertEqual(received[0].foreign_scope_upload_filenames, {shared_name})
+        self.assertFalse(received[0].foreign_scope_payloads_unknown)
+        self.assertEqual(received[0].foreign_scope_session_ids, frozenset())
+        self.assertIsNotNone(self.store.get(other["id"], other_scope))
+
+    def test_scope_erase_exposes_foreign_session_references(self):
+        other_scope = uuid.uuid4().hex
+        foreign_session = str(uuid.uuid4())
+        foreign_job = self.store.create(other_scope, {})
+        self.store.claim(foreign_job["id"])
+        self.store.complete(foreign_job["id"], foreign_session)
+        received = []
+
+        self.store.erase_scope_if_idle(
+            self.scope_id,
+            artifact_cleanup=lambda jobs: received.append(jobs),
+        )
+        self.assertEqual(
+            received[0].foreign_scope_session_ids,
+            frozenset({foreign_session}),
+        )
+
+    def test_scope_erase_fails_closed_on_noncanonical_foreign_session_reference(self):
+        other_scope = uuid.uuid4().hex
+        foreign_job = self.store.create(other_scope, {})
+        self.store.claim(foreign_job["id"])
+        foreign_session = str(uuid.uuid4())
+        self.store.complete(foreign_job["id"], foreign_session)
+        with sqlite3.connect(self.database_path) as connection:
+            connection.execute(
+                "UPDATE analysis_jobs SET session_id = ? WHERE id = ?",
+                (foreign_session.upper(), foreign_job["id"]),
+            )
+        received = []
+
+        self.store.erase_scope_if_idle(
+            self.scope_id,
+            artifact_cleanup=lambda jobs: received.append(jobs),
+        )
+        self.assertTrue(received[0].foreign_scope_payloads_unknown)
+
+    def test_run_if_scope_open_guards_open_and_fenced_scopes(self):
+        self.assertEqual(
+            self.store.run_if_scope_open(self.scope_id, lambda _connection: "ok"),
+            "ok",
+        )
+        job = self.store.create(self.scope_id, {})
+        self.store.fail(job["id"])
+        self.store.erase_scope_if_idle(self.scope_id)
+
+        with self.assertRaises(ScopeClosedError):
+            self.store.run_if_scope_open(
+                self.scope_id,
+                lambda _connection: "not-written",
+            )
+
+    def test_scope_erase_purges_pilot_rows_without_sqlite_parameter_explosion(self):
+        """Long-lived scopes must not exceed SQLite's bound-variable limit."""
+        token = "a" * 64
+        rows = []
+        metrics = []
+        for index in range(1100):
+            job_id = f"{index:032x}"
+            rows.append(
+                (
+                    job_id,
+                    self.scope_id,
+                    "failed",
+                    json.dumps({}),
+                    f"2026-01-01T00:{index // 60:02d}:{index % 60:02d}.000+00:00",
+                    f"2026-01-01T00:{index // 60:02d}:{index % 60:02d}.000+00:00",
+                )
+            )
+            metrics.append(
+                (
+                    job_id,
+                    token,
+                    "upload",
+                    "2026-01-01T00:00:00.000+00:00",
+                )
+            )
+        with sqlite3.connect(self.database_path) as connection:
+            connection.executemany(
+                """
+                INSERT INTO analysis_jobs
+                    (id, scope_id, status, payload_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+            connection.executemany(
+                """
+                INSERT INTO pilot_analyses (job_id, scope_token, source, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                metrics,
+            )
+
+        result = self.store.erase_scope_if_idle(self.scope_id, token)
+
+        self.assertEqual(result["jobs"], 1100)
+        self.assertEqual(result["pilot_analyses"], 1100)
+        with sqlite3.connect(self.database_path) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM analysis_jobs WHERE scope_id = ?",
+                    (self.scope_id,),
+                ).fetchone()[0],
+                0,
+            )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM pilot_analyses WHERE scope_token = ?",
+                    (token,),
+                ).fetchone()[0],
+                0,
             )
 
     def test_manifest_and_recent_history_are_scoped(self):

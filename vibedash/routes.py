@@ -49,6 +49,8 @@ try:
         AnalysisJobStore,
         JOB_ID_PATTERN,
         MAX_HISTORY_JOBS,
+        ScopeClosedError,
+        ScopeHasActiveJobsError,
     )
     from .audit_manifest import (
         build_audit_manifest,
@@ -87,6 +89,10 @@ try:
         MAX_ACCOUNT_EXPORT_JOBS,
         build_account_export,
         serialize_account_export,
+    )
+    from .account_deletion_artifacts import (
+        AccountArtifactCleanupError,
+        purge_account_artifacts,
     )
     from . import vibedash_bp
 except ImportError:
@@ -634,11 +640,15 @@ if vibedash_bp:
                 'audit_manifest': manifest,
             }
             owner_scope = _session_persist_scope(scope_id)
-            if not save_session_data(
-                session_id,
-                session_data,
-                owner_id=owner_scope,
-            ):
+            persisted = _analysis_job_store().run_if_scope_open(
+                owner_scope,
+                lambda _connection: save_session_data(
+                    session_id,
+                    session_data,
+                    owner_id=owner_scope,
+                ),
+            )
+            if not persisted:
                 raise RuntimeError('The comparison session could not be persisted.')
             return {'session_id': session_id, 'manifest': manifest}
         finally:
@@ -760,11 +770,15 @@ if vibedash_bp:
             'audit_manifest': audit_manifest,
         }
         owner_scope = _session_persist_scope(scope_id)
-        if not save_session_data(
-            session_id,
-            session_data,
-            owner_id=owner_scope,
-        ):
+        persisted = _analysis_job_store().run_if_scope_open(
+            owner_scope,
+            lambda _connection: save_session_data(
+                session_id,
+                session_data,
+                owner_id=owner_scope,
+            ),
+        )
+        if not persisted:
             raise RuntimeError('VibeDash session could not be persisted.')
         return {
             'session_id': session_id,
@@ -1173,22 +1187,37 @@ if vibedash_bp:
             # the helper fall back to a guest scope while still exporting the
             # authenticated account envelope.
             scope_id = account_scope_id(account['id'], current_app.secret_key)
-            jobs, jobs_truncated = _analysis_job_store().list_for_scope_page(
+            # Serialize the read under the same scope write fence used by
+            # deletion.  This gives account export a clear linearization
+            # point: deletion waits for an already-started export, while a
+            # request arriving after the fence gets a closed-scope failure.
+            job_store = _analysis_job_store()
+            case_store = _decision_case_store()
+
+            def build_export(connection):
+                jobs, jobs_truncated = job_store.list_for_scope_page(
+                    scope_id,
+                    limit=MAX_ACCOUNT_EXPORT_JOBS,
+                    connection=connection,
+                )
+                cases, cases_truncated = case_store.list_for_scope_page(
+                    scope_id,
+                    limit=MAX_ACCOUNT_EXPORT_CASES,
+                    connection=connection,
+                )
+                document = build_account_export(
+                    account,
+                    jobs,
+                    jobs_truncated=jobs_truncated,
+                    decision_cases=cases,
+                    decisions_truncated=cases_truncated,
+                )
+                return serialize_account_export(document)
+
+            serialized = job_store.run_if_scope_open(
                 scope_id,
-                limit=MAX_ACCOUNT_EXPORT_JOBS,
+                build_export,
             )
-            cases, cases_truncated = _decision_case_store().list_for_scope_page(
-                scope_id,
-                limit=MAX_ACCOUNT_EXPORT_CASES,
-            )
-            document = build_account_export(
-                account,
-                jobs,
-                jobs_truncated=jobs_truncated,
-                decision_cases=cases,
-                decisions_truncated=cases_truncated,
-            )
-            serialized = serialize_account_export(document)
             if not isinstance(serialized, (str, bytes)):
                 raise TypeError('account export serializer returned an invalid value')
         except Exception as error:
@@ -1199,6 +1228,96 @@ if vibedash_bp:
         response = make_response(serialized)
         _set_account_export_headers(response, account_id=account['id'])
         return response
+
+
+    @vibedash_bp.route('/account/delete', methods=['POST'])
+    def account_delete():
+        """Delete the authenticated account and its safely owned VibeDash data."""
+        account = _current_account()
+        if account is None:
+            return redirect(url_for('vibedash.login'))
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return _render_account_settings(
+                account,
+                error='This form has expired. Please try again.',
+                status=400,
+            )
+        if request.form.get('delete_confirmation') != 'DELETE':
+            return _render_account_settings(
+                account,
+                error='Type DELETE exactly to confirm account deletion.',
+                status=400,
+            )
+
+        password = request.form.get('current_password', '')
+        store = _account_store()
+        if store is None:
+            return _render_account_settings(
+                account,
+                error='Account deletion is temporarily unavailable. Please try again.',
+                status=503,
+            )
+
+        try:
+            scope_id = account_scope_id(account['id'], current_app.secret_key)
+            pilot_scope_token = scope_token(scope_id, current_app.secret_key)
+
+            def cleanup_scope():
+                def cleanup_artifacts(jobs):
+                    # Unknown foreign payloads mean an upload cannot be proven
+                    # safe to remove.  Fail closed while the scope transaction is
+                    # still rollback-able, allowing a later retry.
+                    if getattr(jobs, 'foreign_scope_payloads_unknown', False):
+                        raise AccountArtifactCleanupError(
+                            'Account artifact cleanup could not establish artifact ownership.'
+                        )
+                    return purge_account_artifacts(
+                        scope_id,
+                        jobs,
+                        upload_dir=current_app.config['UPLOAD_FOLDER'],
+                        protected_upload_names=getattr(
+                            jobs, 'foreign_scope_upload_filenames', ()
+                        ),
+                    )
+
+                return _analysis_job_store().erase_scope_if_idle(
+                    scope_id,
+                    pilot_scope_token=pilot_scope_token,
+                    artifact_cleanup=cleanup_artifacts,
+                )
+
+            deleted = store.delete_account_with_cleanup(
+                account['id'],
+                password,
+                cleanup_scope,
+            )
+        except ScopeHasActiveJobsError:
+            return _render_account_settings(
+                account,
+                error='Account deletion is blocked while analysis jobs are still running. Please retry when they finish.',
+                status=409,
+            )
+        except Exception:
+            # Do not log this exception: cleanup failures can contain paths or
+            # persisted account-owned metadata.  The durable account transaction
+            # rolls back on callback failure, making this safely retryable.
+            return _render_account_settings(
+                account,
+                error='Account deletion is incomplete. Please try again.',
+                status=503,
+            )
+        if not deleted:
+            return _render_account_settings(
+                account,
+                error='The current password or account state is invalid.',
+                status=400,
+            )
+
+        _rotate_vibedash_identity()
+        _auth_csrf_token()
+        _decision_csrf_token()
+        flash('Your pilot account was deleted.', 'success')
+        return redirect(url_for('vibedash.index'))
 
 
     @vibedash_bp.route('/account', methods=['GET'])
@@ -1371,7 +1490,13 @@ if vibedash_bp:
     @vibedash_bp.route('/preview', methods=['POST'])
     def preview():
         """Предварительный просмотр дашборда"""
+        upload_path = None
         try:
+            # Resolve the request's owner before any upload or CPU work.  A
+            # copied account cookie can become invalid while this request is
+            # processing; falling back to a fresh guest scope at persistence
+            # time would otherwise bypass the deleted-scope fence.
+            request_scope = _analysis_scope_id()
             current_app.logger.info(
                 "VibeDash preview started",
                 extra={"event": "vibedash_preview_started"},
@@ -1428,7 +1553,7 @@ if vibedash_bp:
                 'filename': filename,
                 'prompt': prompt,
                 'demo_dataset': demo_dataset,
-            })
+            }, scope_id=request_scope)
             if analysis_result['truncated']:
                 max_rows = current_app.config['MAX_ROWS_PREVIEW']
                 flash(f'Data limited to {max_rows:,} rows for preview', 'info')
@@ -1461,7 +1586,8 @@ if vibedash_bp:
                                  manifest_url=None)
         
         except DatasetReadinessBlocked as error:
-            upload_path.unlink(missing_ok=True)
+            if upload_path is not None:
+                upload_path.unlink(missing_ok=True)
             current_app.logger.info(
                 "VibeDash preview blocked by dataset readiness",
                 extra={"event": "vibedash_readiness_blocked"},
@@ -1469,6 +1595,8 @@ if vibedash_bp:
             flash(error.report['summary'], 'error')
             return redirect(url_for('vibedash.index'))
         except Exception:
+            if upload_path is not None:
+                upload_path.unlink(missing_ok=True)
             current_app.logger.exception(
                 "VibeDash preview failed",
                 extra={"event": "vibedash_preview_failed"},
@@ -1491,6 +1619,11 @@ if vibedash_bp:
             return jsonify({'error': 'Analysis description is required.'}), 400
         if len(prompt) > 4000:
             return jsonify({'error': 'Analysis description is too long.'}), 400
+        # Capture ownership before creating the temporary input.  If account
+        # deletion commits while validation runs, the later durable insert
+        # must hit that scope's fence rather than silently becoming guest
+        # work after the account cookie is invalidated.
+        request_scope = _analysis_scope_id()
 
         demo_dataset = request.form.get('demo_dataset', '').strip()
         upload_directory = Path(current_app.config['UPLOAD_FOLDER'])
@@ -1551,7 +1684,7 @@ if vibedash_bp:
         try:
             store = _analysis_job_store()
             job = store.create(
-                _analysis_scope_id(),
+                request_scope,
                 {
                     'stored_filename': stored_filename,
                     'filename': filename,
@@ -1565,7 +1698,7 @@ if vibedash_bp:
                     'VIBEDASH_MAX_ACTIVE_JOBS'
                 ],
                 pilot_scope_token=(
-                    scope_token(_analysis_scope_id(), current_app.secret_key)
+                    scope_token(request_scope, current_app.secret_key)
                     if pilot_opt_in else None
                 ),
             )
@@ -1574,6 +1707,11 @@ if vibedash_bp:
             return jsonify({
                 'error': 'The analysis queue is busy. Please wait and try again.'
             }), 429
+        except ScopeClosedError:
+            upload_path.unlink(missing_ok=True)
+            return jsonify({
+                'error': 'This analysis scope is no longer available.'
+            }), 409
         except Exception:
             upload_path.unlink(missing_ok=True)
             current_app.logger.exception(
@@ -1582,11 +1720,26 @@ if vibedash_bp:
             )
             return jsonify({'error': 'The analysis job could not be created.'}), 500
 
-        analysis_job_dispatcher.submit(
-            current_app._get_current_object(),
-            job['id'],
-            _process_analysis_job,
-        )
+        try:
+            submitted = analysis_job_dispatcher.submit(
+                current_app._get_current_object(),
+                job['id'],
+                _process_analysis_job,
+            )
+            if not submitted:
+                raise RuntimeError('The analysis job was not scheduled.')
+        except Exception:
+            # A durable queued row with no worker would block account
+            # deletion forever because it remains an active job.  Transition
+            # it to a bounded terminal failure and remove its input before
+            # returning a generic route error.
+            current_app.logger.exception(
+                "VibeDash analysis dispatcher submission failed",
+                extra={"event": "vibedash_job_dispatch_failed"},
+            )
+            _analysis_job_store().fail(job['id'], 'dispatch_failed')
+            upload_path.unlink(missing_ok=True)
+            return jsonify({'error': 'The analysis job could not be queued.'}), 500
         current_app.logger.info(
             "VibeDash analysis job queued",
             extra={"event": "vibedash_job_queued"},
@@ -1612,6 +1765,10 @@ if vibedash_bp:
             and request.content_length > COMPARISON_MAX_REQUEST_BYTES
         ):
             return jsonify({'error': 'The comparison request exceeds the upload limit.'}), 413
+        # Keep the owner stable across upload parsing and job insertion.  A
+        # stale copied account cookie must not fall back to a new guest scope
+        # after account deletion has fenced the original scope.
+        request_scope = _analysis_scope_id()
         baseline_upload = request.files.get('baseline_file')
         current_upload = request.files.get('current_file')
         if (
@@ -1703,7 +1860,7 @@ if vibedash_bp:
 
             store = _analysis_job_store()
             job = store.create(
-                _analysis_scope_id(),
+                request_scope,
                 {
                     'analysis_kind': 'period_comparison',
                     'baseline': {
@@ -1727,6 +1884,10 @@ if vibedash_bp:
             return jsonify({
                 'error': 'The analysis queue is busy. Please wait and try again.'
             }), 429
+        except ScopeClosedError:
+            return jsonify({
+                'error': 'This analysis scope is no longer available.'
+            }), 409
         except (pd.errors.ParserError, UnicodeDecodeError, ValueError):
             current_app.logger.info(
                 'VibeDash comparison input rejected',
@@ -1746,9 +1907,11 @@ if vibedash_bp:
                 _cleanup_comparison_inputs(paths)
 
         try:
-            analysis_job_dispatcher.submit(
+            submitted = analysis_job_dispatcher.submit(
                 current_app._get_current_object(), job['id'], _process_analysis_job
             )
+            if not submitted:
+                raise RuntimeError('The analysis job was not scheduled.')
         except Exception:
             # A submission exception is a route-side failure: fail the durable
             # record and remove both temporary inputs before responding.
@@ -1967,6 +2130,8 @@ if vibedash_bp:
                     'VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'
                 ],
             )
+        except ScopeClosedError:
+            return jsonify({'error': 'This analysis scope is no longer available.'}), 409
         except DecisionCaseConflictError:
             existing = _decision_case_store().find_for_job_priority(
                 scope_id,
@@ -2018,6 +2183,8 @@ if vibedash_bp:
                 status=request.form.get('status', ''),
                 actual_outcome=request.form.get('actual_outcome', ''),
             )
+        except ScopeClosedError:
+            return jsonify({'error': 'This analysis scope is no longer available.'}), 409
         except ValueError as error:
             return jsonify({'error': str(error)}), 400
         if decision_case is None:
@@ -2132,8 +2299,13 @@ if vibedash_bp:
     def export(session_id):
         """Экспорт дашборда в single-file HTML"""
         try:
+            # Capture the request's scope before loading the retained result.
+            # The same scope is then fenced while the export file is written,
+            # so account deletion cannot commit between authorization and the
+            # write.
+            owner_scope = _session_persist_scope()
             # Загружаем данные сессии
-            session_data = _load_owned_session_data(session_id)
+            session_data = _load_owned_session_data(session_id, owner_scope)
             if not session_data:
                 flash('Session not found!', 'error')
                 return redirect(url_for('vibedash.index'))
@@ -2157,7 +2329,10 @@ if vibedash_bp:
             )
             
             # Сохраняем файл
-            filepath = save_export(single_file_html, session_id)
+            filepath = _analysis_job_store().run_if_scope_open(
+                owner_scope,
+                lambda _connection: save_export(single_file_html, session_id),
+            )
             
             # Отправляем файл пользователю
             return send_file(filepath, as_attachment=True, 

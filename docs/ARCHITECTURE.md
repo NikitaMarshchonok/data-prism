@@ -123,6 +123,27 @@ schema/session data, and global pilot metrics. Builder or serialization failures
 return a generic response and never log account-owned content. The route does
 not create a file or extend artifact retention.
 
+### Account deletion boundary
+
+The account settings page also submits `POST /vibedash/account/delete` with the
+account-authentication CSRF token, current password, and an exact `DELETE`
+confirmation. The route resolves the authenticated account and its deterministic
+analysis scope; it does not accept an account id or scope id from the request.
+Deletion is refused while that scope has queued or running jobs, so the user
+must retry after active work completes. Once idle, the local implementation
+fences the scope and purges the account record, account-owned jobs and decision
+cases, opt-in pilot measurements, and server artifacts whose ownership can be
+identified safely from persisted scope metadata.
+
+The account SQLite store, analysis-job SQLite store, and filesystem artifact
+cleanup are separate boundaries and therefore do not provide a cross-store
+atomic deletion guarantee. A cleanup failure is retryable; an artifact whose
+ownership cannot be established is deliberately left for normal retention
+cleanup rather than guessed. Classic analysis and monitoring state is not
+account-owned by this flow. Local copies/downloads and historical offline
+backups are outside the server's control and are not erased. Free-host
+ephemerality may remove any of this state earlier after a restart or redeploy.
+
 ### Two-period comparison boundary
 
 The VibeDash landing page's **Compare two periods** form accepts two CSV snapshots: a baseline and a current period. The route queues a guest-browser or pilot-account-scoped asynchronous job, and the worker loads both frames, runs readiness checks, and builds an aggregate-only `period-comparison-v1` result. The result combines schema changes and distribution drift with numeric current-minus-baseline mean deltas. Shared numeric metrics that have sufficient finite observations are tested with Welch's independent-samples t-test; each tested metric includes a 95% confidence interval and Hedges' g, and raw p-values are adjusted with Benjamini–Hochberg FDR. The comparison is observational and non-causal: it does not attribute a difference to an intervention, and seasonality, population-mix changes, confounding, or row dependence can account for observed changes.
@@ -215,10 +236,10 @@ deterministic account-scope derivation, so a secret-key rotation requires users
 to sign in again and makes prior account-owned job history unavailable under
 the new scope.
 
-Account settings are intentionally limited to password changes. There is no
-email verification, recovery channel, team access, or account deletion UI in
-this pilot. Free-host storage is ephemeral and account records, jobs, uploads,
-and history may disappear when the host restarts.
+Account settings remain intentionally narrow: password changes, bounded export,
+and scoped deletion. There is no email verification, recovery channel, or team
+access in this pilot. Free-host storage is ephemeral and account records, jobs,
+uploads, and history may disappear when the host restarts.
 
 This is an optional free-host pilot boundary, not enterprise identity,
 recovery, team access, or a durability guarantee. Guest analyses are not

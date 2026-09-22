@@ -272,6 +272,92 @@ class AccountStoreTests(unittest.TestCase):
         self.assertIsNotNone(self.store.change_password(account["id"], password, replacement))
         self.assertIsNone(self.store.throttle_state("throttled-change@example.com"))
 
+    def test_deletion_requires_current_password_and_removes_only_target_identity(self):
+        password = "a sufficiently long password"
+        target = self.store.register("delete-target@example.com", password)
+        other = self.store.register("delete-other@example.com", password)
+        credential = self.store.credential_token(target["id"], "flask-secret")
+
+        self.assertFalse(self.store.delete_account(target["id"], "wrong password"))
+        self.assertIsNotNone(self.store.get_account(target["id"]))
+        self.assertEqual(self.store.throttle_state(target["email"])["failure_count"], 1)
+        self.assertTrue(self.store.verify_deletion_password(target["id"], password))
+        self.assertIsNone(self.store.throttle_state(target["email"]))
+
+        self.assertFalse(self.store.delete_account(target["id"], "wrong password"))
+        self.assertTrue(self.store.delete_account(target["id"], password))
+        self.assertIsNone(self.store.get_account(target["id"]))
+        self.assertIsNotNone(self.store.get_account(other["id"]))
+        self.assertIsNone(self.store.credential_token(target["id"], "flask-secret"))
+        self.assertFalse(self.store.verify_credential_token(target["id"], credential, "flask-secret"))
+        self.assertIsNone(self.store.account_for_credential(target["id"], credential, "flask-secret"))
+        self.assertIsNone(self.store.throttle_state(target["email"]))
+
+    def test_deletion_reuses_lockout_and_malformed_hash_is_generic(self):
+        password = "a sufficiently long password"
+        account = self.store.register("delete-lockout@example.com", password)
+        for _ in range(self.store.max_failures):
+            self.assertFalse(self.store.verify_deletion_password(account["id"], "wrong password"))
+        self.assertFalse(self.store.verify_deletion_password(account["id"], password))
+        self.assertFalse(self.store.delete_account(account["id"], password))
+        self.assertIsNotNone(self.store.get_account(account["id"]))
+
+        self.clock.value += self.store.lockout_seconds + 1
+        self.assertTrue(self.store.verify_deletion_password(account["id"], password))
+
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                "UPDATE accounts SET password_hash = ? WHERE id = ?",
+                ("not-a-werkzeug-hash", account["id"]),
+            )
+        with patch("vibedash.accounts.check_password_hash", return_value=True) as check:
+            self.assertFalse(self.store.delete_account(account["id"], password))
+        check.assert_called_once_with(self.store._dummy_hash, password)
+        self.assertIsNotNone(self.store.get_account(account["id"]))
+
+    def test_deletion_and_password_rotation_serialize_on_current_hash(self):
+        password = "a sufficiently long password"
+        replacement = "a different long password"
+        account = self.store.register("delete-rotate-race@example.com", password)
+        delete_store = AccountStore(self.path)
+        rotate_store = AccountStore(self.path)
+        barrier = threading.Barrier(2)
+        outcomes = []
+        errors = []
+
+        def delete():
+            try:
+                barrier.wait()
+                outcomes.append(("delete", delete_store.delete_account(account["id"], password)))
+            except BaseException as error:  # pragma: no cover - diagnostic for thread failures
+                errors.append(error)
+
+        def rotate():
+            try:
+                barrier.wait()
+                outcomes.append(("rotate", rotate_store.change_password(account["id"], password, replacement)))
+            except BaseException as error:  # pragma: no cover - diagnostic for thread failures
+                errors.append(error)
+
+        threads = [threading.Thread(target=delete), threading.Thread(target=rotate)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        delete_store.close()
+        rotate_store.close()
+
+        self.assertEqual(errors, [])
+        self.assertEqual(len(outcomes), 2)
+        deleted = dict(outcomes)["delete"]
+        rotated = dict(outcomes)["rotate"]
+        self.assertEqual(deleted, rotated is None)
+        if deleted:
+            self.assertIsNone(self.store.get_account(account["id"]))
+        else:
+            self.assertIsNotNone(rotated)
+            self.assertIsNotNone(self.store.authenticate(account["email"], replacement))
+
     def test_change_password_success_clears_non_locked_failures(self):
         password = "a sufficiently long password"
         account = self.store.register("clear-change@example.com", password)
@@ -770,6 +856,9 @@ class AccountRouteIntegrationTests(unittest.TestCase):
         with patch('vibedash.routes._analysis_job_store') as job_store_factory, patch(
             'vibedash.routes._decision_case_store'
         ) as case_store_factory:
+            job_store_factory.return_value.run_if_scope_open.side_effect = (
+                lambda _scope, callback: callback(None)
+            )
             job_store_factory.return_value.list_for_scope_page.return_value = ([{
                 'id': 'job',
                 'payload': {'prompt': 'HTTP_PROMPT_SECRET', 'filename': 'HTTP_FILE_SECRET'},
@@ -798,10 +887,12 @@ class AccountRouteIntegrationTests(unittest.TestCase):
         job_store_factory.return_value.list_for_scope_page.assert_called_once_with(
             account_scope_id(account_id, web_app.app.secret_key),
             limit=account_export.MAX_ACCOUNT_EXPORT_JOBS,
+            connection=None,
         )
         case_store_factory.return_value.list_for_scope_page.assert_called_once_with(
             account_scope_id(account_id, web_app.app.secret_key),
             limit=account_export.MAX_ACCOUNT_EXPORT_CASES,
+            connection=None,
         )
 
     def test_account_export_builder_and_size_failures_are_generic_and_safe(self):
@@ -1117,6 +1208,214 @@ class AccountRouteIntegrationTests(unittest.TestCase):
                 mint.assert_not_called()
                 self.assertNotIn("vibedash_account_id", session)
                 self.assertNotIn("vibedash_account_credential", session)
+
+    def test_account_delete_requires_auth_csrf_confirmation_and_current_password(self):
+        guest = web_app.app.test_client()
+        self.assertEqual(
+            guest.post('/vibedash/account/delete').status_code,
+            302,
+        )
+
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'delete-http-validation@example.com').status_code, 302)
+        account_store = web_app.app.extensions['vibedash_account_store']
+        with client.session_transaction() as browser:
+            account_id = browser['vibedash_account_id']
+
+        self.assertEqual(
+            client.post(
+                '/vibedash/account/delete',
+                data={
+                    'current_password': self.PASSWORD,
+                    'delete_confirmation': 'DELETE',
+                },
+            ).status_code,
+            400,
+        )
+        token = self._csrf(client, '/vibedash/account')
+        invalid_confirmation = client.post(
+            '/vibedash/account/delete',
+            data={
+                'csrf_token': token,
+                'current_password': self.PASSWORD,
+                'delete_confirmation': 'delete',
+            },
+        )
+        self.assertEqual(invalid_confirmation.status_code, 400)
+        self.assertIn('Type DELETE exactly', invalid_confirmation.get_data(as_text=True))
+
+        token = self._csrf(client, '/vibedash/account')
+        with patch('vibedash.routes.purge_account_artifacts') as purge:
+            wrong_password = client.post(
+                '/vibedash/account/delete',
+                data={
+                    'csrf_token': token,
+                    'current_password': 'wrong current password',
+                    'delete_confirmation': 'DELETE',
+                },
+            )
+        self.assertEqual(wrong_password.status_code, 400)
+        self.assertIn('current password or account state is invalid', wrong_password.get_data(as_text=True))
+        purge.assert_not_called()
+        self.assertIsNotNone(account_store.get_account(account_id))
+
+    def test_account_delete_purges_only_owned_scope_and_invalidates_copied_cookie(self):
+        owner = web_app.app.test_client()
+        other = web_app.app.test_client()
+        self.assertEqual(self._register(owner, 'delete-http-owner@example.com').status_code, 302)
+        self.assertEqual(self._register(other, 'delete-http-other@example.com').status_code, 302)
+        with owner.session_transaction() as browser:
+            owner_id = browser['vibedash_account_id']
+        with other.session_transaction() as browser:
+            other_id = browser['vibedash_account_id']
+        owner_scope = account_scope_id(owner_id, web_app.app.secret_key)
+        other_scope = account_scope_id(other_id, web_app.app.secret_key)
+        store = AnalysisJobStore(self.job_path)
+        owner_job = store.create(owner_scope, {'stored_filename': 'vibedash-' + 'a' * 32 + '.csv'})
+        other_job = store.create(other_scope, {'stored_filename': 'vibedash-' + 'b' * 32 + '.csv'})
+        store.fail(owner_job['id'])
+        store.fail(other_job['id'])
+        copied_cookie = owner.get_cookie('session')
+        seen = {}
+
+        def fake_purge(scope_id, jobs, **kwargs):
+            seen['scope_id'] = scope_id
+            seen['jobs'] = list(jobs)
+            seen['protected'] = set(kwargs['protected_upload_names'])
+            return {'removed_sessions': 1, 'removed_uploads': 1, 'removed_exports': 1}
+
+        token = self._csrf(owner, '/vibedash/account')
+        with patch('vibedash.routes.purge_account_artifacts', side_effect=fake_purge):
+            response = owner.post(
+                '/vibedash/account/delete',
+                data={
+                    'csrf_token': token,
+                    'current_password': self.PASSWORD,
+                    'delete_confirmation': 'DELETE',
+                },
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.location, '/vibedash/')
+        self.assertEqual(seen['scope_id'], owner_scope)
+        self.assertEqual({item['id'] for item in seen['jobs']}, {owner_job['id']})
+        self.assertEqual(seen['protected'], {'vibedash-' + 'b' * 32 + '.csv'})
+        self.assertIsNone(store.get(owner_job['id']))
+        self.assertIsNotNone(store.get(other_job['id']))
+
+        stale = web_app.app.test_client()
+        stale.set_cookie('session', copied_cookie.value)
+        self.assertEqual(stale.get('/vibedash/account').status_code, 302)
+        self.assertIsNotNone(web_app.app.extensions['vibedash_account_store'].get_account(other_id))
+
+    def test_account_delete_blocks_active_jobs_without_purge(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'delete-http-active@example.com').status_code, 302)
+        with client.session_transaction() as browser:
+            account_id = browser['vibedash_account_id']
+        scope_id = account_scope_id(account_id, web_app.app.secret_key)
+        job = AnalysisJobStore(self.job_path).create(scope_id, {'prompt': 'active'})
+        token = self._csrf(client, '/vibedash/account')
+        with patch('vibedash.routes.purge_account_artifacts') as purge:
+            response = client.post(
+                '/vibedash/account/delete',
+                data={
+                    'csrf_token': token,
+                    'current_password': self.PASSWORD,
+                    'delete_confirmation': 'DELETE',
+                },
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertIn('blocked while analysis jobs', response.get_data(as_text=True))
+        purge.assert_not_called()
+        self.assertIsNotNone(web_app.app.extensions['vibedash_account_store'].get_account(account_id))
+        self.assertIsNotNone(AnalysisJobStore(self.job_path).get(job['id']))
+
+    def test_account_delete_artifact_failure_is_retryable_and_generic(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'delete-http-retry@example.com').status_code, 302)
+        with client.session_transaction() as browser:
+            account_id = browser['vibedash_account_id']
+        token = self._csrf(client, '/vibedash/account')
+        from vibedash.account_deletion_artifacts import AccountArtifactCleanupError
+
+        with patch(
+            'vibedash.routes.purge_account_artifacts',
+            side_effect=AccountArtifactCleanupError('private path marker'),
+        ):
+            failed = client.post(
+                '/vibedash/account/delete',
+                data={
+                    'csrf_token': token,
+                    'current_password': self.PASSWORD,
+                    'delete_confirmation': 'DELETE',
+                },
+            )
+        self.assertEqual(failed.status_code, 503)
+        self.assertIn('Account deletion is incomplete', failed.get_data(as_text=True))
+        self.assertNotIn('private path marker', failed.get_data(as_text=True))
+        self.assertIsNotNone(web_app.app.extensions['vibedash_account_store'].get_account(account_id))
+
+        token = self._csrf(client, '/vibedash/account')
+        with patch('vibedash.routes.purge_account_artifacts', return_value={}):
+            retried = client.post(
+                '/vibedash/account/delete',
+                data={
+                    'csrf_token': token,
+                    'current_password': self.PASSWORD,
+                    'delete_confirmation': 'DELETE',
+                },
+            )
+        self.assertEqual(retried.status_code, 302)
+        self.assertIsNone(web_app.app.extensions['vibedash_account_store'].get_account(account_id))
+
+    def test_fenced_scope_rejects_job_creation_and_cleans_upload(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'delete-http-fence@example.com').status_code, 302)
+        with client.session_transaction() as browser:
+            account_id = browser['vibedash_account_id']
+        scope_id = account_scope_id(account_id, web_app.app.secret_key)
+        AnalysisJobStore(self.job_path).erase_scope_if_idle(scope_id)
+        response = client.post(
+            '/vibedash/jobs',
+            data={'demo_dataset': 'saas_growth', 'prompt': 'fenced'},
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertNotIn('analysis job could not be created', response.get_data(as_text=True).lower())
+        self.assertEqual(list(Path(self.directory.name, 'uploads').glob('vibedash-*.csv')), [])
+
+    def test_job_request_captures_account_scope_before_late_validation(self):
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'delete-http-copied-job@example.com').status_code, 302)
+        with client.session_transaction() as browser:
+            account_id = browser['vibedash_account_id']
+        scope_id = account_scope_id(account_id, web_app.app.secret_key)
+        account_store = web_app.app.extensions['vibedash_account_store']
+
+        def validation_that_deletes_account(*_args, **_kwargs):
+            self.assertTrue(account_store.delete_account(account_id, self.PASSWORD))
+            AnalysisJobStore(self.job_path).erase_scope_if_idle(scope_id)
+            return object()
+
+        with patch('vibedash.routes._load_vibedash_csv', side_effect=validation_that_deletes_account), \
+             patch('vibedash.routes.DatasetReadinessEngine') as readiness:
+            readiness.return_value.assess.return_value = {
+                'analysis_allowed': True,
+                'summary': 'ok',
+            }
+            response = client.post(
+                '/vibedash/jobs',
+                data={'demo_dataset': 'saas_growth', 'prompt': 'late validation'},
+            )
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            AnalysisJobStore(self.job_path).list_for_scope(scope_id),
+            [],
+        )
+        self.assertEqual(
+            list(Path(self.directory.name, 'uploads').glob('vibedash-*.csv')),
+            [],
+        )
 
 
 if __name__ == "__main__":

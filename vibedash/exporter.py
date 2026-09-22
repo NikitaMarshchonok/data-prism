@@ -3,8 +3,9 @@
 """
 import os
 import json
+import errno
 import secrets
-import tempfile
+import stat
 import uuid
 from pathlib import Path
 import re
@@ -63,29 +64,58 @@ def _session_file(session_id: str, sessions_dir=None) -> Path:
 
 
 def _delete_expired_files(directory, pattern, cutoff_timestamp: float):
-    """Delete only recognized, regular files older than the cutoff."""
+    """Delete only recognized, regular files older than the cutoff.
+
+    Keep the directory open and use descriptor-relative operations throughout
+    the scan.  A pathname ``iterdir``/``unlink`` pair would follow a swapped
+    directory symlink and could remove a matching file outside runtime state.
+    """
     removed = 0
     errors = 0
     directory = Path(directory)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = None
     try:
-        candidates = list(directory.iterdir())
+        descriptor = os.open(directory, flags)
     except FileNotFoundError:
         return removed, errors
     except OSError:
         return removed, 1
-
-    for candidate in candidates:
-        if not pattern.fullmatch(candidate.name):
-            continue
+    try:
         try:
-            if candidate.is_symlink() or not candidate.is_file():
-                continue
-            if candidate.stat().st_mtime >= cutoff_timestamp:
-                continue
-            candidate.unlink()
-            removed += 1
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                return removed, 1
+            candidates = os.listdir(descriptor)
         except OSError:
-            errors += 1
+            return removed, 1
+
+        for name in candidates:
+            if not pattern.fullmatch(name):
+                continue
+            try:
+                candidate_stat = os.stat(
+                    name,
+                    dir_fd=descriptor,
+                    follow_symlinks=False,
+                )
+                if not stat.S_ISREG(candidate_stat.st_mode):
+                    continue
+                if candidate_stat.st_mtime >= cutoff_timestamp:
+                    continue
+                os.unlink(name, dir_fd=descriptor)
+                removed += 1
+            except FileNotFoundError:
+                # Another retention pass may have won the race.  The desired
+                # end state is already true, so this is not an error.
+                continue
+            except OSError:
+                errors += 1
+    finally:
+        os.close(descriptor)
     return removed, errors
 
 
@@ -196,9 +226,55 @@ def save_export(html_content: str, session_id: str, exports_dir=None) -> str:
     filename = f"vibedash_export_{normalized_session_id}_{timestamp}.html"
     filepath = export_directory / filename
 
-    # Сохраняем файл
-    with filepath.open('w', encoding='utf-8') as f:
-        f.write(html_content)
+    # Keep the final directory open and use descriptor-relative operations.
+    # Opening the predictable export pathname with ``w`` would follow a
+    # symlink planted there and could overwrite an arbitrary local file; using
+    # a path-based temporary file also allows the directory itself to be
+    # swapped between creation and replacement.
+    directory_flags = os.O_RDONLY
+    if hasattr(os, 'O_DIRECTORY'):
+        directory_flags |= os.O_DIRECTORY
+    if hasattr(os, 'O_NOFOLLOW'):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = None
+    temporary_name = None
+    temporary_fd = None
+    try:
+        directory_fd = os.open(export_directory, directory_flags)
+        if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+            raise OSError('Export storage is not a directory.')
+        temporary_name = f'.{filename}.{secrets.token_hex(16)}.tmp'
+        temporary_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, 'O_NOFOLLOW'):
+            temporary_flags |= os.O_NOFOLLOW
+        temporary_fd = os.open(
+            temporary_name,
+            temporary_flags,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(temporary_fd, 'w', encoding='utf-8') as handle:
+            temporary_fd = None
+            handle.write(html_content)
+        os.replace(
+            temporary_name,
+            filename,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary_name = None
+    except Exception:
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        if temporary_name is not None and directory_fd is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
 
     return str(filepath)
 
@@ -231,14 +307,27 @@ def load_session_data(
     if expected_owner is None:
         return None
 
-    # A session record must be a regular application-owned file.  In
-    # particular, do not follow a symlink planted at a predictable session
-    # filename while loading retained data.
-    if session_file.is_symlink() or not session_file.is_file():
-        return None
-
+    # Open the final directory and file without following symlinks.  A
+    # separate ``is_symlink``/``is_file`` check followed by ``open`` leaves a
+    # replacement window in which a symlink can be swapped in and private
+    # content outside the sessions directory read.
+    directory_fd = None
+    file_fd = None
     try:
-        with session_file.open('r', encoding='utf-8') as f:
+        directory_flags = os.O_RDONLY
+        if hasattr(os, 'O_DIRECTORY'):
+            directory_flags |= os.O_DIRECTORY
+        if hasattr(os, 'O_NOFOLLOW'):
+            directory_flags |= os.O_NOFOLLOW
+        directory_fd = os.open(session_file.parent, directory_flags)
+        file_flags = os.O_RDONLY
+        if hasattr(os, 'O_NOFOLLOW'):
+            file_flags |= os.O_NOFOLLOW
+        file_fd = os.open(session_file.name, file_flags, dir_fd=directory_fd)
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            return None
+        with os.fdopen(file_fd, 'r', encoding='utf-8') as f:
+            file_fd = None
             session_data = json.load(f)
         if not isinstance(session_data, dict):
             return None
@@ -249,10 +338,21 @@ def load_session_data(
         ):
             return None
         return session_data
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as error:
+        if getattr(error, 'errno', None) == errno.ELOOP:
+            return None
+        return None
     except Exception:
         # Do not put session identifiers or stored/user data in logs.  A
         # malformed/partially-written record is simply unavailable.
         return None
+    finally:
+        if file_fd is not None:
+            os.close(file_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def save_session_data(
@@ -265,7 +365,9 @@ def save_session_data(
     """
     Сохраняет данные сессии во временное хранилище
     """
-    temporary_file = None
+    directory_fd = None
+    temporary_name = None
+    temporary_fd = None
     try:
         session_file = _session_file(session_id, sessions_dir)
         if not isinstance(data, dict):
@@ -277,19 +379,31 @@ def save_session_data(
         # never accepted from request payload/session data.
         data = dict(data)
         data['analysis_scope_id'] = normalized_owner
-        # Use an exclusive, randomly named file in the same directory.  A
-        # predictable ``<session>.json.tmp`` can be replaced with a symlink
-        # between requests and would otherwise be followed by ``open('w')``.
+        # Keep the final directory open and use descriptor-relative operations
+        # throughout. A path-based temporary file and ``os.replace`` can be
+        # redirected if the sessions directory is swapped for a symlink while
+        # this write is in progress.
         session_file.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            mode='w',
-            encoding='utf-8',
-            dir=session_file.parent,
-            prefix=f'.{session_file.name}.',
-            suffix='.tmp',
-            delete=False,
-        ) as f:
-            temporary_file = Path(f.name)
+        directory_flags = os.O_RDONLY
+        if hasattr(os, 'O_DIRECTORY'):
+            directory_flags |= os.O_DIRECTORY
+        if hasattr(os, 'O_NOFOLLOW'):
+            directory_flags |= os.O_NOFOLLOW
+        directory_fd = os.open(session_file.parent, directory_flags)
+        if not stat.S_ISDIR(os.fstat(directory_fd).st_mode):
+            return False
+        temporary_name = f'.{session_file.name}.{secrets.token_hex(16)}.tmp'
+        temporary_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, 'O_NOFOLLOW'):
+            temporary_flags |= os.O_NOFOLLOW
+        temporary_fd = os.open(
+            temporary_name,
+            temporary_flags,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        with os.fdopen(temporary_fd, 'w', encoding='utf-8') as f:
+            temporary_fd = None
             json.dump(
                 data,
                 f,
@@ -297,13 +411,23 @@ def save_session_data(
                 indent=2,
                 cls=PlotlyJSONEncoder,
             )
-        os.replace(temporary_file, session_file)
+        os.replace(
+            temporary_name,
+            session_file.name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+        )
+        temporary_name = None
         return True
     except Exception:
-        if (
-            isinstance(temporary_file, Path)
-            and temporary_file.exists()
-            and not temporary_file.is_symlink()
-        ):
-            temporary_file.unlink()
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        if temporary_name is not None and directory_fd is not None:
+            try:
+                os.unlink(temporary_name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
         return False
+    finally:
+        if directory_fd is not None:
+            os.close(directory_fd)

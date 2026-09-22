@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator
 
+from .analysis_jobs import ScopeClosedError
 from .pilot_metrics import initialize_metrics, mark_stage
 
 
@@ -135,6 +136,11 @@ class DecisionCaseStore:
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                if connection.execute(
+                    "SELECT 1 FROM deleted_scopes WHERE scope_id = ?",
+                    (normalized_scope,),
+                ).fetchone() is not None:
+                    raise ScopeClosedError("This scope has been closed.")
                 existing_count = connection.execute(
                     "SELECT COUNT(*) FROM decision_cases WHERE scope_id = ?",
                     (normalized_scope,),
@@ -236,6 +242,7 @@ class DecisionCaseStore:
         scope_id: str,
         *,
         limit: int,
+        connection: sqlite3.Connection | None = None,
     ) -> tuple[list[Dict[str, Any]], bool]:
         """Return one recent decision-case page and whether another row exists."""
         normalized_scope = _validated_identifier(scope_id, "scope")
@@ -243,7 +250,7 @@ class DecisionCaseStore:
             raise ValueError("limit must be an integer.")
         if not 1 <= limit <= MAX_DECISION_CASES:
             raise ValueError(f"limit must be between 1 and {MAX_DECISION_CASES}.")
-        with self._connection() as connection:
+        if connection is not None:
             rows = connection.execute(
                 """
                 SELECT id, scope_id, job_id, priority, status, owner,
@@ -257,6 +264,21 @@ class DecisionCaseStore:
                 """,
                 (normalized_scope, limit + 1),
             ).fetchall()
+        else:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT id, scope_id, job_id, priority, status, owner,
+                           decision, success_metric, target_outcome, review_date,
+                           evidence_snapshot_json, actual_outcome,
+                           created_at, updated_at, resolved_at
+                    FROM decision_cases
+                    WHERE scope_id = ?
+                    ORDER BY created_at DESC, rowid DESC
+                    LIMIT ?
+                    """,
+                    (normalized_scope, limit + 1),
+                ).fetchall()
         has_more = len(rows) > limit
         items = rows[:limit]
         return [self._row_to_case(row) for row in items], has_more
@@ -282,6 +304,12 @@ class DecisionCaseStore:
         timestamp = _utc_now()
         resolved_at = timestamp if status in TERMINAL_STATUSES else None
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute(
+                "SELECT 1 FROM deleted_scopes WHERE scope_id = ?",
+                (normalized_scope,),
+            ).fetchone() is not None:
+                raise ScopeClosedError("This scope has been closed.")
             cursor = connection.execute(
                 """
                 UPDATE decision_cases
@@ -355,6 +383,10 @@ class DecisionCaseStore:
             initialize_metrics(connection)
             connection.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS deleted_scopes (
+                    scope_id TEXT PRIMARY KEY
+                );
+
                 CREATE TABLE IF NOT EXISTS decision_cases (
                     id TEXT PRIMARY KEY,
                     scope_id TEXT NOT NULL,

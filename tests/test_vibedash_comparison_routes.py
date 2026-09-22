@@ -88,6 +88,21 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         self.assertIn('current', payload['readiness'])
         self.assertEqual(len(list(Path(web_app.app.config['UPLOAD_FOLDER']).glob('*.csv'))), 2)
 
+    @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=False)
+    def test_dispatcher_decline_fails_comparison_job_and_cleans_inputs(self, submit):
+        with web_app.app.test_client() as client:
+            response = self.post_data(client)
+
+        self.assertEqual(response.status_code, 500)
+        submit.assert_called_once()
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+        with sqlite3.connect(web_app.app.config['VIBEDASH_JOB_STORE_PATH']) as connection:
+            statuses = [
+                row[0]
+                for row in connection.execute('SELECT status FROM analysis_jobs')
+            ]
+        self.assertEqual(statuses, ['failed'])
+
     def test_missing_wrong_extension_and_invalid_labels_are_rejected(self):
         with web_app.app.test_client() as client:
             cases = [
