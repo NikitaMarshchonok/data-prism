@@ -39,6 +39,17 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("SESSION_COOKIE_SECURE", blueprint)
         self.assertNotIn("replace-with", blueprint)
 
+    def test_render_blueprint_skips_documentation_only_autodeploys(self):
+        blueprint = (REPOSITORY_ROOT / "render.yaml").read_text(encoding="utf-8")
+
+        self.assertIn(
+            '    buildFilter:\n'
+            '      ignoredPaths:\n'
+            '        - "*.md"\n'
+            '        - "docs/**"\n',
+            blueprint,
+        )
+
     def test_container_uses_mounted_state_and_application_request_logs(self):
         dockerfile = (REPOSITORY_ROOT / "Dockerfile").read_text(encoding="utf-8")
 

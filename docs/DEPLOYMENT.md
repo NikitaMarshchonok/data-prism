@@ -6,7 +6,9 @@ This guide describes the repository's current single-instance deployment shape. 
 
 The root `render.yaml` defines a Docker web service with:
 
-- automatic deployment only after linked CI checks pass;
+- automatic deployment only after linked CI checks pass and a runtime-relevant
+  file changed;
+- build filters that skip root Markdown and `docs/**`-only changes;
 - `/readyz` as the deployment health check;
 - generated session and monitoring API secrets;
 - one Gunicorn worker with four threads for the 512 MB free plan;
@@ -26,8 +28,17 @@ Render documents the current Blueprint workflow and schema at:
 
 - <https://render.com/docs/infrastructure-as-code>
 - <https://render.com/docs/blueprint-spec>
+- <https://render.com/docs/monorepo-support#setting-build-filters>
 
 No external AI key is required for the deterministic demo. `OPENAI_API_KEY` can be added later as a secret if optional narrative summaries are needed.
+
+The Blueprint ignores automatic builds when a commit changes only root Markdown
+files or files under `docs/`. This avoids restarting the free instance and
+discarding its temporary state for documentation-only merges. Render always
+processes changes to `render.yaml` itself, and manual deploys or service
+configuration changes also bypass build filters. The filter therefore reduces
+avoidable restarts; it does not make the filesystem durable or protect state
+during an application deployment.
 
 ## Persistence boundary
 
