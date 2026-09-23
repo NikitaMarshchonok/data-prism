@@ -89,6 +89,17 @@
                     <div><small>Target outcome</small><strong>{{ selected_case.target_outcome }}</strong></div>
                 </section>
 
+                {% if selected_case.status == 'tracking' %}
+                <section class="review-reminder" aria-label="Review reminder">
+                    <div>
+                        <small>Keep the follow-up</small>
+                        <strong>Add the {{ selected_case.review_label }} review to your calendar</strong>
+                        <span>The download stays in this browser flow; Data Prism does not contact a calendar provider.</span>
+                    </div>
+                    <a class="button button-secondary" href="{{ url_for('vibedash.decision_case_review_calendar', case_id=selected_case.id) }}" download>Download .ics reminder</a>
+                </section>
+                {% endif %}
+
                 <form class="outcome-form" method="post" action="{{ url_for('vibedash.update_decision_case_outcome', case_id=selected_case.id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <div class="form-heading"><small>Measured result</small><h3>What happened after the decision?</h3></div>
