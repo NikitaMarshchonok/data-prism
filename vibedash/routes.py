@@ -66,6 +66,7 @@ try:
         IDENTIFIER_PATTERN as DECISION_CASE_ID_PATTERN,
         MAX_DECISION_CASES,
     )
+    from .decision_calendar import build_decision_review_calendar
     from .readiness_engine import DatasetReadinessEngine
     from .accounts import (
         ACCOUNT_ID_PATTERN,
@@ -1457,6 +1458,35 @@ if vibedash_bp:
                 'VIBEDASH_DECISION_RETENTION_DAYS'
             ],
         )
+
+
+    @vibedash_bp.get('/decisions/<case_id>/review.ics')
+    def decision_case_review_calendar(case_id):
+        """Download an all-day calendar reminder for one owned decision case."""
+        if not DECISION_CASE_ID_PATTERN.fullmatch(case_id):
+            return jsonify({'error': 'Decision case not found.'}), 404
+        decision_case = _decision_case_store().get(
+            case_id,
+            _analysis_scope_id(),
+        )
+        if decision_case is None:
+            return jsonify({'error': 'Decision case not found.'}), 404
+        try:
+            calendar = build_decision_review_calendar(decision_case)
+        except ValueError:
+            current_app.logger.warning(
+                'Decision review calendar could not be generated',
+                extra={'event': 'vibedash_decision_calendar_invalid'},
+            )
+            return jsonify({'error': 'Decision review reminder is unavailable.'}), 409
+        response = make_response(calendar)
+        response.headers['Content-Type'] = 'text/calendar; charset=utf-8'
+        response.headers['Content-Disposition'] = (
+            f'attachment; filename="data-prism-review-{case_id[:12]}.ics"'
+        )
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
 
 
     @vibedash_bp.post('/readiness')

@@ -191,6 +191,42 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("No decisions are being tracked", response.get_data(as_text=True))
 
+    @patch("vibedash.routes.load_session_data")
+    def test_owner_can_download_private_calendar_reminder(self, load_session):
+        load_session.return_value = self.session_data
+        client = self.owner_client()
+        created = client.post(
+            f"/vibedash/jobs/{self.job_id}/decisions",
+            data=self.valid_form(),
+        )
+        case_id = created.headers["Location"].rstrip("/").split("/")[-1]
+
+        detail = client.get(created.headers["Location"])
+        response = client.get(f"/vibedash/decisions/{case_id}/review.ics")
+
+        self.assertIn("Download .ics reminder", detail.get_data(as_text=True))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "text/calendar")
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn(
+            f'filename="data-prism-review-{case_id[:12]}.ics"',
+            response.headers["Content-Disposition"],
+        )
+        self.assertIn(b"DTSTART;VALUE=DATE:20261015", response.data)
+        self.assertIn(b"Success metric: Activation rate", response.data)
+
+        with web_app.app.test_client() as stranger:
+            hidden = stranger.get(f"/vibedash/decisions/{case_id}/review.ics")
+        self.assertEqual(hidden.status_code, 404)
+
+    def test_calendar_reminder_rejects_malformed_case_id(self):
+        response = self.owner_client().get(
+            "/vibedash/decisions/not-a-case/review.ics"
+        )
+
+        self.assertEqual(response.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()

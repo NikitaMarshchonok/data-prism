@@ -90,6 +90,8 @@ Completed background runs appear under **History** for the same signed guest-bro
 
 From a completed background result, a user can turn one ranked priority into a decision case before the outcome is known. The case freezes a bounded evidence summary and audit fingerprint together with the owner, decision, success metric, target, and review date. Later, the same guest-browser or pilot-account scope records whether the target was validated, invalidated, or cancelled. This creates an auditable evidence-to-outcome loop; it does not infer causality or prove that the action caused the observed result.
 
+An active decision case can download its review date as a private, all-day `.ics` reminder containing the user-entered commitment fields. The reminder is generated in memory, remains protected by the same signed guest-browser or pilot-account scope, and is never sent to a calendar provider by Data Prism.
+
 ## Pilot onboarding and measurement
 
 Optional VibeDash pilot accounts are available from **Create account**. The

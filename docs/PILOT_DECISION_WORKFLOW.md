@@ -65,6 +65,12 @@ The source analysis can expire before the decision case. The immutable evidence
 snapshot remains readable, while its source-analysis link can return an expired
 result response.
 
+For an active case, the owner can download an all-day `.ics` reminder for the
+review date. It contains the case's user-entered decision, owner, success metric,
+and target outcome, is generated in memory, and uses the same signed scope check
+as the case page. Data Prism does not connect to or notify an external calendar
+provider; importing or sharing the file remains the user's choice.
+
 ## Pilot success criteria
 
 The next validation step is not another broad feature. Run 5–10 observed pilots
@@ -90,7 +96,7 @@ be substituted for those measures.
 ## Not yet supported
 
 - teams, roles, approvals, or shared ownership;
-- notifications and scheduled review reminders;
+- automatic notifications or managed scheduled review reminders;
 - managed persistent storage or multi-instance consistency;
 - automatic ingestion from business systems;
 - causal attribution between the decision and observed outcome;
