@@ -7,6 +7,10 @@ services:
     dockerContext: .
     healthCheckPath: /readyz
     autoDeployTrigger: checksPass
+    buildFilter:
+      ignoredPaths:
+        - "*.md"
+        - "docs/**"
     envVars:
       - key: FLASK_SECRET_KEY
         generateValue: true
