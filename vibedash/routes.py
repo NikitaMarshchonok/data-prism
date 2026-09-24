@@ -67,6 +67,10 @@ try:
         MAX_DECISION_CASES,
     )
     from .decision_calendar import build_decision_review_calendar
+    from .decision_queue import (
+        ALLOWED_DECISION_QUEUE_VIEWS,
+        build_decision_queue,
+    )
     from .readiness_engine import DatasetReadinessEngine
     from .accounts import (
         ACCOUNT_ID_PATTERN,
@@ -401,11 +405,21 @@ if vibedash_bp:
                 decision_case['created_at']
             ).astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC'),
             'review_label': review_date.strftime('%Y-%m-%d'),
-            'overdue': (
-                decision_case['status'] == 'tracking'
-                and review_date < datetime.now(timezone.utc).date()
-            ),
+            'overdue': decision_case.get('review_state') == 'overdue',
         }
+
+
+    def _decision_queue(cases, *, default_view):
+        requested_view = request.args.get('view', default_view)
+        if requested_view not in ALLOWED_DECISION_QUEUE_VIEWS:
+            requested_view = default_view
+        queue = build_decision_queue(
+            cases,
+            view=requested_view,
+            today=datetime.now(timezone.utc).date(),
+        )
+        queue['items'] = [_decision_case_view(case) for case in queue['items']]
+        return queue
 
 
     def _load_vibedash_csv(source, *, nrows=None, max_columns=None):
@@ -1421,10 +1435,14 @@ if vibedash_bp:
             _analysis_scope_id(),
             limit=list_limit,
         )
+        queue = _decision_queue(cases, default_view='active')
         return render_template(
             'vibedash_decisions.html',
-            decision_cases=[_decision_case_view(case) for case in cases],
+            decision_cases=queue['items'],
             selected_case=None,
+            queue_view=queue['view'],
+            queue_counts=queue['counts'],
+            queue_window_days=queue['window_days'],
             csrf_token=_decision_csrf_token(),
             retention_days=current_app.config[
                 'VIBEDASH_DECISION_RETENTION_DAYS'
@@ -1449,10 +1467,20 @@ if vibedash_bp:
             scope_id,
             limit=list_limit,
         )
+        queue = _decision_queue(cases, default_view='all')
+        selected_queue = build_decision_queue(
+            [decision_case],
+            view='all',
+            today=datetime.now(timezone.utc).date(),
+        )
+        selected_view = _decision_case_view(selected_queue['items'][0])
         return render_template(
             'vibedash_decisions.html',
-            decision_cases=[_decision_case_view(case) for case in cases],
-            selected_case=_decision_case_view(decision_case),
+            decision_cases=queue['items'],
+            selected_case=selected_view,
+            queue_view=queue['view'],
+            queue_counts=queue['counts'],
+            queue_window_days=queue['window_days'],
             csrf_token=_decision_csrf_token(),
             retention_days=current_app.config[
                 'VIBEDASH_DECISION_RETENTION_DAYS'

@@ -92,6 +92,8 @@ From a completed background result, a user can turn one ranked priority into a d
 
 An active decision case can download its review date as a private, all-day `.ics` reminder containing the user-entered commitment fields. The reminder is generated in memory, remains protected by the same signed guest-browser or pilot-account scope, and is never sent to a calendar provider by Data Prism.
 
+The decision workspace also provides a scope-protected review queue for active, overdue, due-today, next-seven-day, closed, and all retained cases. Active work is ordered by review date so missed and imminent follow-ups appear before later commitments; this is an in-product queue, not an external notification service.
+
 ## Pilot onboarding and measurement
 
 Optional VibeDash pilot accounts are available from **Create account**. The

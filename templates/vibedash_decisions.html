@@ -45,19 +45,28 @@
             </aside>
         </header>
 
+        <nav class="queue-tabs" aria-label="Decision review queue">
+            <a href="{{ url_for('vibedash.decision_cases', view='active') }}" {% if queue_view == 'active' %}aria-current="page"{% endif %}>Active <span>{{ queue_counts.active }}</span></a>
+            <a href="{{ url_for('vibedash.decision_cases', view='overdue') }}" {% if queue_view == 'overdue' %}aria-current="page"{% endif %}>Overdue <span>{{ queue_counts.overdue }}</span></a>
+            <a href="{{ url_for('vibedash.decision_cases', view='today') }}" {% if queue_view == 'today' %}aria-current="page"{% endif %}>Today <span>{{ queue_counts.today }}</span></a>
+            <a href="{{ url_for('vibedash.decision_cases', view='upcoming') }}" {% if queue_view == 'upcoming' %}aria-current="page"{% endif %}>Next {{ queue_window_days }} days <span>{{ queue_counts.upcoming }}</span></a>
+            <a href="{{ url_for('vibedash.decision_cases', view='closed') }}" {% if queue_view == 'closed' %}aria-current="page"{% endif %}>Closed <span>{{ queue_counts.closed }}</span></a>
+            <a href="{{ url_for('vibedash.decision_cases', view='all') }}" {% if queue_view == 'all' %}aria-current="page"{% endif %}>All <span>{{ queue_counts.all }}</span></a>
+        </nav>
+
         {% if decision_cases %}
         <div class="decision-layout {% if not selected_case %}list-only{% endif %}">
             <section class="case-list" aria-label="Tracked decisions">
                 {% for case in decision_cases %}
                 {% set source = case.evidence_snapshot.priority %}
-                <a class="case-row status-{{ case.status }} {% if selected_case and selected_case.id == case.id %}is-selected{% endif %}" href="{{ url_for('vibedash.decision_case_detail', case_id=case.id) }}">
+                <a class="case-row status-{{ case.status }} timing-{{ case.review_state }} {% if selected_case and selected_case.id == case.id %}is-selected{% endif %}" href="{{ url_for('vibedash.decision_case_detail', case_id=case.id, view=queue_view) }}">
                     <div class="case-row-heading">
                         <span>Priority 0{{ case.priority }}</span>
                         <em>{{ case.status }}</em>
                     </div>
                     <h2>{{ source.title }}</h2>
                     <p>{{ case.decision }}</p>
-                    <div class="case-meta"><span>{{ case.owner }}</span><span>Review {{ case.review_label }}</span>{% if case.overdue %}<strong>Overdue</strong>{% endif %}</div>
+                    <div class="case-meta"><span>{{ case.owner }}</span><span>Review {{ case.review_label }}</span><strong>{{ case.timing_label }}</strong></div>
                 </a>
                 {% endfor %}
             </section>
@@ -124,6 +133,16 @@
             </article>
             {% endif %}
         </div>
+        {% elif queue_counts.all %}
+        <section class="empty-state filtered-empty">
+            <span class="empty-icon" aria-hidden="true">✓</span>
+            <h2>No decisions in this queue</h2>
+            <p>There are no decision cases matching this review window. Open the active queue or show every retained case.</p>
+            <div class="empty-actions">
+                <a class="button button-primary" href="{{ url_for('vibedash.decision_cases', view='active') }}">Open active queue</a>
+                <a class="button button-secondary" href="{{ url_for('vibedash.decision_cases', view='all') }}">Show all cases</a>
+            </div>
+        </section>
         {% else %}
         <section class="empty-state">
             <span class="empty-icon" aria-hidden="true">↗</span>

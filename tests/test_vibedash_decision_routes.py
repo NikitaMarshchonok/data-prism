@@ -1,5 +1,6 @@
 import unittest
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -226,6 +227,134 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+    def test_decision_queue_filters_and_counts_owned_cases(self):
+        store = DecisionCaseStore(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
+        )
+        today = datetime.now(timezone.utc).date()
+
+        def create(label, offset):
+            job_id = uuid.uuid4().hex
+            return store.create(
+                self.scope_id,
+                job_id,
+                priority=1,
+                owner="Growth lead",
+                decision=label,
+                success_metric="Activation rate",
+                target_outcome="Reach the agreed threshold.",
+                review_date=(today + timedelta(days=offset)).isoformat(),
+                evidence_snapshot={
+                    "contract": "decision-case-source-v1",
+                    "analysis_job_id": job_id,
+                    "priority": {"number": 1, "title": label},
+                },
+            )
+
+        overdue = create("Overdue onboarding review", -2)
+        create("Review due today", 0)
+        create("Upcoming retention review", 4)
+        closed = create("Completed pricing review", -10)
+        store.update_outcome(
+            closed["id"],
+            self.scope_id,
+            status="validated",
+            actual_outcome="The agreed threshold was reached.",
+        )
+
+        client = self.owner_client()
+        overdue_response = client.get("/vibedash/decisions?view=overdue")
+        today_response = client.get("/vibedash/decisions?view=today")
+        upcoming_response = client.get("/vibedash/decisions?view=upcoming")
+        closed_response = client.get("/vibedash/decisions?view=closed")
+
+        self.assertEqual(overdue_response.status_code, 200)
+        overdue_html = overdue_response.get_data(as_text=True)
+        self.assertIn("Overdue onboarding review", overdue_html)
+        self.assertNotIn("Upcoming retention review", overdue_html)
+        self.assertIn("Overdue by 2 days", overdue_html)
+        self.assertIn('aria-current="page">Overdue <span>1</span>', overdue_html)
+        self.assertIn("Review due today", today_response.get_data(as_text=True))
+        self.assertIn(
+            "Upcoming retention review",
+            upcoming_response.get_data(as_text=True),
+        )
+        self.assertIn(
+            "Completed pricing review",
+            closed_response.get_data(as_text=True),
+        )
+
+        detail = client.get(
+            f"/vibedash/decisions/{overdue['id']}?view=overdue"
+        )
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("Overdue onboarding review", detail.get_data(as_text=True))
+
+    def test_empty_queue_view_has_recovery_actions_and_invalid_view_is_safe(self):
+        store = DecisionCaseStore(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
+        )
+        job_id = uuid.uuid4().hex
+        store.create(
+            self.scope_id,
+            job_id,
+            priority=1,
+            owner="Growth lead",
+            decision="Future review",
+            success_metric="Activation rate",
+            target_outcome="Reach the agreed threshold.",
+            review_date=(datetime.now(timezone.utc).date() + timedelta(days=30)).isoformat(),
+            evidence_snapshot={
+                "contract": "decision-case-source-v1",
+                "analysis_job_id": job_id,
+                "priority": {"number": 1, "title": "Future review"},
+            },
+        )
+        client = self.owner_client()
+
+        empty = client.get("/vibedash/decisions?view=overdue")
+        invalid = client.get("/vibedash/decisions?view=unsafe")
+
+        self.assertIn("No decisions in this queue", empty.get_data(as_text=True))
+        self.assertIn("Open active queue", empty.get_data(as_text=True))
+        invalid_html = invalid.get_data(as_text=True)
+        self.assertIn("Future review", invalid_html)
+        self.assertIn('aria-current="page">Active <span>1</span>', invalid_html)
+
+    def test_owned_case_detail_survives_a_smaller_queue_display_limit(self):
+        store = DecisionCaseStore(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
+        )
+
+        def create(label):
+            job_id = uuid.uuid4().hex
+            return store.create(
+                self.scope_id,
+                job_id,
+                priority=1,
+                owner="Growth lead",
+                decision=label,
+                success_metric="Activation rate",
+                target_outcome="Reach the agreed threshold.",
+                review_date="2026-10-15",
+                evidence_snapshot={
+                    "contract": "decision-case-source-v1",
+                    "analysis_job_id": job_id,
+                    "priority": {"number": 1, "title": label},
+                },
+            )
+
+        older = create("Older retained decision")
+        create("Newer visible decision")
+        web_app.app.config["VIBEDASH_MAX_DECISION_CASES_PER_SCOPE"] = 1
+
+        response = self.owner_client().get(
+            f"/vibedash/decisions/{older['id']}"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Older retained decision", response.get_data(as_text=True))
 
 
 if __name__ == "__main__":
