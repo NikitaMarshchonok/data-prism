@@ -94,6 +94,8 @@ An active decision case can download its review date as a private, all-day `.ics
 
 The decision workspace also provides a scope-protected review queue for active, overdue, due-today, next-seven-day, closed, and all retained cases. Active work is ordered by review date so missed and imminent follow-ups appear before later commitments; this is an in-product queue, not an external notification service.
 
+Each owned decision case can be downloaded as a standalone, print-ready HTML report containing its bounded evidence snapshot, pre-committed owner/metric/target, status, and recorded outcome. The report is generated in memory with no scripts or external assets and excludes source dataset rows. Once downloaded, the copy is controlled by its holder and falls outside server retention and account deletion.
+
 ## Pilot onboarding and measurement
 
 Optional VibeDash pilot accounts are available from **Create account**. The
