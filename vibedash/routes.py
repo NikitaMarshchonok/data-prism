@@ -67,6 +67,7 @@ try:
         MAX_DECISION_CASES,
     )
     from .decision_calendar import build_decision_review_calendar
+    from .decision_report import build_decision_report_context
     from .decision_queue import (
         ALLOWED_DECISION_QUEUE_VIEWS,
         build_decision_queue,
@@ -1514,6 +1515,61 @@ if vibedash_bp:
         )
         response.headers['Cache-Control'] = 'private, no-store'
         response.headers['X-Content-Type-Options'] = 'nosniff'
+        return response
+
+
+    @vibedash_bp.get('/decisions/<case_id>/report.html')
+    def decision_case_report(case_id):
+        """Download one owned decision case as a standalone HTML report."""
+        if not DECISION_CASE_ID_PATTERN.fullmatch(case_id):
+            return jsonify({'error': 'Decision case not found.'}), 404
+        decision_case = _decision_case_store().get(
+            case_id,
+            _analysis_scope_id(),
+        )
+        if decision_case is None:
+            return jsonify({'error': 'Decision case not found.'}), 404
+        try:
+            report = build_decision_report_context(decision_case)
+        except ValueError:
+            current_app.logger.warning(
+                'Decision case report contract is invalid',
+                extra={'event': 'vibedash_decision_report_invalid'},
+            )
+            return jsonify({'error': 'Decision case report is unavailable.'}), 409
+
+        css_path = Path(current_app.static_folder or '') / 'vibedash_decision_report.css'
+        try:
+            report_css = css_path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            current_app.logger.exception(
+                'Decision case report stylesheet could not be read',
+                extra={'event': 'vibedash_decision_report_css_failed'},
+            )
+            return jsonify({'error': 'The decision case report could not be exported.'}), 500
+        report_css = re.sub(
+            r'</style', '<\\/style', report_css, flags=re.IGNORECASE
+        )
+        html = render_template(
+            'vibedash_decision_report.html',
+            report=report,
+            report_css=report_css,
+        )
+        response = make_response(html)
+        response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        response.headers['Content-Disposition'] = (
+            f'attachment; filename="data-prism-decision-{case_id[:12]}.html"'
+        )
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
+            "style-src-attr 'none'; img-src data:; font-src 'none'; "
+            "base-uri 'none'; form-action 'none'; "
+            "object-src 'none'; frame-ancestors 'none';"
+        )
         return response
 
 

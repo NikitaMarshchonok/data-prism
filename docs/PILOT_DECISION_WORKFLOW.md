@@ -77,6 +77,14 @@ date, while recently updated closed cases are grouped separately. These views
 make missed follow-up visible when the user returns; they do not send automatic
 notifications or guarantee that a review occurs.
 
+An owned case can be exported as a standalone HTML decision report for offline
+review or browser Print/Save as PDF. The export contains the bounded evidence
+snapshot, pre-committed decision fields, current status, and recorded outcome;
+it excludes source rows, scripts, external assets, forms, and private route
+links. Export generation is in memory and uses the same signed scope check as
+the interactive case. A downloaded copy is controlled by its holder and is no
+longer covered by server retention, withdrawal, or account deletion.
+
 ## Pilot success criteria
 
 The next validation step is not another broad feature. Run 5–10 observed pilots

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; style-src-attr 'none'; img-src data:; font-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; frame-ancestors 'none';">
+    <title>Decision review {{ report.short_id }} · Data Prism</title>
+    <style>{{ report_css | safe }}</style>
+</head>
+<body>
+    <main class="report-shell">
+        <header class="report-header">
+            <div class="brand"><span>DP</span><strong>Data Prism</strong></div>
+            <div class="report-type">Decision review · {{ report.contract }}</div>
+        </header>
+
+        <section class="hero">
+            <div>
+                <p class="eyebrow">Priority 0{{ report.priority_number }} · Case {{ report.short_id }}</p>
+                <h1>{{ report.evidence.title }}</h1>
+                <p class="lead">A bounded record of the evidence, commitment, and measured follow-up.</p>
+            </div>
+            <span class="status status-{{ report.status }}">{{ report.status_label }}</span>
+        </section>
+
+        <section class="panel evidence-panel">
+            <div class="section-heading"><span>01</span><h2>Evidence captured before the decision</h2></div>
+            {% if report.evidence.finding %}<p class="finding">{{ report.evidence.finding }}</p>{% endif %}
+            {% if report.evidence['items'] %}<ul>{% for item in report.evidence['items'] %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+            {% if report.evidence.recommended_action %}<div class="recommendation"><small>Original verification action</small><strong>{{ report.evidence.recommended_action }}</strong></div>{% endif %}
+            <div class="meta-row"><span>{{ report.evidence.confidence }} support</span><span>{{ report.evidence.analysis_contract }}</span></div>
+        </section>
+
+        <section class="panel">
+            <div class="section-heading"><span>02</span><h2>Pre-committed decision</h2></div>
+            <div class="commitment-grid">
+                <div class="wide"><small>Decision to test</small><strong>{{ report.decision }}</strong></div>
+                <div><small>Owner</small><strong>{{ report.owner }}</strong></div>
+                <div><small>Review date</small><strong>{{ report.review_date }}</strong></div>
+                <div><small>Success metric</small><strong>{{ report.success_metric }}</strong></div>
+                <div><small>Target outcome</small><strong>{{ report.target_outcome }}</strong></div>
+            </div>
+        </section>
+
+        <section class="panel outcome-panel">
+            <div class="section-heading"><span>03</span><h2>Observed outcome</h2></div>
+            {% if report.outcome_recorded %}<p>{{ report.actual_outcome }}</p>{% else %}<p class="pending">No observed outcome has been recorded yet.</p>{% endif %}
+            <div class="timeline">
+                <div><small>Created</small><strong>{{ report.created_at }}</strong></div>
+                <div><small>Last updated</small><strong>{{ report.updated_at }}</strong></div>
+                <div><small>Resolved</small><strong>{{ report.resolved_at or 'Not resolved' }}</strong></div>
+            </div>
+        </section>
+
+        <section class="audit-panel">
+            <div><small>Dataset SHA-256</small><code>{{ report.evidence.dataset_sha256 }}</code></div>
+            <p>This report contains a bounded evidence snapshot and user-entered decision fields, not source dataset rows. Findings are observational and do not establish that the decision caused the outcome.</p>
+        </section>
+
+        <footer>
+            <span>Data Prism · evidence to outcome</span>
+            <p>This downloaded copy is controlled by its holder and is no longer covered by server retention or account deletion.</p>
+        </footer>
+    </main>
+</body>
+</html>

@@ -128,7 +128,10 @@
 
                 <footer class="case-footer">
                     <div><span>Dataset fingerprint</span><code>{{ source.dataset_sha256 or 'Unavailable' }}</code></div>
-                    <a href="{{ url_for('vibedash.analysis_job_result', job_id=selected_case.job_id) }}">Open source analysis →</a>
+                    <div class="case-footer-actions">
+                        <a href="{{ url_for('vibedash.decision_case_report', case_id=selected_case.id) }}" download>Download case report ↓</a>
+                        <a href="{{ url_for('vibedash.analysis_job_result', job_id=selected_case.job_id) }}">Open source analysis →</a>
+                    </div>
                 </footer>
             </article>
             {% endif %}
