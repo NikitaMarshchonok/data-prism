@@ -58,7 +58,13 @@ try:
     )
     from .decision_brief import build_decision_brief
     from .comparison_report import build_comparison_decision_guidance
-    from .pilot_metrics import feedback_available, forget_scope, record_feedback, scope_token
+    from .pilot_metrics import (
+        build_scope_value_feedback,
+        feedback_available,
+        forget_scope,
+        record_feedback,
+        scope_token,
+    )
     from .decision_cases import (
         DecisionCaseCapacityError,
         DecisionCaseConflictError,
@@ -68,6 +74,7 @@ try:
     )
     from .decision_calendar import build_decision_review_calendar
     from .decision_report import build_decision_report_context
+    from .decision_outcomes import build_decision_outcome_summary
     from .decision_queue import (
         ALLOWED_DECISION_QUEUE_VIEWS,
         build_decision_queue,
@@ -421,6 +428,16 @@ if vibedash_bp:
         )
         queue['items'] = [_decision_case_view(case) for case in queue['items']]
         return queue
+
+
+    def _decision_workspace_summary(status_counts, scope_id):
+        return {
+            'outcome_summary': build_decision_outcome_summary(status_counts),
+            'pilot_value_summary': build_scope_value_feedback(
+                current_app.config['VIBEDASH_JOB_STORE_PATH'],
+                scope_token(scope_id, current_app.secret_key),
+            ),
+        }
 
 
     def _load_vibedash_csv(source, *, nrows=None, max_columns=None):
@@ -1428,15 +1445,21 @@ if vibedash_bp:
     @vibedash_bp.get('/decisions')
     def decision_cases():
         """Show evidence-linked decisions for this signed VibeDash scope."""
+        scope_id = _analysis_scope_id()
         list_limit = min(
             current_app.config['VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'],
             MAX_DECISION_CASES,
         )
-        cases = _decision_case_store().list_for_scope(
-            _analysis_scope_id(),
+        store = _decision_case_store()
+        cases = store.list_for_scope(
+            scope_id,
             limit=list_limit,
         )
         queue = _decision_queue(cases, default_view='active')
+        summary = _decision_workspace_summary(
+            store.count_by_status(scope_id),
+            scope_id,
+        )
         return render_template(
             'vibedash_decisions.html',
             decision_cases=queue['items'],
@@ -1448,6 +1471,7 @@ if vibedash_bp:
             retention_days=current_app.config[
                 'VIBEDASH_DECISION_RETENTION_DAYS'
             ],
+            **summary,
         )
 
 
@@ -1457,18 +1481,23 @@ if vibedash_bp:
         if not DECISION_CASE_ID_PATTERN.fullmatch(case_id):
             return jsonify({'error': 'Decision case not found.'}), 404
         scope_id = _analysis_scope_id()
-        decision_case = _decision_case_store().get(case_id, scope_id)
+        store = _decision_case_store()
+        decision_case = store.get(case_id, scope_id)
         if decision_case is None:
             return jsonify({'error': 'Decision case not found.'}), 404
         list_limit = min(
             current_app.config['VIBEDASH_MAX_DECISION_CASES_PER_SCOPE'],
             MAX_DECISION_CASES,
         )
-        cases = _decision_case_store().list_for_scope(
+        cases = store.list_for_scope(
             scope_id,
             limit=list_limit,
         )
         queue = _decision_queue(cases, default_view='all')
+        summary = _decision_workspace_summary(
+            store.count_by_status(scope_id),
+            scope_id,
+        )
         selected_queue = build_decision_queue(
             [decision_case],
             view='all',
@@ -1486,6 +1515,7 @@ if vibedash_bp:
             retention_days=current_app.config[
                 'VIBEDASH_DECISION_RETENTION_DAYS'
             ],
+            **summary,
         )
 
 

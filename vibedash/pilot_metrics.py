@@ -167,6 +167,64 @@ def _row_value(row, name):
     return row[name] if name in row.keys() else None
 
 
+def build_scope_value_feedback(database_path, token, days=RETENTION_DAYS, now=None):
+    """Return fixed-choice value signals for one pseudonymous analysis scope."""
+    if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
+        raise ValueError("Invalid pilot measurement token.")
+    if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= RETENTION_DAYS:
+        raise ValueError(f"days must be between 1 and {RETENTION_DAYS}.")
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=days)).isoformat(timespec="milliseconds")
+    path = Path(database_path).resolve()
+    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        installed = connection.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE name = 'pilot_analyses' AND type = 'table'"
+        ).fetchone()
+        rows = connection.execute(
+            "SELECT * FROM pilot_analyses "
+            "WHERE scope_token = ? AND created_at >= ? AND created_at <= ?",
+            (token, cutoff, now.isoformat(timespec="milliseconds")),
+        ).fetchall() if installed else []
+
+    completed = [row for row in rows if row['completed_at']]
+    feedback = [row for row in completed if row['usefulness']]
+    value_feedback = [
+        row for row in feedback
+        if _row_value(row, 'perceived_time_saved')
+        and _row_value(row, 'next_cycle_intent')
+    ]
+    return {
+        'contract': 'pilot-scope-value-v1',
+        'cohort_days': days,
+        'collection_installed': bool(installed),
+        'completed_opted_in_analyses': len(completed),
+        'feedback_responses': len(feedback),
+        'value_feedback_responses': len(value_feedback),
+        'value_feedback_response_rate_among_completed': _ratio(
+            len(value_feedback), len(completed)
+        ),
+        'legacy_feedback_responses_without_value_signals': (
+            len(feedback) - len(value_feedback)
+        ),
+        'perceived_time_saved': {
+            value: sum(
+                _row_value(row, 'perceived_time_saved') == value
+                for row in value_feedback
+            )
+            for value in PERCEIVED_TIME_SAVED
+        },
+        'next_cycle_intent': {
+            value: sum(
+                _row_value(row, 'next_cycle_intent') == value
+                for row in value_feedback
+            )
+            for value in NEXT_CYCLE_INTENT
+        },
+    }
+
+
 def _cohort(rows):
     completed = [row for row in rows if row['completed_at']]
     decisions = [row for row in completed if row['decision_at']]

@@ -13,8 +13,8 @@ from unittest.mock import patch
 from vibedash.analysis_jobs import AnalysisJobStore
 from vibedash.decision_cases import DecisionCaseStore
 from vibedash.pilot_metrics import (
-    build_pilot_report, feedback_available, forget_scope, mark_stage,
-    record_feedback, scope_token,
+    build_pilot_report, build_scope_value_feedback, feedback_available,
+    forget_scope, mark_stage, record_feedback, scope_token,
 )
 
 
@@ -160,6 +160,74 @@ class PilotMetricsTests(unittest.TestCase):
         self.assertEqual(demo_report['next_cycle_intent']['no'], 1)
         self.assertEqual(demo_report['next_cycle_intent']['yes'], 0)
 
+    def test_scope_value_feedback_excludes_other_scopes_and_identifiers(self):
+        own_job = self.job()
+        self.assertTrue(self.feedback(own_job))
+        other_scope = uuid.uuid4().hex
+        other_token = scope_token(other_scope, 'test-secret')
+        other = self.store.create(
+            other_scope,
+            {'prompt': 'OTHER-PRIVATE-PROMPT'},
+            pilot_scope_token=other_token,
+        )
+        self.store.claim(other['id'])
+        self.store.complete(other['id'], str(uuid.uuid4()))
+        self.assertTrue(record_feedback(
+            self.path,
+            other['id'],
+            'not_useful',
+            'missing_feature',
+            'over_60_minutes',
+            'no',
+        ))
+
+        summary = build_scope_value_feedback(self.path, self.token)
+
+        self.assertEqual(summary['completed_opted_in_analyses'], 1)
+        self.assertEqual(summary['feedback_responses'], 1)
+        self.assertEqual(summary['value_feedback_responses'], 1)
+        self.assertEqual(summary['value_feedback_response_rate_among_completed'], 1.0)
+        self.assertEqual(summary['perceived_time_saved']['15_to_30_minutes'], 1)
+        self.assertEqual(summary['perceived_time_saved']['over_60_minutes'], 0)
+        self.assertEqual(summary['next_cycle_intent']['yes'], 1)
+        self.assertEqual(summary['next_cycle_intent']['no'], 0)
+        serialized = json.dumps(summary)
+        for private in (
+            self.scope,
+            self.token,
+            own_job,
+            other_scope,
+            other_token,
+            other['id'],
+            'OTHER-PRIVATE-PROMPT',
+        ):
+            self.assertNotIn(private, serialized)
+
+    def test_scope_value_feedback_preserves_missing_value_signals(self):
+        job_id = self.job()
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute(
+                "UPDATE pilot_analyses SET usefulness = 'useful', blocker = 'none' "
+                "WHERE job_id = ?",
+                (job_id,),
+            )
+
+        summary = build_scope_value_feedback(self.path, self.token)
+
+        self.assertEqual(summary['completed_opted_in_analyses'], 1)
+        self.assertEqual(summary['feedback_responses'], 1)
+        self.assertEqual(summary['value_feedback_responses'], 0)
+        self.assertEqual(
+            summary['legacy_feedback_responses_without_value_signals'],
+            1,
+        )
+        self.assertEqual(
+            summary['value_feedback_response_rate_among_completed'],
+            0.0,
+        )
+        self.assertEqual(sum(summary['perceived_time_saved'].values()), 0)
+        self.assertEqual(sum(summary['next_cycle_intent'].values()), 0)
+
     def test_withdrawal_is_scoped_and_does_not_recreate_records(self):
         job_id = self.job()
         other_scope = uuid.uuid4().hex
@@ -233,16 +301,25 @@ class PilotMetricsTests(unittest.TestCase):
         missing = Path(self.directory.name) / 'missing.sqlite3'
         with self.assertRaises(sqlite3.OperationalError):
             build_pilot_report(missing)
+        with self.assertRaises(sqlite3.OperationalError):
+            build_scope_value_feedback(missing, self.token)
         self.assertFalse(missing.exists())
         old = Path(self.directory.name) / 'old.sqlite3'
         with closing(sqlite3.connect(old)) as connection:
             connection.execute('CREATE TABLE legacy (id TEXT)')
         before = old.read_bytes()
         self.assertFalse(build_pilot_report(old)['collection_installed'])
+        self.assertFalse(
+            build_scope_value_feedback(old, self.token)['collection_installed']
+        )
         self.assertEqual(old.read_bytes(), before)
         for days in (0, 31, True, '7'):
             with self.assertRaises(ValueError):
                 build_pilot_report(self.path, days=days)
+            with self.assertRaises(ValueError):
+                build_scope_value_feedback(self.path, self.token, days=days)
+        with self.assertRaises(ValueError):
+            build_scope_value_feedback(self.path, 'invalid')
 
     def test_schema_migration_retains_legacy_feedback_and_reports_null_signals(self):
         legacy = Path(self.directory.name) / 'legacy-metrics.sqlite3'
@@ -278,12 +355,19 @@ class PilotMetricsTests(unittest.TestCase):
         # The read-only report remains compatible before an application store
         # has had a chance to migrate the database.
         before = build_pilot_report(legacy)['cohorts']['upload']
+        scoped_before = build_scope_value_feedback(legacy, self.token)
         self.assertEqual(legacy.read_bytes(), legacy_bytes)
         self.assertEqual(before['feedback_responses'], 1)
         self.assertEqual(before['value_feedback_responses'], 0)
         self.assertEqual(before['legacy_feedback_responses_without_value_signals'], 1)
         self.assertEqual(sum(before['perceived_time_saved'].values()), 0)
         self.assertEqual(sum(before['next_cycle_intent'].values()), 0)
+        self.assertEqual(scoped_before['feedback_responses'], 1)
+        self.assertEqual(scoped_before['value_feedback_responses'], 0)
+        self.assertEqual(
+            scoped_before['legacy_feedback_responses_without_value_signals'],
+            1,
+        )
 
         AnalysisJobStore(legacy)
         AnalysisJobStore(legacy)  # The additive migration is idempotent.

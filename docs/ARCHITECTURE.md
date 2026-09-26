@@ -112,6 +112,8 @@ The decision workspace derives a review queue from the already scoped case list 
 
 `GET /vibedash/decisions/<case_id>/report.html` produces an owned, in-memory standalone decision report. A strict view builder copies only approved bounded fields from the stored case and evidence snapshot; source rows and unrecognized snapshot fields are excluded. The document contains inline trusted CSS but no scripts, forms, external assets, or private route links, and the response applies private/no-store, nosniff, frame denial, no-referrer, and restrictive CSP headers. The exported copy is not persisted by Data Prism and is outside subsequent retention or deletion controls.
 
+The decision workspace derives a bounded outcome summary from the already scope-filtered retained cases. A separate read-only query uses the HMAC-derived token for that same scope to summarize only its complete fixed-choice pilot value responses. The browser receives no scope token, job identifier, raw feedback row, global cohort total, or data from another scope; missing responses remain missing rather than being interpreted as negative outcomes.
+
 ### Account export boundary
 
 An authenticated pilot account can submit `POST /vibedash/account/export.json`

@@ -36,6 +36,12 @@ Opting in additionally requires a session-bound CSRF token. Synchronous preview
 and rejected preflight requests are not measured. There is no external analytics
 service and no public metrics/admin endpoint.
 
+The signed decision workspace may display a private aggregate of the current
+guest-browser or pilot-account scope's retained fixed-choice value responses.
+It derives the same HMAC token server-side and returns counts only; tokens, job
+IDs, raw rows, global cohort totals, and other scopes are not rendered. This is
+personal workflow feedback, not a public pilot dashboard or demand claim.
+
 `pilot_analyses` lives in the analysis-job SQLite database. It contains only:
 
 - a job ID and an HMAC-derived pseudonymous guest-browser or pilot-account
