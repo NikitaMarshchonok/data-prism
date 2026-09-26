@@ -85,6 +85,13 @@ links. Export generation is in memory and uses the same signed scope check as
 the interactive case. A downloaded copy is controlled by its holder and is no
 longer covered by server retention, withdrawal, or account deletion.
 
+The decision workspace also displays an aggregate snapshot of the current
+scope's retained cases. Validation share uses only `validated + invalidated` as
+its denominator; cancelled and still-tracking cases are reported separately.
+The adjacent value panel reads only that scope's retained, opted-in fixed-choice
+responses. Estimated time saved and next-cycle intent remain self-reports, and a
+missing response is never converted into a zero-saving or negative-intent value.
+
 ## Pilot success criteria
 
 The next validation step is not another broad feature. Run 5–10 observed pilots

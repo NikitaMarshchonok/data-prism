@@ -9,6 +9,7 @@ import web_app
 
 from vibedash.analysis_jobs import AnalysisJobStore
 from vibedash.decision_cases import DecisionCaseStore
+from vibedash.pilot_metrics import record_feedback, scope_token
 
 
 class VibeDashDecisionRouteTests(unittest.TestCase):
@@ -291,6 +292,118 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertIn("Overdue onboarding review", detail.get_data(as_text=True))
 
+    def test_outcome_summary_combines_only_current_scope_aggregates(self):
+        cases = DecisionCaseStore(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
+        )
+
+        def create_case(scope_id, label):
+            job_id = uuid.uuid4().hex
+            return cases.create(
+                scope_id,
+                job_id,
+                priority=1,
+                owner="Growth lead",
+                decision=label,
+                success_metric="Activation rate",
+                target_outcome="Reach the agreed threshold.",
+                review_date="2026-10-15",
+                evidence_snapshot={
+                    "contract": "decision-case-source-v1",
+                    "analysis_job_id": job_id,
+                    "priority": {"number": 1, "title": label},
+                },
+            )
+
+        validated = create_case(self.scope_id, "Validated decision")
+        invalidated = create_case(self.scope_id, "Invalidated decision")
+        create_case(self.scope_id, "Tracking decision")
+        cases.update_outcome(
+            validated["id"],
+            self.scope_id,
+            status="validated",
+            actual_outcome="The target was reached.",
+        )
+        cases.update_outcome(
+            invalidated["id"],
+            self.scope_id,
+            status="invalidated",
+            actual_outcome="The target was not reached.",
+        )
+
+        foreign_scope = uuid.uuid4().hex
+        foreign_case = create_case(foreign_scope, "Foreign validated decision")
+        cases.update_outcome(
+            foreign_case["id"],
+            foreign_scope,
+            status="validated",
+            actual_outcome="Foreign outcome.",
+        )
+
+        own_token = scope_token(self.scope_id, web_app.app.secret_key)
+        own_job = self.job_store.create(
+            self.scope_id,
+            {"prompt": "Own feedback"},
+            pilot_scope_token=own_token,
+        )
+        self.job_store.claim(own_job["id"])
+        self.job_store.complete(own_job["id"], str(uuid.uuid4()))
+        self.assertTrue(record_feedback(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"],
+            own_job["id"],
+            "useful",
+            "none",
+            "15_to_30_minutes",
+            "yes",
+        ))
+
+        foreign_token = scope_token(foreign_scope, web_app.app.secret_key)
+        foreign_job = self.job_store.create(
+            foreign_scope,
+            {"prompt": "Foreign feedback"},
+            pilot_scope_token=foreign_token,
+        )
+        self.job_store.claim(foreign_job["id"])
+        self.job_store.complete(foreign_job["id"], str(uuid.uuid4()))
+        self.assertTrue(record_feedback(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"],
+            foreign_job["id"],
+            "not_useful",
+            "missing_feature",
+            "over_60_minutes",
+            "no",
+        ))
+
+        response = self.owner_client().get("/vibedash/decisions")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(
+            "<span>Retained cases</span><strong>3</strong>",
+            html,
+        )
+        self.assertIn(
+            "<span>Measured result</span><strong>2</strong>",
+            html,
+        )
+        self.assertIn("50% of measured results", html)
+        self.assertIn("1 complete value response from 1 completed opted-in analysis run.", html)
+        self.assertIn("15–30 min <b>1</b>", html)
+        self.assertIn("&gt;60 min <b>0</b>", html)
+        self.assertIn("Yes <b>1</b>", html)
+        self.assertIn("No <b>0</b>", html)
+        self.assertNotIn("Foreign validated decision", html)
+
+        with web_app.app.test_client() as stranger:
+            stranger_html = stranger.get(
+                "/vibedash/decisions"
+            ).get_data(as_text=True)
+        self.assertIn(
+            "<span>Retained cases</span><strong>0</strong>",
+            stranger_html,
+        )
+        self.assertIn("No complete value response is retained", stranger_html)
+
     def test_empty_queue_view_has_recovery_actions_and_invalid_view_is_safe(self):
         store = DecisionCaseStore(
             web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
@@ -355,6 +468,10 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("Older retained decision", response.get_data(as_text=True))
+        self.assertIn(
+            "<span>Retained cases</span><strong>2</strong>",
+            response.get_data(as_text=True),
+        )
 
 
 if __name__ == "__main__":

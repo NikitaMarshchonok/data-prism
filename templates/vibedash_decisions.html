@@ -45,6 +45,39 @@
             </aside>
         </header>
 
+        <section class="outcome-summary" aria-labelledby="outcome-summary-heading">
+            <header class="summary-heading">
+                <div>
+                    <div class="eyebrow">Retained scope snapshot</div>
+                    <h2 id="outcome-summary-heading">Decision outcomes</h2>
+                </div>
+                <p>Current retained cases only. Outcomes are self-reported observations, not causal proof.</p>
+            </header>
+            <div class="summary-grid">
+                <article><span>Retained cases</span><strong>{{ outcome_summary.retained_cases }}</strong><small>current scope</small></article>
+                <article><span>Measured result</span><strong>{{ outcome_summary.evaluated_cases }}</strong><small>validated + invalidated</small></article>
+                <article><span>Target validated</span><strong>{{ outcome_summary.validated_cases }}</strong><small>{% if outcome_summary.validation_share_among_evaluated is not none %}{{ (outcome_summary.validation_share_among_evaluated * 100)|round|int }}% of measured results{% else %}no measured results yet{% endif %}</small></article>
+                <article><span>Target invalidated</span><strong>{{ outcome_summary.invalidated_cases }}</strong><small>learning, not failure</small></article>
+                <article><span>Still tracking</span><strong>{{ outcome_summary.tracking_cases }}</strong><small>follow-up pending</small></article>
+                <article><span>Cancelled</span><strong>{{ outcome_summary.cancelled_cases }}</strong><small>excluded from validation share</small></article>
+            </div>
+            <aside class="value-summary">
+                <div>
+                    <small>Optional value signals · last {{ pilot_value_summary.cohort_days }} days</small>
+                    <strong>Your scoped, opted-in analysis feedback</strong>
+                    {% if pilot_value_summary.value_feedback_responses %}
+                    <p>{{ pilot_value_summary.value_feedback_responses }} complete value response{% if pilot_value_summary.value_feedback_responses != 1 %}s{% endif %} from {{ pilot_value_summary.completed_opted_in_analyses }} completed opted-in analysis run{% if pilot_value_summary.completed_opted_in_analyses != 1 %}s{% endif %}.</p>
+                    {% else %}
+                    <p>No complete value response is retained for this scope. Missing feedback is not interpreted as zero time saved or no intent.</p>
+                    {% endif %}
+                </div>
+                <div class="value-groups">
+                    <div><span>Perceived time saved</span><ul><li>None <b>{{ pilot_value_summary.perceived_time_saved.none }}</b></li><li>&lt;15 min <b>{{ pilot_value_summary.perceived_time_saved.under_15_minutes }}</b></li><li>15–30 min <b>{{ pilot_value_summary.perceived_time_saved['15_to_30_minutes'] }}</b></li><li>30–60 min <b>{{ pilot_value_summary.perceived_time_saved['30_to_60_minutes'] }}</b></li><li>&gt;60 min <b>{{ pilot_value_summary.perceived_time_saved.over_60_minutes }}</b></li></ul></div>
+                    <div><span>Next-cycle intent</span><ul><li>Yes <b>{{ pilot_value_summary.next_cycle_intent.yes }}</b></li><li>Maybe <b>{{ pilot_value_summary.next_cycle_intent.maybe }}</b></li><li>No <b>{{ pilot_value_summary.next_cycle_intent.no }}</b></li></ul></div>
+                </div>
+            </aside>
+        </section>
+
         <nav class="queue-tabs" aria-label="Decision review queue">
             <a href="{{ url_for('vibedash.decision_cases', view='active') }}" {% if queue_view == 'active' %}aria-current="page"{% endif %}>Active <span>{{ queue_counts.active }}</span></a>
             <a href="{{ url_for('vibedash.decision_cases', view='overdue') }}" {% if queue_view == 'overdue' %}aria-current="page"{% endif %}>Overdue <span>{{ queue_counts.overdue }}</span></a>

@@ -96,6 +96,8 @@ The decision workspace also provides a scope-protected review queue for active, 
 
 Each owned decision case can be downloaded as a standalone, print-ready HTML report containing its bounded evidence snapshot, pre-committed owner/metric/target, status, and recorded outcome. The report is generated in memory with no scripts or external assets and excludes source dataset rows. Once downloaded, the copy is controlled by its holder and falls outside server retention and account deletion.
 
+The decision workspace summarizes retained outcomes for the current guest-browser or pilot-account scope: tracking, validated, invalidated, and cancelled cases are shown with explicit denominators. It also shows that scope's retained, opted-in fixed-choice time-saved estimate and next-cycle intent. These signals are self-reported, limited to the 30-day measurement window, and never expose global pilot metrics or another scope's responses.
+
 ## Pilot onboarding and measurement
 
 Optional VibeDash pilot accounts are available from **Create account**. The
