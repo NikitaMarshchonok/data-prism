@@ -67,7 +67,7 @@ class DecisionReportTests(unittest.TestCase):
 
         report = build_decision_report_context(decision_case)
 
-        self.assertEqual(report["contract"], "decision-case-report-v1")
+        self.assertEqual(report["contract"], "decision-case-report-v2")
         self.assertEqual(report["status_label"], "Tracking")
         self.assertEqual(report["evidence"]["dataset_sha256"], "b" * 64)
         self.assertNotIn("source_rows", report)
@@ -79,6 +79,10 @@ class DecisionReportTests(unittest.TestCase):
             {**decision_case, "status": "unknown"},
             {**decision_case, "review_date": "tomorrow"},
             {**decision_case, "created_at": "unknown"},
+            {
+                **decision_case,
+                "outcome_measurement": {"contract": "unknown"},
+            },
             {**decision_case, "evidence_snapshot": []},
             {
                 **decision_case,
@@ -121,6 +125,34 @@ class DecisionReportTests(unittest.TestCase):
         self.assertNotIn("fonts.googleapis.com", html)
         self.assertNotIn("must-not-appear", html)
         self.assertNotIn("source_rows", html)
+
+    def test_structured_outcome_measurement_is_rendered_in_report(self):
+        decision_case = self.create_case()
+        updated = self.store.update_outcome(
+            decision_case["id"],
+            self.scope_id,
+            status="validated",
+            actual_outcome="Activation improved during the observation window.",
+            baseline_value="42",
+            observed_value="48",
+            outcome_unit="percent",
+            observation_start="2026-09-01",
+            observation_end="2026-09-30",
+        )
+
+        report = build_decision_report_context(updated)
+        response = self.owner_client().get(
+            f"/vibedash/decisions/{decision_case['id']}/report.html"
+        )
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(report["outcome_measurement"]["delta_value"], "6")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("42 percent", html)
+        self.assertIn("48 percent", html)
+        self.assertIn("+14.29%", html)
+        self.assertIn("2026-09-01", html)
+        self.assertIn("2026-09-30", html)
 
     def test_foreign_and_malformed_ids_are_non_leaking(self):
         decision_case = self.create_case()

@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import unittest
 import uuid
@@ -53,10 +54,21 @@ class DecisionCaseStoreTests(unittest.TestCase):
         values.update(overrides)
         return self.store.create(self.scope_id, effective_job_id, **values)
 
+    @staticmethod
+    def measurement():
+        return {
+            "baseline_value": "42",
+            "observed_value": "48",
+            "outcome_unit": "percent",
+            "observation_start": "2026-09-01",
+            "observation_end": "2026-09-30",
+        }
+
     def test_case_round_trips_and_is_isolated_by_scope(self):
         decision_case = self.create_case()
 
         self.assertEqual(decision_case["status"], "tracking")
+        self.assertEqual(decision_case["outcome_measurement"], {})
         self.assertEqual(decision_case["evidence_snapshot"]["contract"], "decision-case-source-v1")
         self.assertEqual(
             [item["id"] for item in self.store.list_for_scope(self.scope_id)],
@@ -83,15 +95,24 @@ class DecisionCaseStoreTests(unittest.TestCase):
                 status="validated",
                 actual_outcome="",
             )
+        with self.assertRaisesRegex(ValueError, "require baseline"):
+            self.store.update_outcome(
+                decision_case["id"],
+                self.scope_id,
+                status="validated",
+                actual_outcome="Activation reached 48%.",
+            )
 
         updated = self.store.update_outcome(
             decision_case["id"],
             self.scope_id,
             status="validated",
             actual_outcome="Activation reached 48% after four weeks.",
+            **self.measurement(),
         )
         self.assertEqual(updated["status"], "validated")
         self.assertIsNotNone(updated["resolved_at"])
+        self.assertEqual(updated["outcome_measurement"]["delta_value"], "6")
 
         reopened = self.store.update_outcome(
             decision_case["id"],
@@ -100,6 +121,65 @@ class DecisionCaseStoreTests(unittest.TestCase):
             actual_outcome="Interim result only.",
         )
         self.assertIsNone(reopened["resolved_at"])
+        self.assertEqual(reopened["outcome_measurement"], {})
+
+    def test_legacy_schema_is_migrated_without_inventing_measurement(self):
+        legacy_path = Path(self.temporary_directory.name) / "legacy.sqlite3"
+        case_id = uuid.uuid4().hex
+        with sqlite3.connect(legacy_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE decision_cases (
+                    id TEXT PRIMARY KEY,
+                    scope_id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    priority INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    owner TEXT NOT NULL,
+                    decision TEXT NOT NULL,
+                    success_metric TEXT NOT NULL,
+                    target_outcome TEXT NOT NULL,
+                    review_date TEXT NOT NULL,
+                    evidence_snapshot_json TEXT NOT NULL,
+                    actual_outcome TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    UNIQUE(scope_id, job_id, priority)
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO decision_cases VALUES (
+                    ?, ?, ?, 1, 'validated', 'Growth lead', 'Legacy decision',
+                    'Activation rate', 'Reach 47%', '2026-09-30', ?,
+                    'Narrative-only legacy outcome', ?, ?, ?
+                )
+                """,
+                (
+                    case_id,
+                    self.scope_id,
+                    self.job_id,
+                    json.dumps(evidence_snapshot(self.job_id)),
+                    "2026-09-01T00:00:00.000+00:00",
+                    "2026-09-30T00:00:00.000+00:00",
+                    "2026-09-30T00:00:00.000+00:00",
+                ),
+            )
+
+        migrated = DecisionCaseStore(legacy_path).get(case_id, self.scope_id)
+
+        self.assertEqual(migrated["actual_outcome"], "Narrative-only legacy outcome")
+        self.assertEqual(migrated["outcome_measurement"], {})
+        with sqlite3.connect(legacy_path) as connection:
+            columns = {
+                row[1]
+                for row in connection.execute(
+                    "PRAGMA table_info(decision_cases)"
+                )
+            }
+        self.assertIn("outcome_measurement_json", columns)
 
     def test_capacity_and_input_bounds_are_enforced(self):
         self.create_case(max_cases_per_scope=1)
@@ -201,6 +281,7 @@ class DecisionCaseStoreTests(unittest.TestCase):
             self.scope_id,
             status="invalidated",
             actual_outcome="Activation remained at 42%.",
+            **self.measurement(),
         )
         with sqlite3.connect(self.database_path) as connection:
             connection.execute(
@@ -230,6 +311,7 @@ class DecisionCaseStoreTests(unittest.TestCase):
                 self.scope_id,
                 status="validated",
                 actual_outcome="No longer available.",
+                **self.measurement(),
             )
 
 

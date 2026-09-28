@@ -16,6 +16,8 @@ from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timezone
 from typing import Any
 
+from .outcome_measurement import normalize_outcome_measurement
+
 
 ACCOUNT_EXPORT_CONTRACT = "vibedash-account-export-v1"
 MAX_ACCOUNT_EXPORT_JOBS = 50
@@ -357,6 +359,14 @@ def _safe_evidence(value: Any) -> dict[str, Any] | None:
     return result or None
 
 
+def _safe_outcome_measurement(value: Any) -> dict[str, Any] | None:
+    try:
+        normalized = normalize_outcome_measurement(value)
+    except (TypeError, ValueError):
+        return None
+    return normalized or None
+
+
 def _safe_case(case: Any) -> dict[str, Any] | None:
     if not isinstance(case, Mapping):
         return None
@@ -384,6 +394,9 @@ def _safe_case(case: Any) -> dict[str, Any] | None:
     evidence = _safe_evidence(case.get("evidence_snapshot"))
     if evidence:
         result["evidence"] = evidence
+    measurement = _safe_outcome_measurement(case.get("outcome_measurement"))
+    if measurement:
+        result["outcome_measurement"] = measurement
     return result
 
 

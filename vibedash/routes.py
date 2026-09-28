@@ -2328,6 +2328,11 @@ if vibedash_bp:
                 _analysis_scope_id(),
                 status=request.form.get('status', ''),
                 actual_outcome=request.form.get('actual_outcome', ''),
+                baseline_value=request.form.get('baseline_value', ''),
+                observed_value=request.form.get('observed_value', ''),
+                outcome_unit=request.form.get('outcome_unit', ''),
+                observation_start=request.form.get('observation_start', ''),
+                observation_end=request.form.get('observation_end', ''),
             )
         except ScopeClosedError:
             return jsonify({'error': 'This analysis scope is no longer available.'}), 409

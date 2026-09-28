@@ -7,6 +7,8 @@ from collections.abc import Mapping
 from datetime import date, datetime, timezone
 from typing import Any
 
+from .outcome_measurement import normalize_outcome_measurement
+
 
 _IDENTIFIER_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 _FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -111,13 +113,20 @@ def build_decision_report_context(decision_case: Mapping[str, Any]) -> dict[str,
         maximum=1200,
         required=False,
     )
+    outcome_measurement = normalize_outcome_measurement(
+        decision_case.get("outcome_measurement")
+    )
+    if status in {"validated", "invalidated"} and not outcome_measurement:
+        # Legacy retained cases remain downloadable, but the contract makes the
+        # absence explicit instead of presenting prose as structured evidence.
+        outcome_measurement = None
     resolved_at = _timestamp(
         decision_case.get("resolved_at"),
         "Resolution time",
         required=False,
     )
     return {
-        "contract": "decision-case-report-v1",
+        "contract": "decision-case-report-v2",
         "case_id": case_id,
         "short_id": case_id[:12],
         "priority_number": priority_number,
@@ -140,6 +149,7 @@ def build_decision_report_context(decision_case: Mapping[str, Any]) -> dict[str,
         "review_date": review_date.isoformat(),
         "actual_outcome": actual_outcome,
         "outcome_recorded": bool(actual_outcome),
+        "outcome_measurement": outcome_measurement,
         "created_at": _timestamp(decision_case.get("created_at"), "Creation time"),
         "updated_at": _timestamp(decision_case.get("updated_at"), "Update time"),
         "resolved_at": resolved_at,

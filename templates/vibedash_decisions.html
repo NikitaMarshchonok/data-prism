@@ -55,7 +55,7 @@
             </header>
             <div class="summary-grid">
                 <article><span>Retained cases</span><strong>{{ outcome_summary.retained_cases }}</strong><small>current scope</small></article>
-                <article><span>Measured result</span><strong>{{ outcome_summary.evaluated_cases }}</strong><small>validated + invalidated</small></article>
+                <article><span>Evaluated outcome</span><strong>{{ outcome_summary.evaluated_cases }}</strong><small>validated + invalidated statuses</small></article>
                 <article><span>Target validated</span><strong>{{ outcome_summary.validated_cases }}</strong><small>{% if outcome_summary.validation_share_among_evaluated is not none %}{{ (outcome_summary.validation_share_among_evaluated * 100)|round|int }}% of measured results{% else %}no measured results yet{% endif %}</small></article>
                 <article><span>Target invalidated</span><strong>{{ outcome_summary.invalidated_cases }}</strong><small>learning, not failure</small></article>
                 <article><span>Still tracking</span><strong>{{ outcome_summary.tracking_cases }}</strong><small>follow-up pending</small></article>
@@ -142,20 +142,52 @@
                 </section>
                 {% endif %}
 
+                {% if selected_case.outcome_measurement %}
+                <section class="measurement-result" aria-label="Retained outcome measurement">
+                    <div><small>Baseline</small><strong>{{ selected_case.outcome_measurement.baseline_value }} {{ selected_case.outcome_measurement.unit }}</strong></div>
+                    <div><small>Observed</small><strong>{{ selected_case.outcome_measurement.observed_value }} {{ selected_case.outcome_measurement.unit }}</strong></div>
+                    <div><small>Change</small><strong>{{ selected_case.outcome_measurement.delta_value }} {{ selected_case.outcome_measurement.unit }}{% if selected_case.outcome_measurement.relative_change_percent is not none %} · {% if selected_case.outcome_measurement.relative_change_percent > 0 %}+{% endif %}{{ selected_case.outcome_measurement.relative_change_percent }}%{% endif %}</strong></div>
+                    <div><small>Observation period</small><strong>{{ selected_case.outcome_measurement.period_start }} → {{ selected_case.outcome_measurement.period_end }}</strong></div>
+                </section>
+                {% endif %}
+
                 <form class="outcome-form" method="post" action="{{ url_for('vibedash.update_decision_case_outcome', case_id=selected_case.id) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <div class="form-heading"><small>Measured result</small><h3>What happened after the decision?</h3></div>
-                    <label>Status
-                        <select name="status" required>
-                            <option value="tracking" {% if selected_case.status == 'tracking' %}selected{% endif %}>Still tracking</option>
-                            <option value="validated" {% if selected_case.status == 'validated' %}selected{% endif %}>Target validated</option>
-                            <option value="invalidated" {% if selected_case.status == 'invalidated' %}selected{% endif %}>Target invalidated</option>
-                            <option value="cancelled" {% if selected_case.status == 'cancelled' %}selected{% endif %}>Decision cancelled</option>
-                        </select>
-                    </label>
-                    <label>Actual outcome
-                        <textarea name="actual_outcome" maxlength="1200" rows="4" placeholder="Record the observed metric, period, and important limitations.">{{ selected_case.actual_outcome }}</textarea>
-                    </label>
+                    <div class="outcome-main-fields">
+                        <label>Status
+                            <select name="status" required>
+                                <option value="tracking" {% if selected_case.status == 'tracking' %}selected{% endif %}>Still tracking</option>
+                                <option value="validated" {% if selected_case.status == 'validated' %}selected{% endif %}>Target validated</option>
+                                <option value="invalidated" {% if selected_case.status == 'invalidated' %}selected{% endif %}>Target invalidated</option>
+                                <option value="cancelled" {% if selected_case.status == 'cancelled' %}selected{% endif %}>Decision cancelled</option>
+                            </select>
+                        </label>
+                        <label>Observed result and limitations
+                            <textarea name="actual_outcome" maxlength="1200" rows="4" placeholder="Explain what happened, the metric definition, and important limitations.">{{ selected_case.actual_outcome }}</textarea>
+                        </label>
+                    </div>
+                    <fieldset class="measurement-fields">
+                        <legend>Comparable outcome measurement</legend>
+                        <p>Required for validated or invalidated outcomes. Use plain decimal values and one shared unit; Data Prism calculates the change but does not claim causality.</p>
+                        <div class="measurement-grid">
+                            <label>Baseline value
+                                <input name="baseline_value" inputmode="decimal" maxlength="40" placeholder="42" value="{{ selected_case.outcome_measurement.baseline_value or '' }}">
+                            </label>
+                            <label>Observed value
+                                <input name="observed_value" inputmode="decimal" maxlength="40" placeholder="48" value="{{ selected_case.outcome_measurement.observed_value or '' }}">
+                            </label>
+                            <label>Unit
+                                <input name="outcome_unit" maxlength="40" placeholder="percent" value="{{ selected_case.outcome_measurement.unit or '' }}">
+                            </label>
+                            <label>Observation start
+                                <input name="observation_start" type="date" value="{{ selected_case.outcome_measurement.period_start or '' }}">
+                            </label>
+                            <label>Observation end
+                                <input name="observation_end" type="date" value="{{ selected_case.outcome_measurement.period_end or '' }}">
+                            </label>
+                        </div>
+                    </fieldset>
                     <button class="button button-primary" type="submit">Update outcome</button>
                 </form>
 

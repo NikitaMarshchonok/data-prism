@@ -100,9 +100,22 @@ class PilotMetricsTests(unittest.TestCase):
         cases = DecisionCaseStore(self.path)
         cases.update_outcome(first['id'], self.scope, status='cancelled', actual_outcome='Not attempted')
         self.assertEqual(self.report()['analyses_with_recorded_outcome'], 0)
-        cases.update_outcome(first['id'], self.scope, status='validated', actual_outcome='Self-reported test result')
+        measurement = {
+            'baseline_value': '42',
+            'observed_value': '48',
+            'outcome_unit': 'percent',
+            'observation_start': '2026-09-01',
+            'observation_end': '2026-09-30',
+        }
+        cases.update_outcome(
+            first['id'], self.scope, status='validated',
+            actual_outcome='Self-reported test result', **measurement,
+        )
         first_timestamp = self.row(job_id)['outcome_at']
-        cases.update_outcome(first['id'], self.scope, status='invalidated', actual_outcome='Corrected result')
+        cases.update_outcome(
+            first['id'], self.scope, status='invalidated',
+            actual_outcome='Corrected result', **measurement,
+        )
         self.assertEqual(self.row(job_id)['outcome_at'], first_timestamp)
         report = self.report()
         self.assertEqual(report['analyses_with_decision'], 1)
