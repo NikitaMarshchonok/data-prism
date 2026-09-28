@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterator
 
 from .analysis_jobs import ScopeClosedError
+from .outcome_measurement import (
+    build_outcome_measurement,
+    deserialize_outcome_measurement,
+    serialize_outcome_measurement,
+)
 from .pilot_metrics import initialize_metrics, mark_stage
 
 
@@ -155,8 +160,9 @@ class DecisionCaseStore:
                         id, scope_id, job_id, priority, status, owner,
                         decision, success_metric, target_outcome, review_date,
                         evidence_snapshot_json, actual_outcome,
+                        outcome_measurement_json,
                         created_at, updated_at, resolved_at
-                    ) VALUES (?, ?, ?, ?, 'tracking', ?, ?, ?, ?, ?, ?, '', ?, ?, NULL)
+                    ) VALUES (?, ?, ?, ?, 'tracking', ?, ?, ?, ?, ?, ?, '', '{}', ?, ?, NULL)
                     """,
                     (
                         case_id,
@@ -198,6 +204,7 @@ class DecisionCaseStore:
                 SELECT id, scope_id, job_id, priority, status, owner,
                        decision, success_metric, target_outcome, review_date,
                        evidence_snapshot_json, actual_outcome,
+                       outcome_measurement_json,
                        created_at, updated_at, resolved_at
                 FROM decision_cases
                 WHERE id = ?{scope_filter}
@@ -220,6 +227,7 @@ class DecisionCaseStore:
                 SELECT id, scope_id, job_id, priority, status, owner,
                        decision, success_metric, target_outcome, review_date,
                        evidence_snapshot_json, actual_outcome,
+                       outcome_measurement_json,
                        created_at, updated_at, resolved_at
                 FROM decision_cases
                 WHERE scope_id = ? AND job_id = ? AND priority = ?
@@ -256,6 +264,7 @@ class DecisionCaseStore:
                 SELECT id, scope_id, job_id, priority, status, owner,
                        decision, success_metric, target_outcome, review_date,
                        evidence_snapshot_json, actual_outcome,
+                       outcome_measurement_json,
                        created_at, updated_at, resolved_at
                 FROM decision_cases
                 WHERE scope_id = ?
@@ -271,6 +280,7 @@ class DecisionCaseStore:
                     SELECT id, scope_id, job_id, priority, status, owner,
                            decision, success_metric, target_outcome, review_date,
                            evidence_snapshot_json, actual_outcome,
+                           outcome_measurement_json,
                            created_at, updated_at, resolved_at
                     FROM decision_cases
                     WHERE scope_id = ?
@@ -308,6 +318,11 @@ class DecisionCaseStore:
         *,
         status: str,
         actual_outcome: str,
+        baseline_value: Any = "",
+        observed_value: Any = "",
+        outcome_unit: Any = "",
+        observation_start: Any = "",
+        observation_end: Any = "",
     ) -> Dict[str, Any] | None:
         normalized_id = _validated_identifier(case_id, "decision case")
         normalized_scope = _validated_identifier(scope_id, "scope")
@@ -319,6 +334,15 @@ class DecisionCaseStore:
             maximum=1200,
             required=status in TERMINAL_STATUSES,
         )
+        measurement = build_outcome_measurement(
+            baseline_value=baseline_value,
+            observed_value=observed_value,
+            unit=outcome_unit,
+            period_start=observation_start,
+            period_end=observation_end,
+            required=status in {"validated", "invalidated"},
+        )
+        measurement_json = serialize_outcome_measurement(measurement)
         timestamp = _utc_now()
         resolved_at = timestamp if status in TERMINAL_STATUSES else None
         with self._connection() as connection:
@@ -331,12 +355,14 @@ class DecisionCaseStore:
             cursor = connection.execute(
                 """
                 UPDATE decision_cases
-                SET status = ?, actual_outcome = ?, updated_at = ?, resolved_at = ?
+                SET status = ?, actual_outcome = ?, outcome_measurement_json = ?,
+                    updated_at = ?, resolved_at = ?
                 WHERE id = ? AND scope_id = ?
                 """,
                 (
                     status,
                     outcome,
+                    measurement_json,
                     timestamp,
                     resolved_at,
                     normalized_id,
@@ -382,6 +408,9 @@ class DecisionCaseStore:
         decision_case["evidence_snapshot"] = json.loads(
             decision_case.pop("evidence_snapshot_json")
         )
+        decision_case["outcome_measurement"] = deserialize_outcome_measurement(
+            decision_case.pop("outcome_measurement_json")
+        )
         return decision_case
 
     @contextmanager
@@ -420,6 +449,7 @@ class DecisionCaseStore:
                     review_date TEXT NOT NULL,
                     evidence_snapshot_json TEXT NOT NULL,
                     actual_outcome TEXT NOT NULL DEFAULT '',
+                    outcome_measurement_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     resolved_at TEXT,
@@ -433,3 +463,14 @@ class DecisionCaseStore:
                 ON decision_cases(status, review_date ASC);
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(decision_cases)"
+                ).fetchall()
+            }
+            if "outcome_measurement_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE decision_cases ADD COLUMN "
+                    "outcome_measurement_json TEXT NOT NULL DEFAULT '{}'"
+                )

@@ -117,6 +117,35 @@ class AccountExportTests(unittest.TestCase):
         }])
         self.assertNotIn("review_date", result["decision_cases"][0])
 
+    def test_structured_outcome_measurement_is_bounded_and_recomputed(self):
+        measurement = {
+            "contract": "decision-outcome-measurement-v1",
+            "baseline_value": "42",
+            "observed_value": "48",
+            "unit": "percent",
+            "period_start": "2026-09-01",
+            "period_end": "2026-09-30",
+            "delta_value": "ATTACKER_DERIVED_VALUE",
+        }
+        result = self.build(cases=[{
+            "id": self.case_id,
+            "outcome_measurement": measurement,
+        }])
+
+        exported = result["decision_cases"][0]["outcome_measurement"]
+        self.assertEqual(exported["delta_value"], "6")
+        self.assertEqual(exported["relative_change_percent"], 14.29)
+        self.assertNotIn("ATTACKER_DERIVED_VALUE", str(result))
+
+        corrupt = self.build(cases=[{
+            "id": self.case_id,
+            "outcome_measurement": {"contract": "unknown"},
+        }])
+        self.assertNotIn(
+            "outcome_measurement",
+            corrupt["decision_cases"][0],
+        )
+
     def test_corrupt_records_cannot_inject_bounded_enum_values(self):
         result = self.build(
             jobs=[{

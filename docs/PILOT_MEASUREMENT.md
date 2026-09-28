@@ -140,11 +140,13 @@ upload cohort, so operators must keep their own test uploads out of real-pilot
 results.
 
 Review-date adherence, objectively measured time saved versus the old workflow,
-measurement quality of outcome notes, observed repeat use by a real person, and
-willingness to adopt or pay remain **interview/manual follow-up measures**, not
-automatically measured by this table. The new fixed-choice fields record only an
-estimate and intention. Existing Decision Brief priorities are heuristic; the
-prompt does not guarantee a tailored business recommendation.
+observed repeat use by a real person, and willingness to adopt or pay remain
+**interview/manual follow-up measures**, not automatically measured by this
+table. Decision cases can retain a structured baseline-to-observed metric and
+period, but those values remain user-entered observations and do not establish
+causality or independently verify measurement quality. The fixed-choice value
+fields record only an estimate and intention. Existing Decision Brief priorities
+are heuristic; the prompt does not guarantee a tailored business recommendation.
 
 ## Make a decision after two reporting cycles
 

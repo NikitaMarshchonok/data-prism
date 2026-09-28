@@ -36,8 +36,14 @@ updated later. Supported states are:
 | `invalidated` | The user reports that the target was not met |
 | `cancelled` | The decision was not completed or can no longer be evaluated |
 
-A terminal state requires a written actual outcome. Reopening a case to
-`tracking` clears its resolution timestamp but preserves the outcome note.
+A terminal state requires a written actual outcome. `validated` and
+`invalidated` additionally require a complete numeric baseline value, observed
+value, shared unit, observation start, and observation end. Data Prism
+canonicalizes the decimals and calculates absolute and relative change; a zero
+baseline intentionally has no percentage-change value. The measurement supports
+comparison and audit, not causal attribution. Reopening a case to `tracking`
+clears its resolution timestamp; submitting no measurement fields also clears
+the prior structured measurement while the supplied outcome note is retained.
 
 ## Privacy and persistence boundary
 
@@ -79,11 +85,12 @@ notifications or guarantee that a review occurs.
 
 An owned case can be exported as a standalone HTML decision report for offline
 review or browser Print/Save as PDF. The export contains the bounded evidence
-snapshot, pre-committed decision fields, current status, and recorded outcome;
-it excludes source rows, scripts, external assets, forms, and private route
-links. Export generation is in memory and uses the same signed scope check as
-the interactive case. A downloaded copy is controlled by its holder and is no
-longer covered by server retention, withdrawal, or account deletion.
+snapshot, pre-committed decision fields, current status, recorded outcome, and
+any revalidated structured measurement; it excludes source rows, scripts,
+external assets, forms, and private route links. Export generation is in memory
+and uses the same signed scope check as the interactive case. A downloaded copy
+is controlled by its holder and is no longer covered by server retention,
+withdrawal, or account deletion.
 
 The decision workspace also displays an aggregate snapshot of the current
 scope's retained cases. Validation share uses only `validated + invalidated` as

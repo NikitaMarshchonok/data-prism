@@ -104,13 +104,13 @@ The demo generates a fixed synthetic dataset and uses a versioned dashboard spec
 
 On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the signed guest-browser or pilot-account scope; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 2 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
 
-A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed result. Both reads and writes require the same signed guest-browser or pilot-account scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
+A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed-result note, while validated and invalidated states additionally require a complete numeric baseline, observed value, shared unit, and observation period. A pure validator canonicalizes bounded finite decimals, checks the period ordering, and recomputes absolute and relative change. The additive SQLite JSON column defaults to an empty object for legacy cases, so older narrative outcomes remain readable without being represented as structured measurements. Both reads and writes require the same signed guest-browser or pilot-account scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
 
 An owned active decision case can also download an in-memory RFC 5545 `.ics` all-day review reminder. Its UID is derived from the case identifier, its timestamp from the immutable case creation time, and its content from already bounded case fields. Calendar text is escaped and UTF-8 lines are folded before the response is returned with private, no-store and nosniff headers. There is no server-side calendar connection or reminder scheduler.
 
 The decision workspace derives a review queue from the already scoped case list without adding another persistence layer. Tracking cases are classified as overdue, due today, due within seven days, or scheduled later and ordered by review date; non-tracking cases are classified as closed and ordered by their last update. Counts and filters are calculated only after the store has applied the current guest-browser or pilot-account scope.
 
-`GET /vibedash/decisions/<case_id>/report.html` produces an owned, in-memory standalone decision report. A strict view builder copies only approved bounded fields from the stored case and evidence snapshot; source rows and unrecognized snapshot fields are excluded. The document contains inline trusted CSS but no scripts, forms, external assets, or private route links, and the response applies private/no-store, nosniff, frame denial, no-referrer, and restrictive CSP headers. The exported copy is not persisted by Data Prism and is outside subsequent retention or deletion controls.
+`GET /vibedash/decisions/<case_id>/report.html` produces an owned, in-memory standalone decision report. A strict view builder copies only approved bounded fields from the stored case and evidence snapshot and revalidates any structured outcome measurement; source rows, unrecognized snapshot fields, and untrusted derived values are excluded. The document contains inline trusted CSS but no scripts, forms, external assets, or private route links, and the response applies private/no-store, nosniff, frame denial, no-referrer, and restrictive CSP headers. The exported copy is not persisted by Data Prism and is outside subsequent retention or deletion controls.
 
 The decision workspace derives a bounded outcome summary from the already scope-filtered retained cases. A separate read-only query uses the HMAC-derived token for that same scope to summarize only its complete fixed-choice pilot value responses. The browser receives no scope token, job identifier, raw feedback row, global cohort total, or data from another scope; missing responses remain missing rather than being interpreted as negative outcomes.
 
@@ -126,10 +126,11 @@ exist. No account, scope, job, or case identifier is accepted from the HTTP
 request.
 
 The export is an in-memory JSON download named from the first 12 characters of
-the account id. It intentionally excludes raw datasets, prompts, filenames,
-schema/session data, and global pilot metrics. Builder or serialization failures
-return a generic response and never log account-owned content. The route does
-not create a file or extend artifact retention.
+the account id. It can include a revalidated structured outcome measurement,
+but intentionally excludes raw datasets, prompts, filenames, schema/session
+data, and global pilot metrics. Builder or serialization failures return a
+generic response and never log account-owned content. The route does not create
+a file or extend artifact retention.
 
 ### Account deletion boundary
 

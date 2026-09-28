@@ -98,6 +98,25 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
             "review_date": "2026-10-15",
         }
 
+    @staticmethod
+    def outcome_measurement():
+        return {
+            "baseline_value": "42",
+            "observed_value": "48",
+            "outcome_unit": "percent",
+            "observation_start": "2026-09-01",
+            "observation_end": "2026-09-30",
+        }
+
+    def valid_outcome_form(self, *, status="validated", actual_outcome=None):
+        return {
+            "csrf_token": self.csrf_token,
+            "status": status,
+            "actual_outcome": actual_outcome
+            or "Activation reached 48% after four weeks.",
+            **self.outcome_measurement(),
+        }
+
     @patch("vibedash.routes.load_session_data")
     def test_owner_can_create_and_open_evidence_linked_case(self, load_session):
         load_session.return_value = self.session_data
@@ -164,28 +183,35 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
 
         missing = client.post(
             f"/vibedash/decisions/{case_id}/outcome",
-            data={
-                "csrf_token": self.csrf_token,
-                "status": "validated",
-                "actual_outcome": "",
-            },
+            data={**self.valid_outcome_form(), "actual_outcome": ""},
         )
-        updated = client.post(
+        missing_measurement = client.post(
             f"/vibedash/decisions/{case_id}/outcome",
             data={
                 "csrf_token": self.csrf_token,
                 "status": "validated",
-                "actual_outcome": "Activation reached 48% after four weeks.",
+                "actual_outcome": "Activation reached 48%.",
             },
+        )
+        updated = client.post(
+            f"/vibedash/decisions/{case_id}/outcome",
+            data=self.valid_outcome_form(),
         )
 
         self.assertEqual(missing.status_code, 400)
+        self.assertEqual(missing_measurement.status_code, 400)
         self.assertEqual(updated.status_code, 303)
         stored = DecisionCaseStore(
             web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
         ).get(case_id, self.scope_id)
         self.assertEqual(stored["status"], "validated")
         self.assertEqual(stored["actual_outcome"], "Activation reached 48% after four weeks.")
+        self.assertEqual(stored["outcome_measurement"]["delta_value"], "6")
+        detail = client.get(updated.headers["Location"]).get_data(as_text=True)
+        self.assertIn("Comparable outcome measurement", detail)
+        self.assertIn("42 percent", detail)
+        self.assertIn("48 percent", detail)
+        self.assertIn("+14.29%", detail)
 
     def test_empty_decision_workspace_is_rendered(self):
         response = self.owner_client().get("/vibedash/decisions")
@@ -262,6 +288,7 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
             self.scope_id,
             status="validated",
             actual_outcome="The agreed threshold was reached.",
+            **self.outcome_measurement(),
         )
 
         client = self.owner_client()
@@ -323,12 +350,14 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
             self.scope_id,
             status="validated",
             actual_outcome="The target was reached.",
+            **self.outcome_measurement(),
         )
         cases.update_outcome(
             invalidated["id"],
             self.scope_id,
             status="invalidated",
             actual_outcome="The target was not reached.",
+            **self.outcome_measurement(),
         )
 
         foreign_scope = uuid.uuid4().hex
@@ -338,6 +367,7 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
             foreign_scope,
             status="validated",
             actual_outcome="Foreign outcome.",
+            **self.outcome_measurement(),
         )
 
         own_token = scope_token(self.scope_id, web_app.app.secret_key)
@@ -383,7 +413,7 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
             html,
         )
         self.assertIn(
-            "<span>Measured result</span><strong>2</strong>",
+            "<span>Evaluated outcome</span><strong>2</strong>",
             html,
         )
         self.assertIn("50% of measured results", html)

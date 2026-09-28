@@ -46,6 +46,16 @@
         <section class="panel outcome-panel">
             <div class="section-heading"><span>03</span><h2>Observed outcome</h2></div>
             {% if report.outcome_recorded %}<p>{{ report.actual_outcome }}</p>{% else %}<p class="pending">No observed outcome has been recorded yet.</p>{% endif %}
+            {% if report.outcome_measurement %}
+            <div class="measurement-grid">
+                <div><small>Baseline</small><strong>{{ report.outcome_measurement.baseline_value }} {{ report.outcome_measurement.unit }}</strong></div>
+                <div><small>Observed</small><strong>{{ report.outcome_measurement.observed_value }} {{ report.outcome_measurement.unit }}</strong></div>
+                <div><small>Change</small><strong>{{ report.outcome_measurement.delta_value }} {{ report.outcome_measurement.unit }}{% if report.outcome_measurement.relative_change_percent is not none %} · {% if report.outcome_measurement.relative_change_percent > 0 %}+{% endif %}{{ report.outcome_measurement.relative_change_percent }}%{% endif %}</strong></div>
+                <div><small>Observation period</small><strong>{{ report.outcome_measurement.period_start }} → {{ report.outcome_measurement.period_end }}</strong></div>
+            </div>
+            {% elif report.status in ('validated', 'invalidated') %}
+            <p class="pending">This legacy outcome has narrative notes but no structured baseline-to-observed measurement.</p>
+            {% endif %}
             <div class="timeline">
                 <div><small>Created</small><strong>{{ report.created_at }}</strong></div>
                 <div><small>Last updated</small><strong>{{ report.updated_at }}</strong></div>
