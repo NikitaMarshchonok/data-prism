@@ -102,6 +102,10 @@ does not by itself satisfy a release gate.
 
 ## Go/no-go checklist for every supervised pilot
 
+Use the [supervised pilot runbook](PILOT_EXECUTION.md) and copy the
+[blank scorecard](PILOT_SESSION_SCORECARD.md) to a private location before the
+session. Never fill or commit the repository template.
+
 ### Before the session
 
 - [ ] Confirm the participant matches the narrow use case: a recurring SaaS
