@@ -140,6 +140,9 @@ does not by itself satisfy a release gate.
 - [ ] Record whether the participant completed the workflow, needed assistance,
   understood the evidence, and identified a concrete next action.
 - [ ] Treat perceived time saved and next-cycle intent as self-reports only.
+- [ ] With the participant's agreement, download the aggregate pilot evidence
+  receipt before ephemeral state expires and store it outside the public
+  repository. Do not treat the receipt as identity, causal, or adoption proof.
 - [ ] On the agreed review date, verify whether the participant returned, used
   the evidence, recorded an observed outcome, and would connect a recurring data
   source or make a concrete adoption commitment.

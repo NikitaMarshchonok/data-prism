@@ -434,6 +434,156 @@ class VibeDashDecisionRouteTests(unittest.TestCase):
         )
         self.assertIn("No complete value response is retained", stranger_html)
 
+    def test_scope_can_download_private_aggregate_pilot_receipt(self):
+        cases = DecisionCaseStore(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
+        )
+
+        def create_validated(scope_id, label):
+            job_id = uuid.uuid4().hex
+            decision_case = cases.create(
+                scope_id,
+                job_id,
+                priority=1,
+                owner="Private owner",
+                decision=label,
+                success_metric="Activation rate",
+                target_outcome="Reach the agreed threshold.",
+                review_date="2026-10-15",
+                evidence_snapshot={
+                    "contract": "decision-case-source-v1",
+                    "analysis_job_id": job_id,
+                    "priority": {"number": 1, "title": label},
+                },
+            )
+            cases.update_outcome(
+                decision_case["id"],
+                scope_id,
+                status="validated",
+                actual_outcome="Private observed result.",
+                **self.outcome_measurement(),
+            )
+            return decision_case, job_id
+
+        own_case, own_case_job_id = create_validated(
+            self.scope_id, "Private own decision"
+        )
+        foreign_scope = uuid.uuid4().hex
+        foreign_case, foreign_case_job_id = create_validated(
+            foreign_scope, "Foreign private decision"
+        )
+
+        own_token = scope_token(self.scope_id, web_app.app.secret_key)
+        own_job = self.job_store.create(
+            self.scope_id,
+            {"prompt": "Private own feedback"},
+            pilot_scope_token=own_token,
+        )
+        self.job_store.claim(own_job["id"])
+        self.job_store.complete(own_job["id"], str(uuid.uuid4()))
+        self.assertTrue(record_feedback(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"],
+            own_job["id"],
+            "useful",
+            "none",
+            "15_to_30_minutes",
+            "yes",
+        ))
+
+        foreign_token = scope_token(foreign_scope, web_app.app.secret_key)
+        foreign_job = self.job_store.create(
+            foreign_scope,
+            {"prompt": "Foreign private feedback"},
+            pilot_scope_token=foreign_token,
+        )
+        self.job_store.claim(foreign_job["id"])
+        self.job_store.complete(foreign_job["id"], str(uuid.uuid4()))
+        self.assertTrue(record_feedback(
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"],
+            foreign_job["id"],
+            "not_useful",
+            "missing_feature",
+            "over_60_minutes",
+            "no",
+        ))
+
+        client = self.owner_client()
+        workspace = client.get("/vibedash/decisions")
+        response = client.post(
+            "/vibedash/decisions/pilot-receipt.json",
+            data={"csrf_token": self.csrf_token},
+        )
+
+        self.assertIn(
+            "Download pilot receipt", workspace.get_data(as_text=True)
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/json")
+        self.assertEqual(response.headers["Cache-Control"], "private, no-store")
+        self.assertEqual(response.headers["X-Content-Type-Options"], "nosniff")
+        self.assertIn(
+            'filename="data-prism-pilot-receipt-',
+            response.headers["Content-Disposition"],
+        )
+        receipt = response.get_json()
+        self.assertEqual(receipt["contract"], "pilot-evidence-receipt-v1")
+        self.assertEqual(receipt["decision_outcomes"]["retained_cases"], 1)
+        self.assertEqual(receipt["decision_outcomes"]["validated_cases"], 1)
+        self.assertEqual(
+            receipt["value_feedback"]["value_feedback_responses"], 1
+        )
+        self.assertEqual(
+            receipt["value_feedback"]["next_cycle_intent"]["yes"], 1
+        )
+        serialized = response.get_data(as_text=True)
+        for private_value in (
+            self.scope_id,
+            foreign_scope,
+            own_case["id"],
+            foreign_case["id"],
+            own_case_job_id,
+            foreign_case_job_id,
+            own_job["id"],
+            foreign_job["id"],
+            "Private own decision",
+            "Foreign private decision",
+            "Private owner",
+        ):
+            self.assertNotIn(private_value, serialized)
+
+        expired = client.post(
+            "/vibedash/decisions/pilot-receipt.json",
+            data={"csrf_token": "wrong"},
+        )
+        self.assertEqual(expired.status_code, 400)
+        self.assertEqual(expired.headers["Cache-Control"], "private, no-store")
+
+        self.job_store.erase_scope_if_idle(
+            self.scope_id,
+            pilot_scope_token=own_token,
+        )
+        closed = client.post(
+            "/vibedash/decisions/pilot-receipt.json",
+            data={"csrf_token": self.csrf_token},
+        )
+        self.assertEqual(closed.status_code, 409)
+        self.assertEqual(closed.headers["Cache-Control"], "private, no-store")
+
+        stranger = web_app.app.test_client()
+        stranger_token = "c" * 64
+        with stranger.session_transaction() as browser_session:
+            browser_session["vibedash_decision_csrf_token"] = stranger_token
+        empty = stranger.post(
+            "/vibedash/decisions/pilot-receipt.json",
+            data={"csrf_token": stranger_token},
+        )
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(empty.get_json()["decision_outcomes"]["retained_cases"], 0)
+        self.assertEqual(
+            empty.get_json()["value_feedback"]["value_feedback_responses"],
+            0,
+        )
+
     def test_empty_queue_view_has_recovery_actions_and_invalid_view_is_safe(self):
         store = DecisionCaseStore(
             web_app.app.config["VIBEDASH_JOB_STORE_PATH"]
