@@ -75,6 +75,11 @@ try:
     from .decision_calendar import build_decision_review_calendar
     from .decision_report import build_decision_report_context
     from .decision_outcomes import build_decision_outcome_summary
+    from .pilot_receipt import (
+        PilotReceiptError,
+        build_pilot_evidence_receipt,
+        serialize_pilot_evidence_receipt,
+    )
     from .decision_queue import (
         ALLOWED_DECISION_QUEUE_VIEWS,
         build_decision_queue,
@@ -438,6 +443,23 @@ if vibedash_bp:
                 scope_token(scope_id, current_app.secret_key),
             ),
         }
+
+
+    def _set_pilot_receipt_headers(response, *, generated_date=None):
+        """Apply a private download policy to the aggregate pilot receipt."""
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = "default-src 'none'; sandbox"
+        if generated_date is not None:
+            response.headers['Content-Type'] = 'application/json; charset=utf-8'
+            response.headers['Content-Disposition'] = (
+                'attachment; filename="data-prism-pilot-receipt-'
+                f'{generated_date}.json"'
+            )
+        return response
 
 
     def _load_vibedash_csv(source, *, nrows=None, max_columns=None):
@@ -1516,6 +1538,73 @@ if vibedash_bp:
                 'VIBEDASH_DECISION_RETENTION_DAYS'
             ],
             **summary,
+        )
+
+
+    @vibedash_bp.post('/decisions/pilot-receipt.json')
+    def pilot_evidence_receipt():
+        """Download an aggregate-only receipt for the current signed scope."""
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            response = make_response(
+                jsonify(error='This form has expired. Please try again.'),
+                400,
+            )
+            return _set_pilot_receipt_headers(response)
+
+        scope_id = _analysis_scope_id()
+        generated_at = datetime.now(timezone.utc)
+        job_store = _analysis_job_store()
+        case_store = _decision_case_store()
+
+        def build_receipt(connection):
+            outcome_summary = build_decision_outcome_summary(
+                case_store.count_by_status(scope_id, connection=connection)
+            )
+            value_summary = build_scope_value_feedback(
+                current_app.config['VIBEDASH_JOB_STORE_PATH'],
+                scope_token(scope_id, current_app.secret_key),
+                connection=connection,
+            )
+            document = build_pilot_evidence_receipt(
+                outcome_summary,
+                value_summary,
+                service_version=current_app.config['SERVICE_VERSION'],
+                decision_retention_days=current_app.config[
+                    'VIBEDASH_DECISION_RETENTION_DAYS'
+                ],
+                generated_at=generated_at,
+            )
+            return serialize_pilot_evidence_receipt(document)
+
+        try:
+            serialized = job_store.run_if_scope_open(scope_id, build_receipt)
+        except ScopeClosedError:
+            response = make_response(
+                jsonify(error='This VibeDash scope is no longer available.'),
+                409,
+            )
+            return _set_pilot_receipt_headers(response)
+        except PilotReceiptError:
+            response = make_response(
+                jsonify(error='The pilot evidence receipt is unavailable.'),
+                500,
+            )
+            return _set_pilot_receipt_headers(response)
+        except Exception:
+            current_app.logger.exception(
+                'Pilot evidence receipt could not be generated',
+                extra={'event': 'vibedash_pilot_receipt_failed'},
+            )
+            response = make_response(
+                jsonify(error='The pilot evidence receipt is unavailable.'),
+                500,
+            )
+            return _set_pilot_receipt_headers(response)
+
+        response = make_response(serialized)
+        return _set_pilot_receipt_headers(
+            response,
+            generated_date=generated_at.date().isoformat(),
         )
 
 

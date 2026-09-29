@@ -98,6 +98,8 @@ Each owned decision case can be downloaded as a standalone, print-ready HTML rep
 
 The decision workspace summarizes retained outcomes for the current guest-browser or pilot-account scope: tracking, validated, invalidated, and cancelled cases are shown with explicit denominators. It also shows that scope's retained, opted-in fixed-choice time-saved estimate and next-cycle intent. These signals are self-reported, limited to the 30-day measurement window, and never expose global pilot metrics or another scope's responses.
 
+The same workspace can download a small, aggregate-only pilot evidence receipt for the current signed scope. The in-memory JSON contains the deployed service version, retention windows, decision-status counts, and retained fixed-choice value signals. It excludes scope/account/job/case identifiers, email, decision text, prompts, filenames, and dataset content. This gives a supervised pilot a portable snapshot before free-host state expires, but it does not verify identity, savings, causality, repeat use, adoption, or willingness to pay.
+
 ## Pilot onboarding and measurement
 
 Optional VibeDash pilot accounts are available from **Create account**. The

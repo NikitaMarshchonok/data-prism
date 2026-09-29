@@ -293,11 +293,16 @@ class DecisionCaseStore:
         items = rows[:limit]
         return [self._row_to_case(row) for row in items], has_more
 
-    def count_by_status(self, scope_id: str) -> Dict[str, int]:
+    def count_by_status(
+        self,
+        scope_id: str,
+        *,
+        connection: sqlite3.Connection | None = None,
+    ) -> Dict[str, int]:
         """Count all retained cases in one scope without loading case content."""
         normalized_scope = _validated_identifier(scope_id, "scope")
         counts = {status: 0 for status in ALLOWED_STATUSES}
-        with self._connection() as connection:
+        if connection is not None:
             rows = connection.execute(
                 """
                 SELECT status, COUNT(*) AS case_count
@@ -307,6 +312,17 @@ class DecisionCaseStore:
                 """,
                 (normalized_scope,),
             ).fetchall()
+        else:
+            with self._connection() as owned_connection:
+                rows = owned_connection.execute(
+                    """
+                    SELECT status, COUNT(*) AS case_count
+                    FROM decision_cases
+                    WHERE scope_id = ?
+                    GROUP BY status
+                    """,
+                    (normalized_scope,),
+                ).fetchall()
         for row in rows:
             counts[row["status"]] = row["case_count"]
         return counts

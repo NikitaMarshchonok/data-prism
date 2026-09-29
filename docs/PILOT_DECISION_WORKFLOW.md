@@ -116,6 +116,13 @@ Evidence of value requires repeated use and willingness to adopt or pay. Demo
 completion, page views, and positive comments are not sufficient evidence of
 product-market fit.
 
+Before temporary hosting state expires, the participant can download the
+aggregate pilot evidence receipt from the decision workspace. Keep a consented
+copy outside the public repository. It preserves current-scope counts and
+fixed-choice value signals without identifiers or decision text, but it does
+not turn those self-reports into verified savings, repeat use, adoption, or
+willingness to pay.
+
 The [onboarding and measurement contract](PILOT_MEASUREMENT.md) implements a
 subset of the measures above. Review-date adherence, actual time saved, and paid
 adoption still require observation and follow-up; the automatic funnel must not

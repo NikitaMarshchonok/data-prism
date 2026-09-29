@@ -114,6 +114,8 @@ The decision workspace derives a review queue from the already scoped case list 
 
 The decision workspace derives a bounded outcome summary from the already scope-filtered retained cases. A separate read-only query uses the HMAC-derived token for that same scope to summarize only its complete fixed-choice pilot value responses. The browser receives no scope token, job identifier, raw feedback row, global cohort total, or data from another scope; missing responses remain missing rather than being interpreted as negative outcomes.
 
+The workspace can also produce `pilot-evidence-receipt-v1`, an in-memory JSON receipt for the current signed scope. Generation runs behind the analysis store's open-scope fence and reuses the locked SQLite connection for decision and pilot-metric reads, so account deletion cannot interleave a partial receipt. The builder copies only allowlisted aggregate counters, fixed-choice value distributions, retention windows, and the bounded service version. It excludes every scope, account, job, and case identifier as well as user-entered text and dataset metadata. The response is CSRF-protected, private/no-store, download-only, and capped at 64 KiB. It is a portability mechanism for an ephemeral pilot, not an identity attestation or causal/business-value claim.
+
 ### Account export boundary
 
 An authenticated pilot account can submit `POST /vibedash/account/export.json`

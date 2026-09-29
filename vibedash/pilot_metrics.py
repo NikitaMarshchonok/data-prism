@@ -167,7 +167,14 @@ def _row_value(row, name):
     return row[name] if name in row.keys() else None
 
 
-def build_scope_value_feedback(database_path, token, days=RETENTION_DAYS, now=None):
+def build_scope_value_feedback(
+    database_path,
+    token,
+    days=RETENTION_DAYS,
+    now=None,
+    *,
+    connection=None,
+):
     """Return fixed-choice value signals for one pseudonymous analysis scope."""
     if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
         raise ValueError("Invalid pilot measurement token.")
@@ -175,18 +182,25 @@ def build_scope_value_feedback(database_path, token, days=RETENTION_DAYS, now=No
         raise ValueError(f"days must be between 1 and {RETENTION_DAYS}.")
     now = now or datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=days)).isoformat(timespec="milliseconds")
-    path = Path(database_path).resolve()
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as connection:
-        connection.row_factory = sqlite3.Row
-        installed = connection.execute(
+    def read_rows(active_connection):
+        installed = active_connection.execute(
             "SELECT 1 FROM sqlite_master "
             "WHERE name = 'pilot_analyses' AND type = 'table'"
         ).fetchone()
-        rows = connection.execute(
+        rows = active_connection.execute(
             "SELECT * FROM pilot_analyses "
             "WHERE scope_token = ? AND created_at >= ? AND created_at <= ?",
             (token, cutoff, now.isoformat(timespec="milliseconds")),
         ).fetchall() if installed else []
+        return installed, rows
+
+    if connection is None:
+        path = Path(database_path).resolve()
+        with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as owned_connection:
+            owned_connection.row_factory = sqlite3.Row
+            installed, rows = read_rows(owned_connection)
+    else:
+        installed, rows = read_rows(connection)
 
     completed = [row for row in rows if row['completed_at']]
     feedback = [row for row in completed if row['usefulness']]

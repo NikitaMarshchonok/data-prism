@@ -148,6 +148,29 @@ causality or independently verify measurement quality. The fixed-choice value
 fields record only an estimate and intention. Existing Decision Brief priorities
 are heuristic; the prompt does not guarantee a tailored business recommendation.
 
+## Portable scope receipt
+
+The decision workspace can download `pilot-evidence-receipt-v1` as a small JSON
+file generated in memory. It contains only the current signed scope's retained
+decision-status counts, fixed-choice value-signal counts, explicit denominators,
+retention windows, generation time, deployed service version, and written
+limitations. It is available to both a guest browser and a pilot account and is
+protected by the decision-workspace CSRF token.
+
+The receipt does **not** contain the scope token, browser/account/job/case IDs,
+email, owner, decision or outcome text, prompts, filenames, hashes, or dataset
+content. It is capped at 64 KiB and returned with private/no-store download
+headers. Generation is fenced against concurrent account deletion and reads the
+decision and pilot aggregates from one SQLite transaction.
+
+Download the receipt before an ephemeral deployment loses its state if the
+participant agrees to keep or share that aggregate snapshot. Store it outside
+the public repository using the same consented pilot process as interview notes.
+A receipt is not proof that one scope equals one person, that self-reported time
+was actually saved, that a decision caused an outcome, or that the participant
+returned, adopted the product, or agreed to pay. Operator runs and synthetic
+uploads must still be excluded from any real-pilot summary manually.
+
 ## Make a decision after two reporting cycles
 
 Before recruiting, write down the baseline workflow and what material improvement

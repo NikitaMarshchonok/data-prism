@@ -76,6 +76,17 @@
                     <div><span>Next-cycle intent</span><ul><li>Yes <b>{{ pilot_value_summary.next_cycle_intent.yes }}</b></li><li>Maybe <b>{{ pilot_value_summary.next_cycle_intent.maybe }}</b></li><li>No <b>{{ pilot_value_summary.next_cycle_intent.no }}</b></li></ul></div>
                 </div>
             </aside>
+            <aside class="receipt-download" aria-label="Portable pilot evidence receipt">
+                <div>
+                    <small>Portable aggregate</small>
+                    <strong>Keep a privacy-safe pilot receipt</strong>
+                    <p>Download the current scope's counts and fixed-choice signals before temporary hosting state expires. The receipt excludes identifiers, decision text, datasets, filenames, and account details; it remains self-reported evidence, not proof of causality or demand.</p>
+                </div>
+                <form method="post" action="{{ url_for('vibedash.pilot_evidence_receipt') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="button button-secondary" type="submit">Download pilot receipt</button>
+                </form>
+            </aside>
         </section>
 
         <nav class="queue-tabs" aria-label="Decision review queue">
