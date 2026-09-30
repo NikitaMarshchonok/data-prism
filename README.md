@@ -141,8 +141,10 @@ business value or product-market fit.
 Use `python pilot_report.py --database data/jobs/analysis_jobs.sqlite3 --days 7`
 to read aggregate activity from the default local database. Local activity is
 not Render activity. See [the pilot measurement contract](docs/PILOT_MEASUREMENT.md)
-for storage, reporting, and observed-pilot instructions, and
-[release acceptance gates](docs/RELEASE_READINESS.md) for remaining work.
+for storage and reporting, [the supervised pilot runbook](docs/PILOT_EXECUTION.md)
+and [blank private scorecard template](docs/PILOT_SESSION_SCORECARD.md) for
+observed sessions, and [release acceptance gates](docs/RELEASE_READINESS.md) for
+remaining work.
 
 ## Quick start with Docker
 
