@@ -37,6 +37,16 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE", blueprint)
         self.assertIn("VIBEDASH_MAX_ACTIVE_JOBS", blueprint)
         self.assertIn("SESSION_COOKIE_SECURE", blueprint)
+        self.assertIn(
+            "      - key: DATA_PRISM_DEPLOYMENT_PROFILE\n"
+            "        value: demo\n",
+            blueprint,
+        )
+        self.assertIn(
+            "      - key: DATA_PRISM_STATE_DURABILITY\n"
+            "        value: ephemeral\n",
+            blueprint,
+        )
         self.assertNotIn("replace-with", blueprint)
 
     def test_render_blueprint_skips_documentation_only_autodeploys(self):

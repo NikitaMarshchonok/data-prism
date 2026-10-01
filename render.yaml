@@ -18,6 +18,10 @@ services:
         generateValue: true
       - key: DATA_PRISM_STATE_DIR
         value: /var/lib/data-prism
+      - key: DATA_PRISM_DEPLOYMENT_PROFILE
+        value: demo
+      - key: DATA_PRISM_STATE_DURABILITY
+        value: ephemeral
       - key: LOG_FORMAT
         value: json
       - key: LOG_LEVEL

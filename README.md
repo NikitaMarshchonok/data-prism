@@ -340,6 +340,7 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 
 - Classic analysis is synchronous; VibeDash uses a bounded in-process worker intended for the documented single-instance topology.
 - Runtime state uses the local filesystem and SQLite rather than managed object storage and a distributed database.
+- `/readyz` reports an explicit runtime-storage contract: the public Render Blueprint is `demo`/`ephemeral`, while a `production` profile fails closed unless persistent state and an explicit state directory are declared. This declaration does not itself verify the provider storage or satisfy the recovery gate.
 - Guest decision cases are browser-scoped; signed-in pilot accounts share their account scope across browsers, while clearing a session cookie removes only that browser's identity. Free-host restarts can remove the records.
 - VibeDash pilot accounts are optional. An account gives the same signed 32-hex analysis scope across browsers, while guest analyses remain browser-scoped and are never migrated into an account. Free-host storage may reset; this is not enterprise authentication or a durable-account guarantee.
 - Preserve `FLASK_SECRET_KEY`: it signs the session and derives account scopes. Rotating it requires sign-in again and makes prior account-owned history unavailable under the new scope.
