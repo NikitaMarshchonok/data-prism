@@ -9,6 +9,7 @@ import pandas as pd
 from werkzeug.datastructures import FileStorage
 
 import web_app
+from src.runtime_state import initialize_runtime_state
 
 
 class WebUploadTests(unittest.TestCase):
@@ -32,6 +33,10 @@ class WebUploadTests(unittest.TestCase):
             "DATA_PRISM_STATE_DIRECTORY_CONFIGURED": web_app.app.config[
                 "DATA_PRISM_STATE_DIRECTORY_CONFIGURED"
             ],
+            "DATA_PRISM_STATE_DIR": web_app.app.config["DATA_PRISM_STATE_DIR"],
+            "DATA_PRISM_EXPECTED_STATE_ID": web_app.app.config[
+                "DATA_PRISM_EXPECTED_STATE_ID"
+            ],
             "UPLOAD_FOLDER": web_app.app.config["UPLOAD_FOLDER"],
             "REPORT_FOLDER": web_app.app.config["REPORT_FOLDER"],
             "BASELINE_FOLDER": web_app.app.config["BASELINE_FOLDER"],
@@ -50,6 +55,8 @@ class WebUploadTests(unittest.TestCase):
             VIBEDASH_JOB_STORE_PATH=str(self.job_store_path),
             DRIFT_STORE_PATH=str(self.drift_store_path),
             DRIFT_HISTORY_RETENTION=100,
+            DATA_PRISM_STATE_DIR=str(self.temporary_directory.name),
+            DATA_PRISM_EXPECTED_STATE_ID="",
         )
 
     def tearDown(self):
@@ -179,11 +186,13 @@ class WebUploadTests(unittest.TestCase):
         )
 
     def test_readiness_accepts_explicit_persistent_production_state(self):
+        identity = initialize_runtime_state(Path(self.temporary_directory.name))
         web_app.app.config.update(
             SESSION_KEY_PERSISTENT=True,
             DATA_PRISM_DEPLOYMENT_PROFILE="production",
             DATA_PRISM_STATE_DURABILITY="persistent",
             DATA_PRISM_STATE_DIRECTORY_CONFIGURED=True,
+            DATA_PRISM_EXPECTED_STATE_ID=identity["state_id"],
         )
 
         with web_app.app.test_client() as client:
@@ -192,7 +201,29 @@ class WebUploadTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["runtime_storage"]["production_state_satisfied"])
-        self.assertEqual(payload["runtime_storage"]["assurance"], "operator-declared")
+        self.assertEqual(payload["runtime_storage"]["assurance"], "continuity-verified")
+        self.assertTrue(payload["runtime_storage"]["state_identity"]["verified"])
+        self.assertNotIn(identity["state_id"], response.get_data(as_text=True))
+
+    def test_readiness_blocks_production_when_state_identity_is_wrong(self):
+        identity = initialize_runtime_state(Path(self.temporary_directory.name))
+        web_app.app.config.update(
+            SESSION_KEY_PERSISTENT=True,
+            DATA_PRISM_DEPLOYMENT_PROFILE="production",
+            DATA_PRISM_STATE_DURABILITY="persistent",
+            DATA_PRISM_STATE_DIRECTORY_CONFIGURED=True,
+            DATA_PRISM_EXPECTED_STATE_ID="0" * 64,
+        )
+
+        with web_app.app.test_client() as client:
+            response = client.get("/readyz")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(
+            "Production runtime state identity does not match DATA_PRISM_EXPECTED_STATE_ID.",
+            response.get_json()["issues"],
+        )
+        self.assertNotIn(identity["state_id"], response.get_data(as_text=True))
 
     def test_readiness_rejects_existing_invalid_account_store(self):
         account_path = self.account_folder / "accounts.sqlite3"

@@ -100,6 +100,11 @@ does not by itself satisfy a release gate.
 | Observed real-user usefulness and repeat use | Pending | 5–10 relevant pilots across at least two reporting cycles |
 | Release operations and user-facing commitments reviewed | Pending | Rehearse the checklist below; define support, incident, privacy, retention, and cost ownership |
 
+The runtime state identity can now detect an empty or wrong production mount and
+survives the offline backup/restore path. This is prerequisite evidence, not a
+completed durable-state gate: no paid persistent disk or timed real recovery
+rehearsal is recorded in this repository.
+
 ## Go/no-go checklist for every supervised pilot
 
 Use the [supervised pilot runbook](PILOT_EXECUTION.md) and copy the

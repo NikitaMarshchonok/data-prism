@@ -56,13 +56,17 @@ DATA_PRISM_STATE_DURABILITY=ephemeral
 That combination remains healthy for the public demo, but the response includes
 an explicit data-loss warning and reports `production_state_satisfied=false`.
 A deployment declaring `DATA_PRISM_DEPLOYMENT_PROFILE=production` fails
-readiness unless it also declares `DATA_PRISM_STATE_DURABILITY=persistent` and
-sets `DATA_PRISM_STATE_DIR` explicitly. Unknown values fail closed.
+readiness unless it also declares `DATA_PRISM_STATE_DURABILITY=persistent`,
+sets `DATA_PRISM_STATE_DIR` explicitly, and verifies that directory against
+`DATA_PRISM_EXPECTED_STATE_ID`. Unknown values, a missing marker, and a wrong
+identity fail closed.
 
 The durability value is an operator declaration, not automatic proof of the
-underlying mount. A production operator must still verify provider storage,
-backup, restore, retention, and deletion behaviour. Setting the value alone does
-not satisfy the durable-state release gate.
+underlying mount. The state identity proves only that the process can read the
+same initialized state lineage expected by the operator. A production operator
+must still verify provider storage, backup, restore, retention, and deletion
+behaviour. Setting these values alone does not satisfy the durable-state release
+gate. The marker is not tamper-proof: an actor who can replace state can copy it.
 
 VibeDash pilot accounts use a separate local SQLite file under the configured
 state directory. Render sets `SESSION_COOKIE_SECURE=true`; local development
@@ -111,12 +115,28 @@ For single-instance persistent monitoring, upgrade to a paid service and attach 
 
 Keep `DATA_PRISM_STATE_DIR=/var/lib/data-prism`. Render's disk documentation explains the cost and operational constraints: <https://render.com/docs/disks>.
 
-After attaching and verifying the disk, set:
+After attaching and verifying the disk, keep the service and all writers stopped
+and initialize the mounted directory once:
+
+```bash
+python runtime_state.py initialize --state-dir /var/lib/data-prism
+```
+
+Save the returned `state_id` in the deployment secret manager as
+`DATA_PRISM_EXPECTED_STATE_ID`; do not commit it or keep the only copy on the
+mounted disk. Then set:
 
 ```text
 DATA_PRISM_DEPLOYMENT_PROFILE=production
 DATA_PRISM_STATE_DURABILITY=persistent
+DATA_PRISM_EXPECTED_STATE_ID=<64-character value kept outside the disk>
 ```
+
+Restart, then require `/readyz` to report
+`runtime_storage.state_identity.status=verified`. Readiness exposes only a
+12-character SHA-256 fingerprint for operator correlation. If the marker is
+missing or the identity differs, the service returns HTTP 503. Investigate the
+mount or restore instead of replacing the expected value.
 
 Do not apply those declarations to the free Blueprint: its filesystem remains
 ephemeral regardless of the environment-variable value.

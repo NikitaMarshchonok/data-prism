@@ -47,6 +47,7 @@ class DeploymentContractTests(unittest.TestCase):
             "        value: ephemeral\n",
             blueprint,
         )
+        self.assertNotIn("DATA_PRISM_EXPECTED_STATE_ID", blueprint)
         self.assertNotIn("replace-with", blueprint)
 
     def test_render_blueprint_skips_documentation_only_autodeploys(self):
@@ -78,6 +79,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertIn("docker build --tag data-prism:ci", workflow)
         self.assertIn("http://127.0.0.1:5001/readyz", workflow)
         self.assertIn("X-Request-ID: ci-health-check", workflow)
+        self.assertIn("runtime_state.py", workflow)
 
 
 if __name__ == "__main__":

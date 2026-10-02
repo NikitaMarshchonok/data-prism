@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.runtime_state import RUNTIME_STATE_IDENTITY_CONTRACT, inspect_runtime_state
+
 
 RUNTIME_STORAGE_CONTRACT = "runtime-storage-v1"
 DEPLOYMENT_PROFILES = frozenset({"development", "demo", "production"})
@@ -28,8 +30,10 @@ def evaluate_runtime_storage_contract(
     deployment_profile: object,
     state_durability: object,
     state_directory_configured: bool,
+    state_directory: object = None,
+    expected_state_id: object = None,
 ) -> dict[str, Any]:
-    """Return a bounded readiness contract without claiming mount verification."""
+    """Return declarations plus a bounded mounted-state continuity check."""
 
     profile = _choice(deployment_profile, DEPLOYMENT_PROFILES)
     durability = _choice(state_durability, STATE_DURABILITY_CLASSES)
@@ -71,10 +75,31 @@ def evaluate_runtime_storage_contract(
         )
 
     production_state_required = profile == "production"
+    identity_required = production_state_required
+    if identity_required:
+        identity = inspect_runtime_state(state_directory, expected_state_id)
+        if identity["status"] == "invalid_expected_identity":
+            issues.append(
+                "Production deployment requires a valid DATA_PRISM_EXPECTED_STATE_ID."
+            )
+        elif identity["status"] == "missing_or_invalid_identity":
+            issues.append("Production runtime state identity is missing or invalid.")
+        elif identity["status"] == "identity_mismatch":
+            issues.append(
+                "Production runtime state identity does not match DATA_PRISM_EXPECTED_STATE_ID."
+            )
+    else:
+        identity = {
+            "contract": RUNTIME_STATE_IDENTITY_CONTRACT,
+            "status": "not_required",
+            "verified": False,
+            "fingerprint": None,
+        }
     production_state_satisfied = bool(
         production_state_required
         and durability == "persistent"
         and explicit_state_directory
+        and identity["verified"]
         and profile is not None
         and not issues
     )
@@ -86,7 +111,9 @@ def evaluate_runtime_storage_contract(
         "state_directory_configured": explicit_state_directory,
         "production_state_required": production_state_required,
         "production_state_satisfied": production_state_satisfied,
-        "assurance": "operator-declared",
+        "state_identity_required": identity_required,
+        "state_identity": identity,
+        "assurance": "continuity-verified" if production_state_satisfied else "operator-declared",
         "issues": issues,
         "warnings": warnings,
     }

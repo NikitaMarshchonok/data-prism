@@ -58,6 +58,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/account_export.py` | In-memory, bounded serialization of account-owned job and decision-case metadata | Raw datasets, prompts, filenames, schema/session data, global pilot metrics, or durable export artifacts |
 | `vibedash/pilot_metrics.py` | Opt-in lifecycle measurement, bounded retention, feedback, and read-only aggregate reports | Customer identity, source rows, or proof of demand |
 | `src/runtime_backup.py` and `runtime_backup.py` | Offline bounded snapshots, integrity verification, and fail-closed restore into a new directory | Hosting persistence, encryption, authenticity, scheduling, or account recovery |
+| `src/runtime_state.py` and `runtime_state.py` | Stable state-directory identity, secret-free readiness status, and wrong-mount detection | Physical durability, backup freshness, recovery success, or distributed consistency |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
 | `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
@@ -283,6 +284,16 @@ These controls reduce common portfolio-app risks but do not replace a full produ
 ## Deployment shape
 
 The provided container runs Gunicorn and exposes liveness and readiness endpoints. Runtime state can be redirected with `DATA_PRISM_STATE_DIR`. The current supported topology is one application instance with writable local storage and one bounded in-process VibeDash analysis worker.
+
+The production readiness path uses two distinct signals. The
+`runtime-storage-v1` declaration records the operator-selected deployment and
+durability classes. The `runtime-state-identity-v1` marker binds that declaration
+to one initialized state directory: the expected random ID is retained outside
+the disk and compared in constant time, while readiness returns only a short
+fingerprint. Backup and restore include the marker under `identity/`. This is a
+continuity check, not evidence that the provider actually persists the mount or
+that a recovery rehearsal has succeeded. It is not a cryptographic attestation:
+an actor able to alter the state can read and copy the marker.
 
 Job records survive page refreshes, while a process interruption converts stale `running` work to a safe failed state. This avoids pretending that an in-process executor provides distributed delivery guarantees. Multiple web processes or instances require an external transactional queue and independently managed workers.
 
