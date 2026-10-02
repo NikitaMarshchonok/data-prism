@@ -170,7 +170,7 @@ Open:
 - Liveness: `http://localhost:5001/healthz`
 - Readiness: `http://localhost:5001/readyz`
 
-The container runs Gunicorn as an unprivileged user. `/readyz` returns HTTP 503 if the persistent session key is missing or required runtime directories are not writable.
+The container runs Gunicorn as an unprivileged user. `/readyz` returns HTTP 503 if the persistent session key is missing or required runtime directories are not writable. A production profile additionally requires a verified runtime-state identity; the public demo does not claim this production assurance.
 
 ## Cloud deployment
 
@@ -200,6 +200,17 @@ Preserve `FLASK_SECRET_KEY` and `DATA_PRISM_API_KEY` separately. See the
 trusted-directory requirements. These tools do not provide managed persistent
 storage, off-host copies, encryption, or automatic scheduling for the free
 Render service.
+
+For a dedicated persistent state directory, `runtime_state.py initialize`
+creates a stable random identity exactly once. Store the returned 64-character
+ID outside the disk as the secret `DATA_PRISM_EXPECTED_STATE_ID`. A production
+profile reports ready only when the mounted directory contains that same valid
+identity. The endpoint exposes only a short one-way fingerprint, never the ID.
+Offline snapshots include the identity, so a rehearsed restore can prove that
+the application opened the intended state lineage. This detects an empty,
+wrong, or incomplete mount; it does not prove provider durability, backup
+freshness, successful recovery, tamper resistance, or multi-instance safety.
+The ID is a continuity value, not an authentication credential.
 
 ## Local development
 
@@ -307,7 +318,9 @@ data-prism/
 │   ├── quality_evaluation.py  # Synthetic benchmark scenarios and checks
 │   ├── data_drift.py          # Aggregate baseline and drift algorithms
 │   ├── drift_store.py         # SQLite history and alert persistence
-│   └── monitoring_api.py      # Authenticated monitoring endpoints
+│   ├── monitoring_api.py      # Authenticated monitoring endpoints
+│   ├── runtime_state.py       # Mounted-state continuity identity
+│   └── runtime_backup.py      # Offline bounded backup and restore
 ├── vibedash/                  # Prompt-to-dashboard and evidence engines
 │   ├── analysis_jobs.py       # Durable job states, scoped history, bounded dispatcher
 │   ├── decision_cases.py      # Evidence-to-outcome cases and bounded retention
@@ -340,7 +353,7 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 
 - Classic analysis is synchronous; VibeDash uses a bounded in-process worker intended for the documented single-instance topology.
 - Runtime state uses the local filesystem and SQLite rather than managed object storage and a distributed database.
-- `/readyz` reports an explicit runtime-storage contract: the public Render Blueprint is `demo`/`ephemeral`, while a `production` profile fails closed unless persistent state and an explicit state directory are declared. This declaration does not itself verify the provider storage or satisfy the recovery gate.
+- `/readyz` reports an explicit runtime-storage contract: the public Render Blueprint is `demo`/`ephemeral`, while a `production` profile fails closed unless persistent state, an explicit state directory, and a matching externally retained state identity are configured. Identity continuity detects a missing or wrong mount; it does not verify provider durability or satisfy the recovery gate.
 - Guest decision cases are browser-scoped; signed-in pilot accounts share their account scope across browsers, while clearing a session cookie removes only that browser's identity. Free-host restarts can remove the records.
 - VibeDash pilot accounts are optional. An account gives the same signed 32-hex analysis scope across browsers, while guest analyses remain browser-scoped and are never migrated into an account. Free-host storage may reset; this is not enterprise authentication or a durable-account guarantee.
 - Preserve `FLASK_SECRET_KEY`: it signs the session and derives account scopes. Rotating it requires sign-in again and makes prior account-owned history unavailable under the new scope.

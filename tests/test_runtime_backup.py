@@ -15,6 +15,7 @@ import uuid
 
 from src.drift_store import DriftStore
 from src.runtime_backup import BackupError, create_backup, restore_backup, verify_backup
+from src.runtime_state import initialize_runtime_state, inspect_runtime_state
 from vibedash.analysis_jobs import AnalysisJobStore
 from vibedash.accounts import AccountStore
 from vibedash.decision_cases import DecisionCaseStore
@@ -27,6 +28,8 @@ class RuntimeBackupTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name).resolve()
         self.state = self.root / 'runtime'
+        self.state.mkdir()
+        self.state_identity = initialize_runtime_state(self.state)
         self.backup = self.root / 'snapshot'
         self.restored = self.root / 'recovered'
         self.scope = uuid.uuid4().hex
@@ -90,6 +93,10 @@ class RuntimeBackupTests(unittest.TestCase):
         self.assertEqual(restored_upload.read_bytes(), self.upload.read_bytes())
         self.assertEqual(restored_upload.stat().st_mtime_ns, self.old_mtime)
         self.assertEqual((self.restored / 'baselines' / 'synthetic.json').read_bytes(), self.baseline.read_bytes())
+        self.assertTrue(inspect_runtime_state(
+            self.restored,
+            self.state_identity['state_id'],
+        )['verified'])
         self.assertNotIn('Synthetic role', json.dumps(result))
 
     def test_account_database_is_backed_up_and_restored(self):

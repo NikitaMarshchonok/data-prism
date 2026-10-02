@@ -13,7 +13,10 @@ import time
 
 
 CONTRACT = 'data-prism-runtime-backup-v1'
-STATE_ROOTS = frozenset({'uploads', 'reports', 'baselines', 'jobs', 'drift', 'accounts', 'sessions', 'exports'})
+STATE_ROOTS = frozenset({
+    'uploads', 'reports', 'baselines', 'jobs', 'drift', 'accounts', 'sessions',
+    'exports', 'identity',
+})
 DATABASES = {
     'jobs/analysis_jobs.sqlite3': {'analysis_jobs'},
     'drift/drift_history.sqlite3': {'drift_runs', 'drift_alerts'},

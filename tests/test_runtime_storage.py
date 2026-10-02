@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from src.runtime_storage import evaluate_runtime_storage_contract
+from src.runtime_state import initialize_runtime_state
 
 
 class RuntimeStorageContractTests(unittest.TestCase):
@@ -45,16 +48,45 @@ class RuntimeStorageContractTests(unittest.TestCase):
         )
 
     def test_production_accepts_an_explicit_persistent_declaration(self):
-        contract = evaluate_runtime_storage_contract(
-            deployment_profile=" production ",
-            state_durability=" PERSISTENT ",
-            state_directory_configured=True,
-        )
+        with TemporaryDirectory() as directory:
+            identity = initialize_runtime_state(Path(directory))
+            contract = evaluate_runtime_storage_contract(
+                deployment_profile=" production ",
+                state_durability=" PERSISTENT ",
+                state_directory_configured=True,
+                state_directory=directory,
+                expected_state_id=identity["state_id"],
+            )
 
         self.assertEqual(contract["issues"], [])
         self.assertTrue(contract["production_state_satisfied"])
-        self.assertEqual(contract["assurance"], "operator-declared")
+        self.assertEqual(contract["assurance"], "continuity-verified")
+        self.assertTrue(contract["state_identity"]["verified"])
         self.assertIn("operator-declared", contract["warnings"][0])
+
+    def test_production_rejects_missing_or_mismatched_state_identity(self):
+        with TemporaryDirectory() as directory:
+            identity = initialize_runtime_state(Path(directory))
+            missing_expected = evaluate_runtime_storage_contract(
+                deployment_profile="production",
+                state_durability="persistent",
+                state_directory_configured=True,
+                state_directory=directory,
+                expected_state_id=None,
+            )
+            mismatch = evaluate_runtime_storage_contract(
+                deployment_profile="production",
+                state_durability="persistent",
+                state_directory_configured=True,
+                state_directory=directory,
+                expected_state_id="0" * 64,
+            )
+
+        self.assertFalse(missing_expected["production_state_satisfied"])
+        self.assertIn("DATA_PRISM_EXPECTED_STATE_ID", missing_expected["issues"][0])
+        self.assertFalse(mismatch["production_state_satisfied"])
+        self.assertIn("does not match", mismatch["issues"][0])
+        self.assertNotIn(identity["state_id"], str(mismatch))
 
     def test_unknown_declarations_fail_closed_without_echoing_input(self):
         contract = evaluate_runtime_storage_contract(

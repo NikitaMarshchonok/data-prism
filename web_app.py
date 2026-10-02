@@ -138,6 +138,11 @@ app.config['DATA_PRISM_STATE_DURABILITY'] = os.getenv(
 app.config['DATA_PRISM_STATE_DIRECTORY_CONFIGURED'] = bool(
     os.getenv('DATA_PRISM_STATE_DIR', '').strip()
 )
+app.config['DATA_PRISM_STATE_DIR'] = STATE_DIR
+app.config['DATA_PRISM_EXPECTED_STATE_ID'] = os.getenv(
+    'DATA_PRISM_EXPECTED_STATE_ID',
+    '',
+)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['REPORT_FOLDER'] = REPORT_FOLDER
 app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
@@ -288,6 +293,8 @@ def readinesscheck():
             'DATA_PRISM_STATE_DIRECTORY_CONFIGURED',
             False,
         ),
+        state_directory=app.config.get('DATA_PRISM_STATE_DIR'),
+        expected_state_id=app.config.get('DATA_PRISM_EXPECTED_STATE_ID'),
     )
     issues.extend(storage_contract['issues'])
     if not app.config.get('SESSION_KEY_PERSISTENT'):

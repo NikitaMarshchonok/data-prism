@@ -12,6 +12,7 @@ Docker deployment:
 
 ```text
 runtime-state/
+├── identity/runtime_state.json # Stable state lineage; preserve across restore
 ├── jobs/analysis_jobs.sqlite3     # Jobs, decision cases, opt-in pilot measurement
 ├── drift/drift_history.sqlite3   # Monitoring runs and alerts, when present
 ├── accounts/accounts.sqlite3     # Optional VibeDash pilot accounts and login throttling
@@ -42,6 +43,20 @@ Before taking a backup:
 4. Choose a **new** backup directory outside the state directory. Keep enough
    free space for the snapshot and a separate restore rehearsal.
 
+For a production profile, initialize the state identity once before the first
+backup and retain the printed ID in the deployment secret manager, not on the
+same disk and never in Git:
+
+```bash
+python runtime_state.py initialize \
+  --state-dir /srv/data-prism/runtime-state
+```
+
+The command is idempotent: a valid existing marker returns the same ID instead
+of rotating it. Do not delete or regenerate the marker to make readiness pass.
+If it is absent, malformed, or unexpected, investigate the mount or recovery
+before serving traffic.
+
 SQLite files use Python's [SQLite backup API](https://docs.python.org/3.12/library/sqlite3.html#sqlite3.Connection.backup),
 which includes committed WAL pages. Database snapshots are checked for integrity
 and expected tables. Database files and companion JSON/uploads still need the
@@ -69,6 +84,10 @@ python runtime_backup.py restore \
   --backup /srv/data-prism/backups/snapshot-2026-09-13 \
   --destination /srv/data-prism/runtime-restored-2026-09-13 \
   --offline
+
+DATA_PRISM_EXPECTED_STATE_ID='value-from-secret-manager' \
+python runtime_state.py verify \
+  --state-dir /srv/data-prism/runtime-restored-2026-09-13
 ```
 
 Record the revision of the application being backed up, from its `/healthz` or
@@ -87,6 +106,16 @@ It rejects symbolic/hard links, special files, hidden/unknown paths, path traver
 extra SQLite sidecars, malformed metadata, and unsupported contracts. Limits are
 20,000 files, 2 GiB of payload, an 8 MiB manifest, and eight path components.
 Individual SQLite operations have a 30-second budget; this is not a total-run SLA.
+
+When present, `identity/runtime_state.json` is an ordinary checksummed snapshot
+member and is restored unchanged. The verification command prints only a
+one-way fingerprint; initialization is the only command that prints the raw ID
+so it can be placed in external secret storage. Older snapshots without an
+identity remain structurally valid backups but cannot satisfy production
+readiness until their provenance is handled explicitly; never invent a new ID
+and describe it as continuity with the old state. The ID is not an access
+credential or tamper-proof attestation; anyone able to read and replace the
+state can also copy its marker.
 
 **No existing destination is overwritten, even an empty directory.** Restore
 verifies the snapshot before creating its destination and verifies each file again
@@ -110,16 +139,20 @@ or restore. Parent directories must be operator-controlled, not shared scratch s
    restored directory, initially inaccessible to other users. Keep the browser
    hostname/cookie context unchanged when verifying existing access; a different
    domain does not automatically receive the old cookie.
-4. Check `/healthz`, `/readyz`, History, an unexpired dashboard, a decision case,
+4. Set `DATA_PRISM_EXPECTED_STATE_ID` from the external secret manager and run
+   `runtime_state.py verify`. Confirm that `/readyz` reports
+   `state_identity.status=verified` and the recorded fingerprint. A mismatch is
+   a stop condition, not a value to overwrite.
+5. Check `/healthz`, `/readyz`, History, an unexpired dashboard, a decision case,
    monitoring history, and `pilot_report.py` on the restored job database. If
    `accounts/accounts.sqlite3` is present, verify that a pilot account can sign
    in and still sees its account-owned history, while a separate guest browser
    cannot read an existing case. An expired source dashboard may be unavailable
    while its longer-lived case remains readable.
-5. Original modification times and database timestamps are preserved. Normal
+6. Original modification times and database timestamps are preserved. Normal
    retention cleanup applies on the next application request, so restoration
    must not be used to extend the life of expired uploads or measurements.
-6. Apply any deletion/withdrawal requests made **after** the snapshot before
+7. Apply any deletion/withdrawal requests made **after** the snapshot before
    reopening access. An older backup can otherwise reintroduce removed data.
    This includes pilot-account deletion: the restore operator must replay the
    account deletion against the restored state. This tool has no external
@@ -127,7 +160,7 @@ or restore. Parent directories must be operator-controlled, not shared scratch s
    measurement or a pilot account. Historical offline backups therefore remain
    outside the account deletion workflow until the operator's backup-retention
    procedure removes them.
-7. Record the snapshot age (potential lost work), measured recovery duration,
+8. Record the snapshot age (potential lost work), measured recovery duration,
    revision, verification results, and responsible operator. Resume traffic only
    after acceptance; on failure, return to the intact original state/configuration.
 
