@@ -27,6 +27,11 @@ class WebUploadTests(unittest.TestCase):
         self.previous_config = {
             "TESTING": web_app.app.config.get("TESTING"),
             "SESSION_KEY_PERSISTENT": web_app.app.config["SESSION_KEY_PERSISTENT"],
+            "DATA_PRISM_DEPLOYMENT_PROFILE": web_app.app.config["DATA_PRISM_DEPLOYMENT_PROFILE"],
+            "DATA_PRISM_STATE_DURABILITY": web_app.app.config["DATA_PRISM_STATE_DURABILITY"],
+            "DATA_PRISM_STATE_DIRECTORY_CONFIGURED": web_app.app.config[
+                "DATA_PRISM_STATE_DIRECTORY_CONFIGURED"
+            ],
             "UPLOAD_FOLDER": web_app.app.config["UPLOAD_FOLDER"],
             "REPORT_FOLDER": web_app.app.config["REPORT_FOLDER"],
             "BASELINE_FOLDER": web_app.app.config["BASELINE_FOLDER"],
@@ -137,6 +142,57 @@ class WebUploadTests(unittest.TestCase):
         self.assertIn("FLASK_SECRET_KEY", not_ready.get_json()["issues"][0])
         self.assertEqual(ready.status_code, 200)
         self.assertEqual(ready.get_json()["status"], "ready")
+
+    def test_readiness_reports_ephemeral_demo_state_without_claiming_production(self):
+        web_app.app.config.update(
+            SESSION_KEY_PERSISTENT=True,
+            DATA_PRISM_DEPLOYMENT_PROFILE="demo",
+            DATA_PRISM_STATE_DURABILITY="ephemeral",
+            DATA_PRISM_STATE_DIRECTORY_CONFIGURED=True,
+        )
+
+        with web_app.app.test_client() as client:
+            response = client.get("/readyz")
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["runtime_storage"]["deployment_profile"], "demo")
+        self.assertEqual(payload["runtime_storage"]["state_durability"], "ephemeral")
+        self.assertFalse(payload["runtime_storage"]["production_state_satisfied"])
+        self.assertIn("can be lost", payload["warnings"][0])
+
+    def test_readiness_blocks_production_with_ephemeral_state(self):
+        web_app.app.config.update(
+            SESSION_KEY_PERSISTENT=True,
+            DATA_PRISM_DEPLOYMENT_PROFILE="production",
+            DATA_PRISM_STATE_DURABILITY="ephemeral",
+            DATA_PRISM_STATE_DIRECTORY_CONFIGURED=True,
+        )
+
+        with web_app.app.test_client() as client:
+            response = client.get("/readyz")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn(
+            "Production deployment requires DATA_PRISM_STATE_DURABILITY=persistent.",
+            response.get_json()["issues"],
+        )
+
+    def test_readiness_accepts_explicit_persistent_production_state(self):
+        web_app.app.config.update(
+            SESSION_KEY_PERSISTENT=True,
+            DATA_PRISM_DEPLOYMENT_PROFILE="production",
+            DATA_PRISM_STATE_DURABILITY="persistent",
+            DATA_PRISM_STATE_DIRECTORY_CONFIGURED=True,
+        )
+
+        with web_app.app.test_client() as client:
+            response = client.get("/readyz")
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["runtime_storage"]["production_state_satisfied"])
+        self.assertEqual(payload["runtime_storage"]["assurance"], "operator-declared")
 
     def test_readiness_rejects_existing_invalid_account_store(self):
         account_path = self.account_folder / "accounts.sqlite3"

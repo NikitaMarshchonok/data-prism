@@ -11,6 +11,7 @@ The root `render.yaml` defines a Docker web service with:
 - build filters that skip root Markdown and `docs/**`-only changes;
 - `/readyz` as the deployment health check;
 - generated session and monitoring API secrets;
+- an explicit `demo` deployment profile with `ephemeral` state durability;
 - one Gunicorn worker with four threads for the 512 MB free plan;
 - one bounded background analysis thread with durable SQLite job states;
 - a 25 MB public upload limit and bounded VibeDash previews;
@@ -43,6 +44,25 @@ during an application deployment.
 ## Persistence boundary
 
 The free Render service uses an ephemeral filesystem. Uploaded datasets, reports, baselines, drift history, and decision cases are therefore lost when the instance is restarted or redeployed. This is acceptable for a public portfolio demo, but not for persistent monitoring or a team decision record.
+
+`/readyz` exposes the bounded `runtime-storage-v1` contract. The checked-in free
+Blueprint declares:
+
+```text
+DATA_PRISM_DEPLOYMENT_PROFILE=demo
+DATA_PRISM_STATE_DURABILITY=ephemeral
+```
+
+That combination remains healthy for the public demo, but the response includes
+an explicit data-loss warning and reports `production_state_satisfied=false`.
+A deployment declaring `DATA_PRISM_DEPLOYMENT_PROFILE=production` fails
+readiness unless it also declares `DATA_PRISM_STATE_DURABILITY=persistent` and
+sets `DATA_PRISM_STATE_DIR` explicitly. Unknown values fail closed.
+
+The durability value is an operator declaration, not automatic proof of the
+underlying mount. A production operator must still verify provider storage,
+backup, restore, retention, and deletion behaviour. Setting the value alone does
+not satisfy the durable-state release gate.
 
 VibeDash pilot accounts use a separate local SQLite file under the configured
 state directory. Render sets `SESSION_COOKIE_SECURE=true`; local development
@@ -90,6 +110,16 @@ For single-instance persistent monitoring, upgrade to a paid service and attach 
 ```
 
 Keep `DATA_PRISM_STATE_DIR=/var/lib/data-prism`. Render's disk documentation explains the cost and operational constraints: <https://render.com/docs/disks>.
+
+After attaching and verifying the disk, set:
+
+```text
+DATA_PRISM_DEPLOYMENT_PROFILE=production
+DATA_PRISM_STATE_DURABILITY=persistent
+```
+
+Do not apply those declarations to the free Blueprint: its filesystem remains
+ephemeral regardless of the environment-variable value.
 
 A persistent disk restricts the service to one instance and prevents zero-downtime deploys. A future multi-instance architecture should instead move uploads and reports to object storage and drift history to PostgreSQL.
 

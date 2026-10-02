@@ -42,6 +42,7 @@ from src.data_drift import (
 )
 from src.drift_store import DriftStore
 from src.observability import configure_observability
+from src.runtime_storage import evaluate_runtime_storage_contract
 from markupsafe import Markup
 import markdown as md
 
@@ -126,6 +127,17 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = safe_bool_env('SESSION_COOKIE_SECURE', False)
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=14)
 app.config['SESSION_REFRESH_EACH_REQUEST'] = False
+app.config['DATA_PRISM_DEPLOYMENT_PROFILE'] = os.getenv(
+    'DATA_PRISM_DEPLOYMENT_PROFILE',
+    'development',
+)
+app.config['DATA_PRISM_STATE_DURABILITY'] = os.getenv(
+    'DATA_PRISM_STATE_DURABILITY',
+    'ephemeral',
+)
+app.config['DATA_PRISM_STATE_DIRECTORY_CONFIGURED'] = bool(
+    os.getenv('DATA_PRISM_STATE_DIR', '').strip()
+)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['REPORT_FOLDER'] = REPORT_FOLDER
 app.config['BASELINE_FOLDER'] = BASELINE_FOLDER
@@ -269,6 +281,15 @@ def healthcheck():
 def readinesscheck():
     """Report whether persistent runtime configuration is ready for production traffic."""
     issues = []
+    storage_contract = evaluate_runtime_storage_contract(
+        deployment_profile=app.config.get('DATA_PRISM_DEPLOYMENT_PROFILE'),
+        state_durability=app.config.get('DATA_PRISM_STATE_DURABILITY'),
+        state_directory_configured=app.config.get(
+            'DATA_PRISM_STATE_DIRECTORY_CONFIGURED',
+            False,
+        ),
+    )
+    issues.extend(storage_contract['issues'])
     if not app.config.get('SESSION_KEY_PERSISTENT'):
         issues.append('FLASK_SECRET_KEY is not configured.')
 
@@ -301,6 +322,12 @@ def readinesscheck():
     return jsonify({
         'status': status,
         'issues': issues,
+        'warnings': storage_contract['warnings'],
+        'runtime_storage': {
+            key: value
+            for key, value in storage_contract.items()
+            if key not in {'issues', 'warnings'}
+        },
         'version': app.config['SERVICE_VERSION'],
     }), 200 if not issues else 503
 
