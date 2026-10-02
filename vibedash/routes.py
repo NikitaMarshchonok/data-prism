@@ -1167,6 +1167,48 @@ if vibedash_bp:
         return redirect(url_for('vibedash.index'))
 
 
+    @vibedash_bp.route('/recover', methods=['GET', 'POST'])
+    def recover_account():
+        """Recover a pilot account with a previously issued one-time code."""
+        if request.method == 'GET':
+            return _render_auth('recover')
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return _render_auth('recover', error='This form has expired. Please try again.', status=400)
+        new_password = request.form.get('new_password', '')
+        confirmation = request.form.get('new_password_confirmation', '')
+        if new_password != confirmation:
+            return _render_auth('recover', error='New passwords do not match.', status=400)
+        store = _account_store()
+        if store is None:
+            return _render_auth('recover', error='Account recovery is temporarily unavailable.', status=503)
+        try:
+            account = store.recover_account(
+                request.form.get('email', ''),
+                request.form.get('recovery_code', ''),
+                new_password,
+                credential_secret=current_app.secret_key,
+            )
+        except AccountValidationError as error:
+            return _render_auth('recover', error=str(error), status=400)
+        except Exception:
+            current_app.logger.warning(
+                'VibeDash account recovery failed',
+                extra={'event': 'vibedash_account_recovery_failed'},
+            )
+            return _render_auth('recover', error='Account recovery is temporarily unavailable.', status=503)
+        if account is None:
+            return _render_auth(
+                'recover',
+                error='The email, recovery code, or account state is invalid.',
+                status=401,
+            )
+        if not _establish_account(account):
+            flash('Your password was reset. Please sign in with the new password.', 'success')
+            return redirect(url_for('vibedash.login'))
+        flash('Your password was reset. Other signed-in browsers must sign in again.', 'success')
+        return redirect(url_for('vibedash.index'))
+
+
     @vibedash_bp.post('/logout')
     def logout():
         """End the account session; a fresh guest scope is created later."""
@@ -1382,6 +1424,65 @@ if vibedash_bp:
         if account is None:
             return redirect(url_for('vibedash.login'))
         return _render_account_settings(account)
+
+
+    @vibedash_bp.post('/account/recovery-codes')
+    def account_recovery_codes():
+        """Issue a replacement recovery-code set after re-authentication."""
+        account = _current_account()
+        if account is None:
+            return redirect(url_for('vibedash.login'))
+        if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+            return _render_account_settings(
+                account,
+                error='This form has expired. Please try again.',
+                status=400,
+            )
+        store = _account_store()
+        if store is None:
+            return _render_account_settings(
+                account,
+                error='Recovery codes are temporarily unavailable.',
+                status=503,
+            )
+        try:
+            codes = store.generate_recovery_codes(
+                account['id'],
+                request.form.get('current_password', ''),
+            )
+        except Exception:
+            current_app.logger.warning(
+                'VibeDash recovery-code generation failed',
+                extra={'event': 'vibedash_recovery_codes_failed'},
+            )
+            return _render_account_settings(
+                account,
+                error='Recovery codes are temporarily unavailable.',
+                status=503,
+            )
+        if codes is None:
+            return _render_account_settings(
+                account,
+                error='The current password or account state is invalid.',
+                status=400,
+            )
+        response = make_response(
+            render_template(
+                'vibedash_recovery_codes.html',
+                account=account,
+                recovery_codes=codes,
+            )
+        )
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'none'; style-src 'self'; base-uri 'none'; "
+            "form-action 'none'; frame-ancestors 'none'"
+        )
+        return response
 
 
     @vibedash_bp.route('/account/password', methods=['POST'])

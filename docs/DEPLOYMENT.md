@@ -71,8 +71,13 @@ gate. The marker is not tamper-proof: an actor who can replace state can copy it
 VibeDash pilot accounts use a separate local SQLite file under the configured
 state directory. Render sets `SESSION_COOKIE_SECURE=true`; local development
 defaults this flag off unless explicitly enabled. Accounts are optional and
-do not provide enterprise authentication, email verification, password
-recovery, team roles, or a durable-account SLA. The signed Flask cookie carries
+do not provide enterprise authentication, email verification, email-based
+recovery, team roles, or a durable-account SLA. An authenticated user can
+generate eight high-entropy recovery codes after re-entering the current
+password. Only their domain-separated hashes are stored; a new set replaces
+the old set, and successful recovery consumes the full set, rotates the
+password, and invalidates old browser credentials. The codes are displayed
+once, so losing both password and saved codes is unrecoverable. The signed Flask cookie carries
 the VibeDash account id and opaque credential token; the server checks that pair
 against the current password hash atomically on every authenticated request.
 Existing cookies without a valid token fail closed. Changing a password rotates

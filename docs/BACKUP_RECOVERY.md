@@ -15,7 +15,7 @@ runtime-state/
 ├── identity/runtime_state.json # Stable state lineage; preserve across restore
 ├── jobs/analysis_jobs.sqlite3     # Jobs, decision cases, opt-in pilot measurement
 ├── drift/drift_history.sqlite3   # Monitoring runs and alerts, when present
-├── accounts/accounts.sqlite3     # Optional VibeDash pilot accounts and login throttling
+├── accounts/accounts.sqlite3     # Optional pilot accounts, throttling, recovery-code hashes
 ├── baselines/                    # Aggregate reference profiles
 ├── uploads/                      # Temporary input files
 ├── sessions/vibedash/            # Stored dashboard results
@@ -175,7 +175,8 @@ a rehearsal of your real Render disk, credentials, or backup infrastructure.
 ## Security, retention, and hosting limits
 
 - Full snapshots contain uploaded rows, prompts, decision text, pseudonymous
-  measurement, and (when enabled) pilot account emails and password hashes.
+  measurement, and (when enabled) pilot account emails, password hashes, and
+  recovery-code hashes.
   They are sensitive operational data, unlike the aggregate pilot report. The
   tools do not upload them anywhere.
 - New directories use POSIX mode `0700` and files `0600`; these permissions are

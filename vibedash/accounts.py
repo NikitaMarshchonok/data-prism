@@ -1,8 +1,8 @@
 """The account persistence boundary used by VibeDash.
 
-The store owns a small, dedicated SQLite database. It deliberately supports
-one schema version only: an empty database is created transactionally and an
-exact v1 database can be reopened, while anything else fails closed.
+The store owns a small, dedicated SQLite database. Empty databases are
+created transactionally, exact v1 databases are migrated to v2, and malformed
+or unknown schemas fail closed.
 """
 
 from __future__ import annotations
@@ -43,7 +43,11 @@ SCOPE_HMAC_DOMAIN = b"vibedash-account-scope-v1\x00"
 CREDENTIAL_HMAC_DOMAIN = b"vibedash-account-credential-v1\x00"
 CREDENTIAL_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _SESSION_CREDENTIAL_KEY = "_vibedash_session_credential"
-SCHEMA_VERSION = 1
+RECOVERY_CODE_COUNT = 8
+RECOVERY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+RECOVERY_CODE_PATTERN = re.compile(r"^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$")
+RECOVERY_CODE_HASH_DOMAIN = b"vibedash-recovery-code-v1\x00"
+SCHEMA_VERSION = 2
 
 
 class AccountValidationError(ValueError):
@@ -203,6 +207,17 @@ _THROTTLE_SQL = _sql_norm(
         failure_count INTEGER NOT NULL,
         window_started_at REAL NOT NULL,
         locked_until REAL NOT NULL DEFAULT 0
+    )"""
+)
+_RECOVERY_CODES_SQL = _sql_norm(
+    """CREATE TABLE recovery_codes (
+        account_id TEXT NOT NULL,
+        code_hash TEXT NOT NULL CHECK (
+            length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'
+        ),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (account_id, code_hash),
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
     )"""
 )
 
@@ -442,6 +457,129 @@ class AccountStore:
             ).fetchone()
             account = self._public_account(refreshed)
             return self._attach_credential(account, account_id, new_hash, secret)
+
+    def generate_recovery_codes(
+        self,
+        account_id: str,
+        current_password: str,
+    ) -> tuple[str, ...] | None:
+        """Replace an account's recovery codes after password verification.
+
+        Raw codes exist only in the returned tuple. The database stores
+        domain-separated SHA-256 digests of high-entropy random values.
+        """
+        if not self._valid_stored_id(account_id):
+            return None
+        codes = tuple(self._new_recovery_code() for _ in range(RECOVERY_CODE_COUNT))
+        if len(set(codes)) != RECOVERY_CODE_COUNT:
+            raise RuntimeError("Recovery code generation produced a duplicate.")
+        now = _clock_seconds(self.clock)
+        with self._account_transaction(account_id) as connection:
+            account = connection.execute(
+                "SELECT id, email, password_hash FROM accounts WHERE id = ?",
+                (account_id,),
+            ).fetchone()
+            password_hash = account["password_hash"] if account is not None else self._dummy_hash
+            email_key = self._throttle_key(account["email"]) if account is not None else None
+            throttle = (
+                connection.execute(
+                    "SELECT failure_count, window_started_at, locked_until "
+                    "FROM login_throttle WHERE email_key = ?",
+                    (email_key,),
+                ).fetchone()
+                if email_key is not None
+                else None
+            )
+            locked = throttle is not None and _safe_float(throttle["locked_until"]) > now
+            password_is_well_formed = self._valid_password_input(current_password)
+            candidate = current_password if password_is_well_formed else ""
+            password_ok = self._check_password(password_hash, candidate) and password_is_well_formed
+            if locked or not password_ok or account is None:
+                if not locked and email_key is not None:
+                    self._record_failure(connection, email_key, now, throttle)
+                return None
+
+            connection.execute("DELETE FROM recovery_codes WHERE account_id = ?", (account_id,))
+            timestamp = _utc_iso(now)
+            connection.executemany(
+                "INSERT INTO recovery_codes (account_id, code_hash, created_at) VALUES (?, ?, ?)",
+                ((account_id, self._recovery_code_hash(code), timestamp) for code in codes),
+            )
+            connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+        return codes
+
+    def recover_account(
+        self,
+        email: str,
+        recovery_code: str,
+        new_password: str,
+        *,
+        credential_secret: str | bytes | None = None,
+    ) -> dict[str, Any] | None:
+        """Consume a recovery-code set and rotate an account password atomically."""
+        validated_password = validate_password(new_password)
+        secret = _secret_bytes(credential_secret) if credential_secret is not None else None
+        try:
+            normalized_email = normalize_email(email)
+        except AccountValidationError:
+            return None
+        normalized_code = self._normalize_recovery_code(recovery_code)
+        if normalized_code is None:
+            return None
+        candidate_hash = self._recovery_code_hash(normalized_code)
+        email_key = self._throttle_key(normalized_email)
+        now = _clock_seconds(self.clock)
+        with self._transaction() as connection:
+            account = connection.execute(
+                "SELECT id, email, password_hash, created_at, last_login_at "
+                "FROM accounts WHERE email = ?",
+                (normalized_email,),
+            ).fetchone()
+            throttle = connection.execute(
+                "SELECT failure_count, window_started_at, locked_until "
+                "FROM login_throttle WHERE email_key = ?",
+                (email_key,),
+            ).fetchone()
+            locked = throttle is not None and _safe_float(throttle["locked_until"]) > now
+            lookup_id = account["id"] if account is not None else "0" * 32
+            stored_hashes = [
+                row["code_hash"]
+                for row in connection.execute(
+                    "SELECT code_hash FROM recovery_codes WHERE account_id = ? ORDER BY code_hash",
+                    (lookup_id,),
+                ).fetchall()
+            ]
+            padded_hashes = stored_hashes[:RECOVERY_CODE_COUNT]
+            padded_hashes.extend(["0" * 64] * (RECOVERY_CODE_COUNT - len(padded_hashes)))
+            code_ok = False
+            for stored_hash in padded_hashes:
+                # Always compare the full bounded set so the matching slot
+                # does not create an avoidable early-exit timing signal.
+                code_ok = hmac.compare_digest(candidate_hash, stored_hash) or code_ok
+            if locked or account is None or not code_ok:
+                if not locked:
+                    self._record_failure(connection, email_key, now, throttle)
+                return None
+
+            new_hash = generate_password_hash(validated_password)
+            timestamp = _utc_iso(now)
+            result = connection.execute(
+                "UPDATE accounts SET password_hash = ?, last_login_at = ? "
+                "WHERE id = ? AND password_hash = ?",
+                (new_hash, timestamp, account["id"], account["password_hash"]),
+            )
+            if result.rowcount != 1:
+                return None
+            # A successful recovery invalidates every outstanding code, not
+            # merely the submitted one. A new set requires re-authentication.
+            connection.execute("DELETE FROM recovery_codes WHERE account_id = ?", (account["id"],))
+            connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            refreshed = connection.execute(
+                "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?",
+                (account["id"],),
+            ).fetchone()
+            public_account = self._public_account(refreshed)
+            return self._attach_credential(public_account, account["id"], new_hash, secret)
 
     def verify_deletion_password(self, account_id: str, password: str) -> bool:
         """Verify the current password for an account deletion.
@@ -846,6 +984,29 @@ class AccountStore:
     def _throttle_key(normalized_email: str) -> str:
         return hashlib.sha256(normalized_email.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _new_recovery_code() -> str:
+        groups = (
+            "".join(secrets.choice(RECOVERY_CODE_ALPHABET) for _ in range(4))
+            for _ in range(5)
+        )
+        return "-".join(groups)
+
+    @staticmethod
+    def _normalize_recovery_code(value: Any) -> str | None:
+        if not isinstance(value, str) or len(value) > 64:
+            return None
+        try:
+            normalized = value.strip().upper()
+            normalized.encode("ascii")
+        except (UnicodeError, AttributeError):
+            return None
+        return normalized if RECOVERY_CODE_PATTERN.fullmatch(normalized) is not None else None
+
+    @staticmethod
+    def _recovery_code_hash(code: str) -> str:
+        return hashlib.sha256(RECOVERY_CODE_HASH_DOMAIN + code.encode("ascii")).hexdigest()
+
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:
         if self._closed:
@@ -920,7 +1081,32 @@ class AccountStore:
                         )"""
                     )
                     connection.execute("CREATE INDEX idx_login_throttle_window ON login_throttle(window_started_at)")
-                    connection.execute("PRAGMA user_version = 1")
+                    connection.execute(
+                        """CREATE TABLE recovery_codes (
+                            account_id TEXT NOT NULL,
+                            code_hash TEXT NOT NULL CHECK (
+                                length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'
+                            ),
+                            created_at TEXT NOT NULL,
+                            PRIMARY KEY (account_id, code_hash),
+                            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+                        )"""
+                    )
+                    connection.execute("PRAGMA user_version = 2")
+                elif version == 1:
+                    self._validate_schema_connection(connection, expected_version=1)
+                    connection.execute(
+                        """CREATE TABLE recovery_codes (
+                            account_id TEXT NOT NULL,
+                            code_hash TEXT NOT NULL CHECK (
+                                length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'
+                            ),
+                            created_at TEXT NOT NULL,
+                            PRIMARY KEY (account_id, code_hash),
+                            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+                        )"""
+                    )
+                    connection.execute("PRAGMA user_version = 2")
                 elif version != SCHEMA_VERSION:
                     raise AccountStoreSchemaError(
                         f"Account store schema version {version} is unsupported; expected {SCHEMA_VERSION}."
@@ -938,9 +1124,15 @@ class AccountStore:
             self._validate_schema_connection(connection)
 
     @staticmethod
-    def _validate_schema_connection(connection: sqlite3.Connection) -> None:
-        if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-            raise AccountStoreSchemaError("Account store schema is not v1.")
+    def _validate_schema_connection(
+        connection: sqlite3.Connection,
+        *,
+        expected_version: int = SCHEMA_VERSION,
+    ) -> None:
+        if expected_version not in (1, SCHEMA_VERSION):
+            raise AccountStoreSchemaError("Account store schema version is unsupported.")
+        if connection.execute("PRAGMA user_version").fetchone()[0] != expected_version:
+            raise AccountStoreSchemaError(f"Account store schema is not v{expected_version}.")
         objects = connection.execute(
             """SELECT type, name, tbl_name, sql FROM sqlite_master
                WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"""
@@ -951,12 +1143,16 @@ class AccountStore:
             ("table", "accounts", "accounts"),
             ("table", "login_throttle", "login_throttle"),
         }
+        if expected_version == SCHEMA_VERSION:
+            expected_objects.add(("table", "recovery_codes", "recovery_codes"))
         actual_objects = {(row["type"], row["name"], row["tbl_name"]) for row in objects}
         if actual_objects != expected_objects:
-            raise AccountStoreSchemaError("Account store schema objects do not match v1.")
+            raise AccountStoreSchemaError(f"Account store schema objects do not match v{expected_version}.")
         sql_by_name = {row["name"]: _sql_norm(row["sql"]) for row in objects}
         if sql_by_name["accounts"] != _ACCOUNTS_SQL or sql_by_name["login_throttle"] != _THROTTLE_SQL:
-            raise AccountStoreSchemaError("Account store table constraints do not match v1.")
+            raise AccountStoreSchemaError(f"Account store table constraints do not match v{expected_version}.")
+        if expected_version == SCHEMA_VERSION and sql_by_name["recovery_codes"] != _RECOVERY_CODES_SQL:
+            raise AccountStoreSchemaError("Account store recovery-code constraints do not match v2.")
         if sql_by_name["idx_accounts_email_unique"] != _sql_norm(
             "CREATE UNIQUE INDEX idx_accounts_email_unique ON accounts(email)"
         ) or sql_by_name["idx_login_throttle_window"] != _sql_norm(
@@ -969,12 +1165,28 @@ class AccountStore:
             [("id", "TEXT", 1, None, 1), ("email", "TEXT", 1, None, 0),
              ("password_hash", "TEXT", 1, None, 0), ("created_at", "TEXT", 1, None, 0),
              ("last_login_at", "TEXT", 0, None, 0)],
+            schema_version=expected_version,
         )
+        if expected_version == SCHEMA_VERSION:
+            AccountStore._expect_columns(
+                connection,
+                "recovery_codes",
+                [("account_id", "TEXT", 1, None, 1), ("code_hash", "TEXT", 1, None, 2),
+                 ("created_at", "TEXT", 1, None, 0)],
+                schema_version=expected_version,
+            )
+            foreign_keys = connection.execute("PRAGMA foreign_key_list(recovery_codes)").fetchall()
+            actual_foreign_keys = [
+                (row[2], row[3], row[4], row[6]) for row in foreign_keys
+            ]
+            if actual_foreign_keys != [("accounts", "account_id", "id", "CASCADE")]:
+                raise AccountStoreSchemaError("Account store recovery-code foreign key does not match v2.")
         AccountStore._expect_columns(
             connection,
             "login_throttle",
             [("email_key", "TEXT", 1, None, 1), ("failure_count", "INTEGER", 1, None, 0),
              ("window_started_at", "REAL", 1, None, 0), ("locked_until", "REAL", 1, "0", 0)],
+            schema_version=expected_version,
         )
         AccountStore._expect_index(connection, "accounts", "idx_accounts_email_unique", unique=True, column="email")
         AccountStore._expect_index(connection, "login_throttle", "idx_login_throttle_window", unique=False, column="window_started_at")
@@ -984,11 +1196,15 @@ class AccountStore:
         connection: sqlite3.Connection,
         table: str,
         expected: list[tuple[str, str, int, str | None, int]],
+        *,
+        schema_version: int = SCHEMA_VERSION,
     ) -> None:
         rows = connection.execute(f"PRAGMA table_info({table})").fetchall()
         actual = [(row[1], row[2].upper(), row[3], row[4], row[5]) for row in rows]
         if actual != expected:
-            raise AccountStoreSchemaError(f"Account store table {table!r} columns do not match v1.")
+            raise AccountStoreSchemaError(
+                f"Account store table {table!r} columns do not match v{schema_version}."
+            )
 
     @staticmethod
     def _expect_index(connection: sqlite3.Connection, table: str, name: str, *, unique: bool, column: str) -> None:
@@ -1009,7 +1225,10 @@ def validate_account_database(database_path: str | Path) -> None:
     try:
         with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as connection:
             connection.row_factory = sqlite3.Row
-            AccountStore._validate_schema_connection(connection)
+            version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (1, SCHEMA_VERSION):
+                raise AccountStoreSchemaError("Account store schema version is unsupported.")
+            AccountStore._validate_schema_connection(connection, expected_version=version)
     except AccountStoreSchemaError:
         raise
     except (sqlite3.DatabaseError, OSError, ValueError) as error:
@@ -1025,6 +1244,8 @@ __all__ = [
     "MAX_EMAIL_LENGTH",
     "MAX_PASSWORD_LENGTH",
     "MIN_PASSWORD_LENGTH",
+    "RECOVERY_CODE_COUNT",
+    "RECOVERY_CODE_PATTERN",
     "account_scope_id",
     "normalize_email",
     "validate_account_database",

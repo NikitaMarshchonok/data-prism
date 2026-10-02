@@ -56,6 +56,7 @@ The same drift algorithms and persistence layer are shared by the browser, API, 
 | `vibedash/decision_brief.py` | Deterministic ranking of evidence, decision risk, and next actions | Autonomous business decisions |
 | `vibedash/decision_cases.py` | Session-scoped evidence snapshots, decision commitments, outcomes, and bounded retention | Identity, collaboration, or causal attribution |
 | `vibedash/account_export.py` | In-memory, bounded serialization of account-owned job and decision-case metadata | Raw datasets, prompts, filenames, schema/session data, global pilot metrics, or durable export artifacts |
+| `vibedash/accounts.py` | Pilot credentials, login throttling, one-time recovery-code hashes, schema migration, and password-derived session revocation | Email delivery, identity verification, enterprise SSO, or support-side account recovery |
 | `vibedash/pilot_metrics.py` | Opt-in lifecycle measurement, bounded retention, feedback, and read-only aggregate reports | Customer identity, source rows, or proof of demand |
 | `src/runtime_backup.py` and `runtime_backup.py` | Offline bounded snapshots, integrity verification, and fail-closed restore into a new directory | Hosting persistence, encryption, authenticity, scheduling, or account recovery |
 | `src/runtime_state.py` and `runtime_state.py` | Stable state-directory identity, secret-free readiness status, and wrong-mount detection | Physical durability, backup freshness, recovery success, or distributed consistency |
@@ -221,7 +222,7 @@ Monitoring compares numeric distributions with PSI and categorical distributions
 | Decision cases and measured outcomes | SQLite | Guest-browser or pilot-account scoped; closed cases follow decision retention, active cases remain |
 | Drift baselines | JSON aggregate profiles | Persistent until removed by operator |
 | Drift history and alerts | SQLite | Retention-limited per monitoring scope |
-| Pilot accounts and login throttling | Dedicated SQLite | Optional account records; retained until the runtime store is removed |
+| Pilot accounts, login throttling, recovery-code hashes | Dedicated SQLite | Optional account records; retained until the runtime store is removed |
 | Secrets | Environment variables | Never committed to the repository |
 
 ### Optional VibeDash pilot accounts
@@ -249,12 +250,16 @@ to sign in again and makes prior account-owned job history unavailable under
 the new scope.
 
 Account settings remain intentionally narrow: password changes, bounded export,
-and scoped deletion. There is no email verification, recovery channel, or team
-access in this pilot. Free-host storage is ephemeral and account records, jobs,
+scoped deletion, and replacement one-time recovery-code generation after
+password re-authentication. Raw recovery codes are displayed once; only
+domain-separated hashes are stored. Recovery atomically consumes the complete
+set and rotates the password-derived session credential. There is no email
+verification, email recovery, support bypass, or team access in this pilot.
+Free-host storage is ephemeral and account records, jobs,
 uploads, and history may disappear when the host restarts.
 
 This is an optional free-host pilot boundary, not enterprise identity,
-recovery, team access, or a durability guarantee. Guest analyses are not
+managed recovery, team access, or a durability guarantee. Guest analyses are not
 claimed or migrated after registration. Account records, jobs, uploads, and
 history may disappear when an ephemeral host restarts.
 
