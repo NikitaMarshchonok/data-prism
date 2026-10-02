@@ -60,6 +60,18 @@
                 <button type="submit" class="button button-primary">Change password</button>
             </form>
 
+            <section class="recovery-card" aria-labelledby="recovery-codes-title">
+                <h2 id="recovery-codes-title">Recovery codes</h2>
+                <p class="form-help">Create eight one-time codes for password recovery without email. Generating a new set permanently replaces the old set.</p>
+                <p class="form-help">The codes are shown once. Save them outside Data Prism before leaving the next page.</p>
+                <form method="post" action="{{ url_for('vibedash.account_recovery_codes') }}" class="recovery-form">
+                    <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                    <label for="recovery-current-password">Current password</label>
+                    <input id="recovery-current-password" name="current_password" type="password" autocomplete="current-password" required>
+                    <button type="submit" class="button button-secondary">Generate replacement codes</button>
+                </form>
+            </section>
+
             <section class="export-card" aria-labelledby="account-export-title">
                 <h2 id="account-export-title">Export account data</h2>
                 <p class="form-help">Download the newest 50 jobs and newest 100 decision cases owned by this account.</p>
@@ -97,7 +109,7 @@
 
             <aside class="disclosure" aria-labelledby="pilot-disclosure-title">
                 <h2 id="pilot-disclosure-title">Pilot account notes</h2>
-                <p>There is no password recovery or email verification in this pilot. Keep your password safe; support cannot reset it.</p>
+                <p>Password recovery requires a saved one-time code. There is no email recovery or email verification in this pilot, and support cannot bypass a missing code.</p>
                 <p>Free-host storage is ephemeral and may be erased after a restart or redeploy. Keep your own copy of important results.</p>
             </aside>
         </section>

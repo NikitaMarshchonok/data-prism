@@ -56,12 +56,18 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .button { border: 0; border-radius: 9px; cursor: pointer; font: inherit; font-weight: 700; margin-top: 24px; padding: 12px 17px; }
 .button-primary { background: var(--accent); color: #09231b; }
 .button-primary:hover, .button-primary:focus-visible { filter: brightness(1.08); }
-.export-card { background: rgba(24, 43, 51, .72); border: 1px solid var(--border); border-radius: 12px; margin-top: 34px; padding: 22px; }
-.export-card h2 { font-size: 20px; margin: 0 0 8px; }
+.export-card, .recovery-card { background: rgba(24, 43, 51, .72); border: 1px solid var(--border); border-radius: 12px; margin-top: 34px; padding: 22px; }
+.export-card h2, .recovery-card h2 { font-size: 20px; margin: 0 0 8px; }
 .export-card .form-help { margin-bottom: 8px; }
 .export-form .button { margin-top: 10px; }
 .button-secondary { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
 .button-secondary:hover, .button-secondary:focus-visible { background: rgba(114, 224, 182, .1); }
+.recovery-code-shell { max-width: 760px; }
+.recovery-warning { background: rgba(114, 224, 182, .1); border: 1px solid rgba(114, 224, 182, .32); border-radius: 9px; color: var(--muted); padding: 13px 16px; }
+.recovery-code-list { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 24px 0 8px; padding-left: 30px; }
+.recovery-code-list code { color: var(--text); font: 700 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em; }
+.recovery-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 12px; }
+.recovery-actions .button { display: inline-block; text-decoration: none; }
 .danger-zone { background: var(--danger-surface); border: 1px solid var(--danger-border); border-radius: 12px; margin-top: 34px; padding: 22px; }
 .danger-eyebrow { color: var(--danger); margin-bottom: 6px; }
 .danger-zone h2 { font-size: 20px; margin: 0 0 8px; }
@@ -85,4 +91,11 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
     .settings-card { padding: 26px 20px; }
     .account-summary div { display: block; }
     dd { margin-top: 4px; }
+    .recovery-code-list { grid-template-columns: 1fr; }
+}
+@media print {
+    body { background: white; color: black; }
+    .settings-card { background: white; border: 0; box-shadow: none; }
+    .recovery-actions { display: none; }
+    .recovery-code-list code, h1 { color: black; }
 }

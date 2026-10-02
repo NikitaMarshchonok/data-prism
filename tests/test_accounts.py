@@ -5,12 +5,15 @@ import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from werkzeug.security import generate_password_hash
 
 import web_app
 from vibedash.analysis_jobs import AnalysisJobStore
 from vibedash.accounts import (
     ACCOUNT_ID_PATTERN,
     MAX_THROTTLE_ROWS,
+    RECOVERY_CODE_COUNT,
+    RECOVERY_CODE_PATTERN,
     AccountStore,
     AccountStoreSchemaError,
     AccountValidationError,
@@ -40,23 +43,91 @@ class AccountStoreTests(unittest.TestCase):
         self.store.close()
         self.directory.cleanup()
 
-    def test_v1_schema_is_transactional_exact_and_reopen_is_idempotent(self):
+    def test_v2_schema_is_transactional_exact_and_reopen_is_idempotent(self):
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
             objects = connection.execute(
                 "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
             ).fetchall()
+        object_types = [object_type for object_type, _ in objects]
+        object_names = [name for _, name in objects]
+        self.assertEqual(object_types, ["index", "index", "table", "table", "table"])
         self.assertEqual(
-            objects,
-            [("index", "idx_accounts_email_unique"), ("index", "idx_login_throttle_window"),
-             ("table", "accounts"), ("table", "login_throttle")],
+            object_names,
+            [
+                "idx_accounts_email_unique",
+                "idx_login_throttle_window",
+                "accounts",
+                "login_throttle",
+                "recovery_codes",
+            ],
         )
         self.store.close()
         reopened = AccountStore(self.path, clock=self.clock)
         self.assertIsNotNone(reopened.register("reopen@example.com", "a sufficiently long password"))
         reopened.close()
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+
+    def test_exact_v1_schema_migrates_to_v2_without_losing_accounts(self):
+        self.store.close()
+        self.path.unlink()
+        with sqlite3.connect(self.path) as connection:
+            connection.execute(
+                """CREATE TABLE accounts (
+                    id TEXT NOT NULL PRIMARY KEY CHECK (length(id) = 32 AND id NOT GLOB '*[^0-9a-f]*'),
+                    email TEXT NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    last_login_at TEXT
+                )"""
+            )
+            connection.execute("CREATE UNIQUE INDEX idx_accounts_email_unique ON accounts(email)")
+            connection.execute(
+                """CREATE TABLE login_throttle (
+                    email_key TEXT NOT NULL PRIMARY KEY CHECK (
+                        length(email_key) = 64 AND email_key NOT GLOB '*[^0-9a-f]*'
+                    ),
+                    failure_count INTEGER NOT NULL,
+                    window_started_at REAL NOT NULL,
+                    locked_until REAL NOT NULL DEFAULT 0
+                )"""
+            )
+            connection.execute("CREATE INDEX idx_login_throttle_window ON login_throttle(window_started_at)")
+            connection.execute(
+                "INSERT INTO accounts (id, email, password_hash, created_at, last_login_at) "
+                "VALUES (?, ?, ?, ?, NULL)",
+                (
+                    "a" * 32,
+                    "legacy@example.com",
+                    generate_password_hash("a sufficiently long password"),
+                    "2026-01-01T00:00:00+00:00",
+                ),
+            )
+            connection.execute("PRAGMA user_version = 1")
+        migrated = AccountStore(self.path, clock=self.clock)
+        self.assertIsNotNone(
+            migrated.authenticate("legacy@example.com", "a sufficiently long password")
+        )
+        account = migrated.register("migrated@example.com", "a sufficiently long password")
+        self.assertIsNotNone(account)
+        migrated.close()
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'recovery_codes'"
+                ).fetchone()[0],
+                1,
+            )
+
+    def test_account_deletion_cascades_recovery_codes(self):
+        password = "a sufficiently long password"
+        account = self.store.register("recovery-delete@example.com", password)
+        self.assertIsNotNone(self.store.generate_recovery_codes(account["id"], password))
+        self.assertTrue(self.store.delete_account(account["id"], password))
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM recovery_codes").fetchone()[0], 0)
 
     def test_partial_legacy_version_and_constraint_shapes_fail_closed(self):
         self.store.close()
@@ -68,7 +139,7 @@ class AccountStoreTests(unittest.TestCase):
         version_path = Path(self.directory.name) / "version.sqlite3"
         AccountStore(version_path).close()
         with sqlite3.connect(version_path) as connection:
-            connection.execute("PRAGMA user_version = 2")
+            connection.execute("PRAGMA user_version = 3")
         with self.assertRaisesRegex(AccountStoreSchemaError, "version"):
             AccountStore(version_path)
 
@@ -244,6 +315,97 @@ class AccountStoreTests(unittest.TestCase):
         self.assertNotIn("password_hash", fresh)
         self.assertIsNone(self.store.account_for_credential("f" * 32, new_token, "flask-secret"))
         self.assertIsNone(self.store.account_for_credential(account["id"], "0" * 64, "flask-secret"))
+
+    def test_recovery_codes_are_hashed_replaced_and_consumed_as_a_set(self):
+        password = "a sufficiently long password"
+        replacement = "a different sufficiently long password"
+        account = self.store.register("recover@example.com", password, credential_secret="secret")
+        old_token = account["_vibedash_session_credential"]
+        codes = self.store.generate_recovery_codes(account["id"], password)
+        self.assertEqual(len(codes), RECOVERY_CODE_COUNT)
+        self.assertEqual(len(set(codes)), RECOVERY_CODE_COUNT)
+        self.assertTrue(all(RECOVERY_CODE_PATTERN.fullmatch(code) for code in codes))
+        with sqlite3.connect(self.path) as connection:
+            stored = [row[0] for row in connection.execute("SELECT code_hash FROM recovery_codes")]
+        self.assertEqual(len(stored), RECOVERY_CODE_COUNT)
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", value) for value in stored))
+        self.assertTrue(all(code not in stored for code in codes))
+
+        replacement_codes = self.store.generate_recovery_codes(account["id"], password)
+        self.assertNotEqual(set(codes), set(replacement_codes))
+        self.assertIsNone(
+            self.store.recover_account(
+                account["email"], codes[0], replacement, credential_secret="secret"
+            )
+        )
+        recovered = self.store.recover_account(
+            account["email"], replacement_codes[0].lower(), replacement, credential_secret="secret"
+        )
+        self.assertIsNotNone(recovered)
+        self.assertFalse(self.store.verify_credential_token(account["id"], old_token, "secret"))
+        self.assertIsNone(self.store.authenticate(account["email"], password))
+        self.assertIsNotNone(self.store.authenticate(account["email"], replacement))
+        self.assertIsNone(
+            self.store.recover_account(account["email"], replacement_codes[1], password)
+        )
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM recovery_codes").fetchone()[0], 0)
+
+    def test_recovery_uses_login_throttle_and_one_concurrent_attempt_wins(self):
+        password = "a sufficiently long password"
+        replacement = "a different sufficiently long password"
+        account = self.store.register("recover-race@example.com", password)
+        codes = self.store.generate_recovery_codes(account["id"], password)
+        for _ in range(3):
+            self.assertIsNone(
+                self.store.recover_account(
+                    account["email"], "AAAA-AAAA-AAAA-AAAA-AAAA", replacement
+                )
+            )
+        self.assertIsNone(
+            self.store.recover_account(account["email"], codes[0], replacement)
+        )
+        self.clock.value += 21
+
+        stores = [AccountStore(self.path, clock=self.clock), AccountStore(self.path, clock=self.clock)]
+        barrier = threading.Barrier(2)
+        results = []
+
+        def recover(store):
+            barrier.wait()
+            results.append(store.recover_account(account["email"], codes[0], replacement))
+
+        threads = [threading.Thread(target=recover, args=(store,)) for store in stores]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        for store in stores:
+            store.close()
+        self.assertEqual(sum(result is not None for result in results), 1)
+
+    def test_recovery_mutations_roll_back_without_destroying_retry_codes(self):
+        password = "a sufficiently long password"
+        replacement = "a different sufficiently long password"
+        account = self.store.register("recover-rollback@example.com", password)
+        codes = self.store.generate_recovery_codes(account["id"], password)
+
+        with patch.object(
+            AccountStore,
+            "_recovery_code_hash",
+            side_effect=RuntimeError("synthetic digest failure"),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.store.generate_recovery_codes(account["id"], password)
+        # The DELETE of the previous set was in the same transaction as the
+        # failed inserts, so the original set remains usable.
+        with patch("vibedash.accounts.generate_password_hash", side_effect=RuntimeError("synthetic KDF failure")):
+            with self.assertRaises(RuntimeError):
+                self.store.recover_account(account["email"], codes[0], replacement)
+        self.assertIsNotNone(self.store.authenticate(account["email"], password))
+        self.assertIsNotNone(
+            self.store.recover_account(account["email"], codes[0], replacement)
+        )
 
     def test_change_password_rejects_same_password_without_rotation(self):
         password = "a sufficiently long password"
@@ -829,6 +991,104 @@ class AccountRouteIntegrationTests(unittest.TestCase):
             ).status_code,
             400,
         )
+
+    def test_recovery_code_http_flow_is_one_time_no_store_and_revokes_old_sessions(self):
+        owner = web_app.app.test_client()
+        second_browser = web_app.app.test_client()
+        recovery_browser = web_app.app.test_client()
+        new_password = "a replacement password long enough"
+        self.assertEqual(self._register(owner, "recovery-http@example.com").status_code, 302)
+        self.assertEqual(self._login(second_browser, "recovery-http@example.com").status_code, 302)
+
+        settings_token = self._csrf(owner, "/vibedash/account")
+        generated = owner.post(
+            "/vibedash/account/recovery-codes",
+            data={"csrf_token": settings_token, "current_password": self.PASSWORD},
+        )
+        self.assertEqual(generated.status_code, 200)
+        self.assertIn("no-store", generated.headers.get("Cache-Control", ""))
+        self.assertEqual(generated.headers.get("X-Frame-Options"), "DENY")
+        self.assertIn("default-src 'none'", generated.headers.get("Content-Security-Policy", ""))
+        self.assertNotIn("<script", generated.get_data(as_text=True).lower())
+        self.assertNotIn("onclick=", generated.get_data(as_text=True).lower())
+        codes = re.findall(
+            r"\b[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}\b",
+            generated.get_data(as_text=True),
+        )
+        self.assertEqual(len(codes), RECOVERY_CODE_COUNT)
+        with sqlite3.connect(self.account_path) as connection:
+            stored_values = " ".join(
+                row[0] for row in connection.execute("SELECT code_hash FROM recovery_codes")
+            )
+        self.assertTrue(all(code not in stored_values for code in codes))
+
+        recovery_token = self._csrf(recovery_browser, "/vibedash/recover")
+        recovered = recovery_browser.post(
+            "/vibedash/recover",
+            data={
+                "csrf_token": recovery_token,
+                "email": "RECOVERY-HTTP@example.com",
+                "recovery_code": codes[0].lower(),
+                "new_password": new_password,
+                "new_password_confirmation": new_password,
+            },
+        )
+        self.assertEqual(recovered.status_code, 302)
+        self.assertEqual(recovery_browser.get("/vibedash/account").status_code, 200)
+        self.assertEqual(owner.get("/vibedash/account").status_code, 302)
+        self.assertEqual(second_browser.get("/vibedash/account").status_code, 302)
+
+        reused = web_app.app.test_client()
+        reused_response = reused.post(
+            "/vibedash/recover",
+            data={
+                "csrf_token": self._csrf(reused, "/vibedash/recover"),
+                "email": "recovery-http@example.com",
+                "recovery_code": codes[1],
+                "new_password": "another replacement password",
+                "new_password_confirmation": "another replacement password",
+            },
+        )
+        self.assertEqual(reused_response.status_code, 401)
+        self.assertIn(
+            "email, recovery code, or account state is invalid",
+            reused_response.get_data(as_text=True),
+        )
+
+        old_login = web_app.app.test_client()
+        self.assertEqual(
+            self._login(old_login, "recovery-http@example.com", self.PASSWORD).status_code,
+            401,
+        )
+        new_login = web_app.app.test_client()
+        self.assertEqual(
+            self._login(new_login, "recovery-http@example.com", new_password).status_code,
+            302,
+        )
+
+    def test_recovery_code_generation_requires_auth_csrf_and_current_password(self):
+        guest = web_app.app.test_client()
+        self.assertEqual(guest.post("/vibedash/account/recovery-codes").status_code, 302)
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, "recovery-guard@example.com").status_code, 302)
+        self.assertEqual(
+            client.post(
+                "/vibedash/account/recovery-codes",
+                data={"csrf_token": "0" * 64, "current_password": self.PASSWORD},
+            ).status_code,
+            400,
+        )
+        response = client.post(
+            "/vibedash/account/recovery-codes",
+            data={
+                "csrf_token": self._csrf(client, "/vibedash/account"),
+                "current_password": "incorrect password",
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("current password or account state is invalid", response.get_data(as_text=True))
+        with sqlite3.connect(self.account_path) as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM recovery_codes").fetchone()[0], 0)
 
     def test_account_export_guest_and_csrf_are_rejected_without_export_work(self):
         guest = web_app.app.test_client()

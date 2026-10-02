@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow,noarchive">
+    <title>Save recovery codes · Data Prism</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_account.css') }}">
+</head>
+<body>
+    <main class="settings-shell recovery-code-shell">
+        <section class="settings-card" aria-labelledby="recovery-title">
+            <p class="eyebrow">Shown once</p>
+            <h1 id="recovery-title">Save your recovery codes</h1>
+            <p class="intro">These codes replace every previous set for {{ account.email }}. Store them in a password manager before leaving this page.</p>
+            <div class="recovery-warning" role="note">Each code can start one password recovery. After any successful recovery, the entire set expires.</div>
+            <ol class="recovery-code-list" aria-label="Recovery codes">
+                {% for code in recovery_codes %}<li><code>{{ code }}</code></li>{% endfor %}
+            </ol>
+            <div class="recovery-actions">
+                <a class="button button-secondary" href="{{ url_for('vibedash.account_settings') }}">I saved the codes</a>
+            </div>
+            <p class="form-help">To keep a paper or PDF copy, use your browser’s Print command before leaving.</p>
+        </section>
+    </main>
+</body>
+</html>
