@@ -250,12 +250,19 @@ to sign in again and makes prior account-owned job history unavailable under
 the new scope.
 
 Account settings remain intentionally narrow: password changes, bounded export,
-scoped deletion, and replacement one-time recovery-code generation after
-password re-authentication. Raw recovery codes are displayed once; only
+scoped deletion, replacement one-time recovery-code generation after password
+re-authentication, and a bounded account-security timeline. The account store
+retains at most 100 allowlisted events per account and shows the newest 20. It
+records account creation, successful sign-in, password change, recovery-code
+replacement, and successful recovery in the same SQLite transaction as the
+security-sensitive mutation. It stores no network address, device/browser
+detail, email address, session token, recovery code, or free-form metadata.
+The bounded account export includes the retained event type and timestamp only.
+Raw recovery codes are displayed once; only
 domain-separated hashes are stored. Recovery atomically consumes the complete
 set and rotates the password-derived session credential. There is no email
 verification, email recovery, support bypass, or team access in this pilot.
-Free-host storage is ephemeral and account records, jobs,
+Free-host storage is ephemeral and account records, security activity, jobs,
 uploads, and history may disappear when the host restarts.
 
 This is an optional free-host pilot boundary, not enterprise identity,

@@ -8,6 +8,7 @@ from vibedash.account_export import (
     MAX_ACCOUNT_EXPORT_BYTES,
     MAX_ACCOUNT_EXPORT_CASES,
     MAX_ACCOUNT_EXPORT_JOBS,
+    MAX_ACCOUNT_EXPORT_SECURITY_EVENTS,
     AccountExportError,
     AccountExportTooLargeError,
     build_account_export,
@@ -101,6 +102,33 @@ class AccountExportTests(unittest.TestCase):
         self.assertEqual(json.loads(first)["contract"], ACCOUNT_EXPORT_CONTRACT)
         self.assertNotIn(b", ", first)
         self.assertNotIn(b": ", first)
+
+    def test_security_activity_is_allowlisted_bounded_and_context_free(self):
+        events = [
+            {
+                "event_type": "signed_in",
+                "occurred_at": "2026-01-02T03:04:05+00:00",
+                "label": "ATTACKER_LABEL",
+                "ip": "127.0.0.1",
+                "user_agent": "PRIVATE_BROWSER",
+            }
+            for _ in range(MAX_ACCOUNT_EXPORT_SECURITY_EVENTS + 1)
+        ]
+        events.extend([
+            {"event_type": "attacker_event", "occurred_at": "2026-01-02T03:04:05+00:00"},
+            {"event_type": "signed_in", "occurred_at": "not-a-date"},
+        ])
+
+        result = self.build(security_events=events)
+
+        self.assertEqual(len(result["security_activity"]), MAX_ACCOUNT_EXPORT_SECURITY_EVENTS)
+        self.assertTrue(result["security_activity_truncated"])
+        self.assertTrue(
+            all(set(event) == {"event_type", "occurred_at"} for event in result["security_activity"])
+        )
+        serialized = serialize_account_export(result).decode()
+        for marker in ("ATTACKER_LABEL", "127.0.0.1", "PRIVATE_BROWSER", "attacker_event"):
+            self.assertNotIn(marker, serialized)
 
     def test_malformed_and_nan_fail_closed(self):
         result = self.build(jobs=[{"id": self.job_id, "status": "\ud800", "manifest": {"dataset": {"source_rows": math.nan}}}])

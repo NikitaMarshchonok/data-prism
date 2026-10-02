@@ -72,9 +72,28 @@
                 </form>
             </section>
 
+            <section class="security-activity-card" aria-labelledby="security-activity-title">
+                <h2 id="security-activity-title">Recent security activity</h2>
+                <p class="form-help">The newest 20 account security events are shown. Data Prism stores at most 100 events and does not collect IP addresses, device names, or browser details.</p>
+                {% if security_activity_unavailable %}
+                    <p class="activity-empty" role="status">Security activity is temporarily unavailable.</p>
+                {% elif security_activity %}
+                    <ol class="security-activity-list">
+                        {% for event in security_activity %}
+                            <li>
+                                <span>{{ event.label }}</span>
+                                <time datetime="{{ event.occurred_at }}">{{ event.occurred_at }}</time>
+                            </li>
+                        {% endfor %}
+                    </ol>
+                {% else %}
+                    <p class="activity-empty">No retained security activity is available.</p>
+                {% endif %}
+            </section>
+
             <section class="export-card" aria-labelledby="account-export-title">
                 <h2 id="account-export-title">Export account data</h2>
-                <p class="form-help">Download the newest 50 jobs and newest 100 decision cases owned by this account.</p>
+                <p class="form-help">Download the newest 50 jobs, newest 100 decision cases, and retained security activity owned by this account.</p>
                 <p class="form-help">Raw datasets, prompts, filenames, schema/session data, and global pilot metrics are excluded. The export is assembled in memory and is not written as an artifact.</p>
                 <form method="post" action="{{ url_for('vibedash.account_export') }}" class="export-form">
                     <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">

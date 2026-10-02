@@ -11,6 +11,7 @@ import web_app
 from vibedash.analysis_jobs import AnalysisJobStore
 from vibedash.accounts import (
     ACCOUNT_ID_PATTERN,
+    MAX_SECURITY_EVENTS_PER_ACCOUNT,
     MAX_THROTTLE_ROWS,
     RECOVERY_CODE_COUNT,
     RECOVERY_CODE_PATTERN,
@@ -43,20 +44,25 @@ class AccountStoreTests(unittest.TestCase):
         self.store.close()
         self.directory.cleanup()
 
-    def test_v2_schema_is_transactional_exact_and_reopen_is_idempotent(self):
+    def test_v3_schema_is_transactional_exact_and_reopen_is_idempotent(self):
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
             objects = connection.execute(
                 "SELECT type, name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
             ).fetchall()
         object_types = [object_type for object_type, _ in objects]
         object_names = [name for _, name in objects]
-        self.assertEqual(object_types, ["index", "index", "table", "table", "table"])
+        self.assertEqual(
+            object_types,
+            ["index", "index", "index", "table", "table", "table", "table"],
+        )
         self.assertEqual(
             object_names,
             [
+                "idx_account_security_events_account_id",
                 "idx_accounts_email_unique",
                 "idx_login_throttle_window",
+                "account_security_events",
                 "accounts",
                 "login_throttle",
                 "recovery_codes",
@@ -67,9 +73,9 @@ class AccountStoreTests(unittest.TestCase):
         self.assertIsNotNone(reopened.register("reopen@example.com", "a sufficiently long password"))
         reopened.close()
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
 
-    def test_exact_v1_schema_migrates_to_v2_without_losing_accounts(self):
+    def test_exact_v1_schema_migrates_to_v3_without_losing_accounts(self):
         self.store.close()
         self.path.unlink()
         with sqlite3.connect(self.path) as connection:
@@ -113,21 +119,52 @@ class AccountStoreTests(unittest.TestCase):
         self.assertIsNotNone(account)
         migrated.close()
         with sqlite3.connect(self.path) as connection:
-            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 3)
             self.assertEqual(
                 connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'recovery_codes'"
                 ).fetchone()[0],
                 1,
             )
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'account_security_events'"
+                ).fetchone()[0],
+                1,
+            )
 
-    def test_account_deletion_cascades_recovery_codes(self):
+    def test_exact_v2_schema_migrates_to_v3_without_losing_accounts(self):
+        account = self.store.register("v2-migration@example.com", "a sufficiently long password")
+        self.store.close()
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("DROP INDEX idx_account_security_events_account_id")
+            connection.execute("DROP TABLE account_security_events")
+            connection.execute("PRAGMA user_version = 2")
+
+        migrated = AccountStore(self.path, clock=self.clock)
+        self.assertEqual(migrated.get_account(account["id"])["email"], account["email"])
+        self.assertEqual(migrated.list_security_events(account["id"]), [])
+        self.assertIsNotNone(
+            migrated.authenticate(account["email"], "a sufficiently long password")
+        )
+        self.assertEqual(
+            [event["event_type"] for event in migrated.list_security_events(account["id"])],
+            ["signed_in"],
+        )
+        migrated.close()
+
+    def test_account_deletion_cascades_recovery_codes_and_security_events(self):
         password = "a sufficiently long password"
         account = self.store.register("recovery-delete@example.com", password)
         self.assertIsNotNone(self.store.generate_recovery_codes(account["id"], password))
         self.assertTrue(self.store.delete_account(account["id"], password))
         with sqlite3.connect(self.path) as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM recovery_codes").fetchone()[0], 0)
+            self.assertEqual(
+                connection.execute("SELECT COUNT(*) FROM account_security_events").fetchone()[0],
+                0,
+            )
 
     def test_partial_legacy_version_and_constraint_shapes_fail_closed(self):
         self.store.close()
@@ -139,7 +176,7 @@ class AccountStoreTests(unittest.TestCase):
         version_path = Path(self.directory.name) / "version.sqlite3"
         AccountStore(version_path).close()
         with sqlite3.connect(version_path) as connection:
-            connection.execute("PRAGMA user_version = 3")
+            connection.execute("PRAGMA user_version = 4")
         with self.assertRaisesRegex(AccountStoreSchemaError, "version"):
             AccountStore(version_path)
 
@@ -205,6 +242,75 @@ class AccountStoreTests(unittest.TestCase):
                 1,
             )
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM login_throttle WHERE email_key LIKE '%@%' ").fetchone()[0], 0)
+
+    def test_security_activity_is_bounded_allowlisted_and_contains_no_context(self):
+        password = "a sufficiently long password"
+        account = self.store.register("activity@example.com", password)
+        self.clock.value += 1
+        self.assertIsNotNone(self.store.authenticate(account["email"], password))
+        self.clock.value += 1
+        self.assertIsNotNone(self.store.generate_recovery_codes(account["id"], password))
+        self.clock.value += 1
+        self.assertIsNotNone(
+            self.store.change_password(
+                account["id"], password, "a different sufficiently long password"
+            )
+        )
+
+        events = self.store.list_security_events(account["id"])
+        self.assertEqual(
+            [event["event_type"] for event in events],
+            [
+                "password_changed",
+                "recovery_codes_generated",
+                "signed_in",
+                "account_created",
+            ],
+        )
+        self.assertTrue(all(set(event) == {"event_type", "label", "occurred_at"} for event in events))
+        serialized = repr(events).lower()
+        self.assertNotIn("activity@example.com", serialized)
+        for forbidden_key in ("ip", "user_agent", "session", "email", "recovery_code"):
+            self.assertTrue(all(forbidden_key not in event for event in events))
+        self.assertEqual(self.store.list_security_events("f" * 32), [])
+        for invalid_limit in (0, 101, True, "20"):
+            with self.assertRaises(ValueError):
+                self.store.list_security_events(account["id"], limit=invalid_limit)
+
+    def test_security_activity_prunes_oldest_rows_and_rolls_back_with_mutation(self):
+        password = "a sufficiently long password"
+        replacement = "a different sufficiently long password"
+        account = self.store.register("activity-cap@example.com", password)
+        with self.store._transaction() as connection:
+            for index in range(MAX_SECURITY_EVENTS_PER_ACCOUNT + 5):
+                self.store._record_security_event(
+                    connection,
+                    account["id"],
+                    "signed_in",
+                    f"2026-01-01T00:00:{index % 60:02d}+00:00",
+                )
+        events = self.store.list_security_events(
+            account["id"], limit=MAX_SECURITY_EVENTS_PER_ACCOUNT
+        )
+        self.assertEqual(len(events), MAX_SECURITY_EVENTS_PER_ACCOUNT)
+        with sqlite3.connect(self.path) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT COUNT(*) FROM account_security_events WHERE account_id = ?",
+                    (account["id"],),
+                ).fetchone()[0],
+                MAX_SECURITY_EVENTS_PER_ACCOUNT,
+            )
+
+        with patch.object(
+            self.store,
+            "_record_security_event",
+            side_effect=RuntimeError("synthetic event failure"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "synthetic event failure"):
+                self.store.change_password(account["id"], password, replacement)
+        self.assertIsNotNone(self.store.authenticate(account["email"], password))
+        self.assertIsNone(self.store.authenticate(account["email"], replacement))
 
     def test_authenticated_credential_snapshot_cannot_be_replaced_by_concurrent_password_change(self):
         """A login result must never mint a token from a later password hash."""
@@ -992,6 +1098,38 @@ class AccountRouteIntegrationTests(unittest.TestCase):
             400,
         )
 
+    def test_account_settings_shows_only_bounded_security_activity(self):
+        client = web_app.app.test_client()
+        other = web_app.app.test_client()
+        self.assertEqual(self._register(client, "activity-http@example.com").status_code, 302)
+        self.assertEqual(self._register(other, "other-activity@example.com").status_code, 302)
+
+        first_page = client.get("/vibedash/account")
+        first_html = first_page.get_data(as_text=True)
+        self.assertEqual(first_page.status_code, 200)
+        self.assertIn("Recent security activity", first_html)
+        self.assertIn("Account created", first_html)
+        self.assertNotIn("other-activity@example.com", first_html)
+        self.assertNotIn("127.0.0.1", first_html)
+
+        token = self._csrf(client, "/vibedash/account")
+        generated = client.post(
+            "/vibedash/account/recovery-codes",
+            data={"csrf_token": token, "current_password": self.PASSWORD},
+        )
+        self.assertEqual(generated.status_code, 200)
+        self.assertIn(
+            "Recovery codes replaced",
+            client.get("/vibedash/account").get_data(as_text=True),
+        )
+
+        store = web_app.app.extensions["vibedash_account_store"]
+        with patch.object(store, "list_security_events", side_effect=RuntimeError("private detail")):
+            unavailable = client.get("/vibedash/account")
+        self.assertEqual(unavailable.status_code, 200)
+        self.assertIn("Security activity is temporarily unavailable.", unavailable.get_data(as_text=True))
+        self.assertNotIn("private detail", unavailable.get_data(as_text=True))
+
     def test_recovery_code_http_flow_is_one_time_no_store_and_revokes_old_sessions(self):
         owner = web_app.app.test_client()
         second_browser = web_app.app.test_client()
@@ -1113,11 +1251,31 @@ class AccountRouteIntegrationTests(unittest.TestCase):
         with client.session_transaction() as browser:
             account_id = browser['vibedash_account_id']
 
+        lock_order = []
+
+        class RecordingAccountLock:
+            def __enter__(self):
+                lock_order.append('account-enter')
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                lock_order.append('account-exit')
+
+        def run_while_scope_open(_scope, callback):
+            self.assertEqual(lock_order, ['account-enter'])
+            lock_order.append('scope-enter')
+            result = callback(None)
+            lock_order.append('scope-exit')
+            return result
+
         with patch('vibedash.routes._analysis_job_store') as job_store_factory, patch(
             'vibedash.routes._decision_case_store'
-        ) as case_store_factory:
+        ) as case_store_factory, patch.object(
+            web_app.app.extensions['vibedash_account_store'],
+            'deletion_lock',
+            side_effect=lambda _account_id: RecordingAccountLock(),
+        ):
             job_store_factory.return_value.run_if_scope_open.side_effect = (
-                lambda _scope, callback: callback(None)
+                run_while_scope_open
             )
             job_store_factory.return_value.list_for_scope_page.return_value = ([{
                 'id': 'job',
@@ -1131,9 +1289,19 @@ class AccountRouteIntegrationTests(unittest.TestCase):
             response = client.post('/vibedash/account/export.json', data={'csrf_token': token})
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            lock_order,
+            ['account-enter', 'scope-enter', 'scope-exit', 'account-exit'],
+        )
         payload = response.get_json()
         self.assertEqual(payload['jobs_truncated'], True)
         self.assertEqual(payload['decisions_truncated'], False)
+        self.assertEqual(
+            [event['event_type'] for event in payload['security_activity']],
+            ['account_created'],
+        )
+        self.assertFalse(payload['security_activity_truncated'])
+        self.assertNotIn('label', payload['security_activity'][0])
         for marker in ('HTTP_PROMPT_SECRET', 'HTTP_FILE_SECRET', 'HTTP_SNAPSHOT_SECRET'):
             self.assertNotIn(marker, response.get_data(as_text=True))
         self.assertEqual(response.headers['Content-Type'], 'application/json; charset=utf-8')

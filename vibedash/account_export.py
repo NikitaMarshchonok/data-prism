@@ -19,9 +19,10 @@ from typing import Any
 from .outcome_measurement import normalize_outcome_measurement
 
 
-ACCOUNT_EXPORT_CONTRACT = "vibedash-account-export-v1"
+ACCOUNT_EXPORT_CONTRACT = "vibedash-account-export-v2"
 MAX_ACCOUNT_EXPORT_JOBS = 50
 MAX_ACCOUNT_EXPORT_CASES = 100
+MAX_ACCOUNT_EXPORT_SECURITY_EVENTS = 100
 MAX_ACCOUNT_EXPORT_BYTES = 2 * 1024 * 1024
 
 
@@ -67,6 +68,13 @@ _READINESS_STATUSES = frozenset({"blocked", "ready_with_warnings", "ready"})
 _DECISION_BRIEF_STATUSES = frozenset({"blocked", "review_required", "insufficient_evidence"})
 _COMPARISON_STATUSES = frozenset({"stable", "review_required"})
 _COMPARISON_CONTRACTS = frozenset({"period-comparison-v1"})
+_SECURITY_EVENT_TYPES = frozenset({
+    "account_created",
+    "signed_in",
+    "password_changed",
+    "recovery_codes_generated",
+    "account_recovered",
+})
 
 
 def _text(value: Any, maximum: int, *, allow_empty: bool = False) -> str | None:
@@ -400,12 +408,24 @@ def _safe_case(case: Any) -> dict[str, Any] | None:
     return result
 
 
+def _safe_security_event(event: Any) -> dict[str, str] | None:
+    """Keep only a fixed event type and normalized timestamp."""
+    if not isinstance(event, Mapping):
+        return None
+    event_type = event.get("event_type")
+    occurred_at = _timestamp(event.get("occurred_at"))
+    if event_type not in _SECURITY_EVENT_TYPES or occurred_at is None:
+        return None
+    return {"event_type": event_type, "occurred_at": occurred_at}
+
+
 def build_account_export(
     account: Mapping[str, Any] | None,
     jobs: Sequence[Mapping[str, Any]] | None,
     *,
     jobs_truncated: bool,
     decision_cases: Sequence[Mapping[str, Any]] | None,
+    security_events: Sequence[Mapping[str, Any]] | None = None,
     decisions_truncated: bool | None = None,
     decision_cases_truncated: bool | None = None,
     generated_at: Any = None,
@@ -415,6 +435,10 @@ def build_account_export(
         raise AccountExportError("Invalid account export jobs collection.")
     if isinstance(decision_cases, (str, bytes, bytearray)) or (decision_cases is not None and not isinstance(decision_cases, Sequence)):
         raise AccountExportError("Invalid account export decisions collection.")
+    if isinstance(security_events, (str, bytes, bytearray)) or (
+        security_events is not None and not isinstance(security_events, Sequence)
+    ):
+        raise AccountExportError("Invalid account export security-event collection.")
     if decisions_truncated is None:
         decisions_truncated = decision_cases_truncated
     if not isinstance(jobs_truncated, bool) or not isinstance(decisions_truncated, bool):
@@ -425,8 +449,17 @@ def build_account_export(
 
     job_count = len(jobs) if jobs is not None else 0
     case_count = len(decision_cases) if decision_cases is not None else 0
+    security_event_count = len(security_events) if security_events is not None else 0
     safe_jobs = [_safe_job(item) for item in (jobs[:MAX_ACCOUNT_EXPORT_JOBS] if jobs is not None else [])]
     safe_cases = [_safe_case(item) for item in (decision_cases[:MAX_ACCOUNT_EXPORT_CASES] if decision_cases is not None else [])]
+    safe_security_events = [
+        _safe_security_event(item)
+        for item in (
+            security_events[:MAX_ACCOUNT_EXPORT_SECURITY_EVENTS]
+            if security_events is not None
+            else []
+        )
+    ]
     payload: dict[str, Any] = {
         "contract": ACCOUNT_EXPORT_CONTRACT,
         "generated_at": generated,
@@ -435,6 +468,10 @@ def build_account_export(
         "jobs_truncated": jobs_truncated or job_count > MAX_ACCOUNT_EXPORT_JOBS,
         "decision_cases": [item for item in safe_cases if item is not None],
         "decisions_truncated": decisions_truncated or case_count > MAX_ACCOUNT_EXPORT_CASES,
+        "security_activity": [
+            item for item in safe_security_events if item is not None
+        ],
+        "security_activity_truncated": security_event_count > MAX_ACCOUNT_EXPORT_SECURITY_EVENTS,
         "pilot_metrics": {"included": False, "reason": "pilot metrics are excluded from account exports"},
     }
     # Validate the contract at construction time too, so callers never receive
@@ -473,6 +510,7 @@ __all__ = [
     "ACCOUNT_EXPORT_CONTRACT",
     "MAX_ACCOUNT_EXPORT_JOBS",
     "MAX_ACCOUNT_EXPORT_CASES",
+    "MAX_ACCOUNT_EXPORT_SECURITY_EVENTS",
     "MAX_ACCOUNT_EXPORT_BYTES",
     "AccountExportError",
     "AccountExportTooLargeError",

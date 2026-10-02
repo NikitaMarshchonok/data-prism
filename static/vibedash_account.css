@@ -56,10 +56,15 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .button { border: 0; border-radius: 9px; cursor: pointer; font: inherit; font-weight: 700; margin-top: 24px; padding: 12px 17px; }
 .button-primary { background: var(--accent); color: #09231b; }
 .button-primary:hover, .button-primary:focus-visible { filter: brightness(1.08); }
-.export-card, .recovery-card { background: rgba(24, 43, 51, .72); border: 1px solid var(--border); border-radius: 12px; margin-top: 34px; padding: 22px; }
-.export-card h2, .recovery-card h2 { font-size: 20px; margin: 0 0 8px; }
+.export-card, .recovery-card, .security-activity-card { background: rgba(24, 43, 51, .72); border: 1px solid var(--border); border-radius: 12px; margin-top: 34px; padding: 22px; }
+.export-card h2, .recovery-card h2, .security-activity-card h2 { font-size: 20px; margin: 0 0 8px; }
 .export-card .form-help { margin-bottom: 8px; }
 .export-form .button { margin-top: 10px; }
+.security-activity-list { list-style: none; margin: 18px 0 0; padding: 0; }
+.security-activity-list li { align-items: baseline; border-top: 1px solid var(--border); display: flex; gap: 18px; justify-content: space-between; padding: 12px 0; }
+.security-activity-list span { font-weight: 650; }
+.security-activity-list time { color: var(--muted); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: right; }
+.activity-empty { color: var(--muted); margin: 16px 0 0; }
 .button-secondary { background: transparent; border: 1px solid var(--accent); color: var(--accent); }
 .button-secondary:hover, .button-secondary:focus-visible { background: rgba(114, 224, 182, .1); }
 .recovery-code-shell { max-width: 760px; }
@@ -92,6 +97,8 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
     .account-summary div { display: block; }
     dd { margin-top: 4px; }
     .recovery-code-list { grid-template-columns: 1fr; }
+    .security-activity-list li { align-items: flex-start; flex-direction: column; gap: 4px; }
+    .security-activity-list time { text-align: left; }
 }
 @media print {
     body { background: white; color: black; }
