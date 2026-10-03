@@ -111,6 +111,22 @@ Use the [supervised pilot runbook](PILOT_EXECUTION.md) and copy the
 [blank scorecard](PILOT_SESSION_SCORECARD.md) to a private location before the
 session. Never fill or commit the repository template.
 
+Before the manual browser pass, run the isolated critical-journey acceptance
+test from the repository root:
+
+```bash
+python -m unittest tests.test_release_acceptance_journey
+```
+
+The test uses temporary SQLite databases and runtime directories. It verifies
+registration, a real deterministic analysis worker run, the retained result
+and manifest, decision and measured-outcome capture, account export, logout and
+login, recovery-code password reset, retained history after recovery, and
+account deletion with scoped artifact cleanup. It does not validate browser
+JavaScript or visual layout, public deployment configuration, durable hosting,
+email delivery, or real-user usefulness; those remain separate acceptance
+steps.
+
 ### Before the session
 
 - [ ] Confirm the participant matches the narrow use case: a recurring SaaS
