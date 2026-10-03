@@ -27,6 +27,12 @@ class VibeDashDemoSpecTests(unittest.TestCase):
         self.assertEqual(_format_value(0.067, "percent"), "6.7%")
         self.assertEqual(_format_value(6.7, "percent"), "6.7%")
 
+    def test_number_format_preserves_meaningful_fractional_precision(self):
+        self.assertEqual(_format_value(0.0685, "number"), "0.0685")
+        self.assertEqual(_format_value(128.5, "number"), "128.5")
+        self.assertEqual(_format_value(1200.0, "number"), "1,200")
+        self.assertEqual(_format_value(0.00005, "number"), "5e-05")
+
 
 if __name__ == "__main__":
     unittest.main()

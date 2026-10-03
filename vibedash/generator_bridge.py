@@ -331,10 +331,19 @@ def _format_value(value: float, fmt: str) -> str:
             percentage = value * 100 if -1 <= value <= 1 else value
             return f"{percentage:.1f}%"
         elif fmt == "number":
-            return f"{value:,.0f}"
+            numeric = float(value)
+            if numeric == 0:
+                return "0"
+            if numeric.is_integer():
+                return f"{numeric:,.0f}"
+            magnitude = abs(numeric)
+            if magnitude < 0.001:
+                return f"{numeric:.4g}"
+            precision = 4 if magnitude < 1 else 2
+            return f"{numeric:,.{precision}f}".rstrip("0").rstrip(".")
         else:
             return f"{value:,.2f}"
-    except (ValueError, TypeError):
+    except (OverflowError, ValueError, TypeError):
         # Если форматирование не удается, возвращаем как строку
         return str(value)
 
