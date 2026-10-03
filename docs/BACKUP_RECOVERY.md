@@ -15,7 +15,7 @@ runtime-state/
 ├── identity/runtime_state.json # Stable state lineage; preserve across restore
 ├── jobs/analysis_jobs.sqlite3     # Jobs, decision cases, opt-in pilot measurement
 ├── drift/drift_history.sqlite3   # Monitoring runs and alerts, when present
-├── accounts/accounts.sqlite3     # Optional pilot accounts, throttling, recovery-code hashes
+├── accounts/accounts.sqlite3     # Accounts, throttling, recovery hashes, bounded security events
 ├── baselines/                    # Aggregate reference profiles
 ├── uploads/                      # Temporary input files
 ├── sessions/vibedash/            # Stored dashboard results
@@ -146,9 +146,9 @@ or restore. Parent directories must be operator-controlled, not shared scratch s
 5. Check `/healthz`, `/readyz`, History, an unexpired dashboard, a decision case,
    monitoring history, and `pilot_report.py` on the restored job database. If
    `accounts/accounts.sqlite3` is present, verify that a pilot account can sign
-   in and still sees its account-owned history, while a separate guest browser
-   cannot read an existing case. An expired source dashboard may be unavailable
-   while its longer-lived case remains readable.
+   in, sees its recent security activity and account-owned history, and that a
+   separate guest browser cannot read an existing case. An expired source
+   dashboard may be unavailable while its longer-lived case remains readable.
 6. Original modification times and database timestamps are preserved. Normal
    retention cleanup applies on the next application request, so restoration
    must not be used to extend the life of expired uploads or measurements.

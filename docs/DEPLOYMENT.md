@@ -88,10 +88,18 @@ server-side session/revocation store if that guarantee is required. On the free
 host, account data and account-owned history can reset with the filesystem.
 Guest analyses remain browser-scoped and are never migrated into an account.
 
+The account database migrates exact legacy v1 and v2 schemas to v3 on open. V3
+adds a cascade-deleted security-event table capped at 100 rows per account. Only
+fixed event types and UTC timestamps are retained; network addresses,
+device/browser details, account email, session material, raw recovery codes,
+and free-form metadata are not collected. A malformed or unexpected schema
+fails closed rather than being modified.
+
 Authenticated pilot accounts can download their retained metadata from
 `POST /vibedash/account/export.json`. The export is limited to the newest 50
-analysis jobs and newest 100 decision cases, with truncation flags when older
-records exist. It excludes raw datasets, prompts, filenames, schema/session
+analysis jobs, newest 100 decision cases, and at most 100 retained security
+events, with truncation flags when older job or case records exist. It excludes
+raw datasets, prompts, filenames, schema/session
 data, and global pilot metrics. JSON is assembled and serialized in memory;
 the request does not create an export artifact or extend retention. The
 download is protected by the account CSRF token and private/no-store response

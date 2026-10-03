@@ -47,7 +47,16 @@ RECOVERY_CODE_COUNT = 8
 RECOVERY_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 RECOVERY_CODE_PATTERN = re.compile(r"^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$")
 RECOVERY_CODE_HASH_DOMAIN = b"vibedash-recovery-code-v1\x00"
-SCHEMA_VERSION = 2
+SECURITY_EVENT_LABELS = {
+    "account_created": "Account created",
+    "signed_in": "Signed in",
+    "password_changed": "Password changed",
+    "recovery_codes_generated": "Recovery codes replaced",
+    "account_recovered": "Password reset with a recovery code",
+}
+MAX_SECURITY_EVENTS_PER_ACCOUNT = 100
+MAX_SECURITY_EVENTS_RETURNED = MAX_SECURITY_EVENTS_PER_ACCOUNT
+SCHEMA_VERSION = 3
 
 
 class AccountValidationError(ValueError):
@@ -220,6 +229,27 @@ _RECOVERY_CODES_SQL = _sql_norm(
         FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
     )"""
 )
+_SECURITY_EVENTS_SQL = _sql_norm(
+    """CREATE TABLE account_security_events (
+        id INTEGER NOT NULL PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        event_type TEXT NOT NULL CHECK (
+            event_type IN (
+                'account_created',
+                'signed_in',
+                'password_changed',
+                'recovery_codes_generated',
+                'account_recovered'
+            )
+        ),
+        occurred_at TEXT NOT NULL,
+        FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+    )"""
+)
+_SECURITY_EVENTS_INDEX_SQL = _sql_norm(
+    """CREATE INDEX idx_account_security_events_account_id
+       ON account_security_events(account_id, id DESC)"""
+)
 
 
 class AccountStore:
@@ -308,6 +338,7 @@ class AccountStore:
         secret = _secret_bytes(credential_secret) if credential_secret is not None else None
         account_id = secrets.token_hex(16)
         now = _clock_seconds(self.clock)
+        timestamp = _utc_iso(now)
         password_hash = generate_password_hash(validated_password)
         try:
             with self._transaction() as connection:
@@ -315,7 +346,10 @@ class AccountStore:
                     """INSERT INTO accounts
                        (id, email, password_hash, created_at, last_login_at)
                        VALUES (?, ?, ?, ?, NULL)""",
-                    (account_id, normalized_email, password_hash, _utc_iso(now)),
+                    (account_id, normalized_email, password_hash, timestamp),
+                )
+                self._record_security_event(
+                    connection, account_id, "account_created", timestamp
                 )
                 row = connection.execute(
                     "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?", (account_id,)
@@ -451,6 +485,9 @@ class AccountStore:
             if result.rowcount != 1:
                 return None
             connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            self._record_security_event(
+                connection, account_id, "password_changed", _utc_iso(now)
+            )
             refreshed = connection.execute(
                 "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?",
                 (account_id,),
@@ -506,6 +543,9 @@ class AccountStore:
                 ((account_id, self._recovery_code_hash(code), timestamp) for code in codes),
             )
             connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            self._record_security_event(
+                connection, account_id, "recovery_codes_generated", timestamp
+            )
         return codes
 
     def recover_account(
@@ -574,6 +614,9 @@ class AccountStore:
             # merely the submitted one. A new set requires re-authentication.
             connection.execute("DELETE FROM recovery_codes WHERE account_id = ?", (account["id"],))
             connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
+            self._record_security_event(
+                connection, account["id"], "account_recovered", timestamp
+            )
             refreshed = connection.execute(
                 "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?",
                 (account["id"],),
@@ -761,6 +804,9 @@ class AccountStore:
                 timestamp = _utc_iso(now)
                 connection.execute("DELETE FROM login_throttle WHERE email_key = ?", (email_key,))
                 connection.execute("UPDATE accounts SET last_login_at = ? WHERE id = ?", (timestamp, account["id"]))
+                self._record_security_event(
+                    connection, account["id"], "signed_in", timestamp
+                )
                 refreshed = connection.execute(
                     "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?", (account["id"],)
                 ).fetchone()
@@ -785,6 +831,42 @@ class AccountStore:
                 "SELECT id, email, created_at, last_login_at FROM accounts WHERE id = ?", (user_id,)
             ).fetchone()
         return self._public_account(row)
+
+    def list_security_events(
+        self,
+        account_id: str,
+        *,
+        limit: int = 20,
+    ) -> list[dict[str, str]]:
+        """Return a bounded, newest-first account security timeline.
+
+        Events deliberately contain no IP address, user-agent, session token,
+        email address, recovery code, or free-form metadata.  An invalid
+        account id has the same empty result as a missing account.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_SECURITY_EVENTS_RETURNED:
+            raise ValueError(
+                f"limit must be an integer from 1 through {MAX_SECURITY_EVENTS_RETURNED}."
+            )
+        if not self._valid_stored_id(account_id):
+            return []
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT event_type, occurred_at
+                   FROM account_security_events
+                   WHERE account_id = ?
+                   ORDER BY id DESC
+                   LIMIT ?""",
+                (account_id, limit),
+            ).fetchall()
+        return [
+            {
+                "event_type": row["event_type"],
+                "label": SECURITY_EVENT_LABELS[row["event_type"]],
+                "occurred_at": row["occurred_at"],
+            }
+            for row in rows
+        ]
 
     def throttle_state(self, email: str) -> dict[str, Any] | None:
         """Return bounded, non-sensitive throttle diagnostics."""
@@ -823,6 +905,33 @@ class AccountStore:
             (email_key, count, window_started, locked_until),
         )
         self._prune_throttle(connection, now, protected_key=email_key)
+
+    @staticmethod
+    def _record_security_event(
+        connection: sqlite3.Connection,
+        account_id: str,
+        event_type: str,
+        occurred_at: str,
+    ) -> None:
+        """Append and prune one allowlisted event inside the caller's txn."""
+        if event_type not in SECURITY_EVENT_LABELS:
+            raise ValueError("Unsupported account security event type.")
+        connection.execute(
+            """INSERT INTO account_security_events
+               (account_id, event_type, occurred_at)
+               VALUES (?, ?, ?)""",
+            (account_id, event_type, occurred_at),
+        )
+        connection.execute(
+            """DELETE FROM account_security_events
+               WHERE account_id = ? AND id NOT IN (
+                   SELECT id FROM account_security_events
+                   WHERE account_id = ?
+                   ORDER BY id DESC
+                   LIMIT ?
+               )""",
+            (account_id, account_id, MAX_SECURITY_EVENTS_PER_ACCOUNT),
+        )
 
     def _prune_throttle(self, connection: sqlite3.Connection, now: float, *, protected_key: str | None = None) -> None:
         connection.execute(
@@ -1092,25 +1201,34 @@ class AccountStore:
                             FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
                         )"""
                     )
-                    connection.execute("PRAGMA user_version = 2")
-                elif version == 1:
-                    self._validate_schema_connection(connection, expected_version=1)
-                    connection.execute(
-                        """CREATE TABLE recovery_codes (
-                            account_id TEXT NOT NULL,
-                            code_hash TEXT NOT NULL CHECK (
-                                length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'
-                            ),
-                            created_at TEXT NOT NULL,
-                            PRIMARY KEY (account_id, code_hash),
-                            FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
-                        )"""
-                    )
-                    connection.execute("PRAGMA user_version = 2")
-                elif version != SCHEMA_VERSION:
-                    raise AccountStoreSchemaError(
-                        f"Account store schema version {version} is unsupported; expected {SCHEMA_VERSION}."
-                    )
+                    self._create_security_events_schema(connection)
+                    connection.execute("PRAGMA user_version = 3")
+                    version = 3
+                else:
+                    if version == 1:
+                        self._validate_schema_connection(connection, expected_version=1)
+                        connection.execute(
+                            """CREATE TABLE recovery_codes (
+                                account_id TEXT NOT NULL,
+                                code_hash TEXT NOT NULL CHECK (
+                                    length(code_hash) = 64 AND code_hash NOT GLOB '*[^0-9a-f]*'
+                                ),
+                                created_at TEXT NOT NULL,
+                                PRIMARY KEY (account_id, code_hash),
+                                FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+                            )"""
+                        )
+                        connection.execute("PRAGMA user_version = 2")
+                        version = 2
+                    if version == 2:
+                        self._validate_schema_connection(connection, expected_version=2)
+                        self._create_security_events_schema(connection)
+                        connection.execute("PRAGMA user_version = 3")
+                        version = 3
+                    elif version != SCHEMA_VERSION:
+                        raise AccountStoreSchemaError(
+                            f"Account store schema version {version} is unsupported; expected {SCHEMA_VERSION}."
+                        )
             self._validate_schema()
         except AccountStoreSchemaError:
             self.close()
@@ -1118,6 +1236,30 @@ class AccountStore:
         except (sqlite3.DatabaseError, OSError) as error:
             self.close()
             raise AccountStoreSchemaError(f"Account store schema could not be opened: {error}") from error
+
+    @staticmethod
+    def _create_security_events_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """CREATE TABLE account_security_events (
+                id INTEGER NOT NULL PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                event_type TEXT NOT NULL CHECK (
+                    event_type IN (
+                        'account_created',
+                        'signed_in',
+                        'password_changed',
+                        'recovery_codes_generated',
+                        'account_recovered'
+                    )
+                ),
+                occurred_at TEXT NOT NULL,
+                FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+            )"""
+        )
+        connection.execute(
+            """CREATE INDEX idx_account_security_events_account_id
+               ON account_security_events(account_id, id DESC)"""
+        )
 
     def _validate_schema(self) -> None:
         with self._connection() as connection:
@@ -1129,7 +1271,7 @@ class AccountStore:
         *,
         expected_version: int = SCHEMA_VERSION,
     ) -> None:
-        if expected_version not in (1, SCHEMA_VERSION):
+        if expected_version not in (1, 2, SCHEMA_VERSION):
             raise AccountStoreSchemaError("Account store schema version is unsupported.")
         if connection.execute("PRAGMA user_version").fetchone()[0] != expected_version:
             raise AccountStoreSchemaError(f"Account store schema is not v{expected_version}.")
@@ -1143,16 +1285,30 @@ class AccountStore:
             ("table", "accounts", "accounts"),
             ("table", "login_throttle", "login_throttle"),
         }
-        if expected_version == SCHEMA_VERSION:
+        if expected_version >= 2:
             expected_objects.add(("table", "recovery_codes", "recovery_codes"))
+        if expected_version >= 3:
+            expected_objects.update({
+                ("index", "idx_account_security_events_account_id", "account_security_events"),
+                ("table", "account_security_events", "account_security_events"),
+            })
         actual_objects = {(row["type"], row["name"], row["tbl_name"]) for row in objects}
         if actual_objects != expected_objects:
             raise AccountStoreSchemaError(f"Account store schema objects do not match v{expected_version}.")
         sql_by_name = {row["name"]: _sql_norm(row["sql"]) for row in objects}
         if sql_by_name["accounts"] != _ACCOUNTS_SQL or sql_by_name["login_throttle"] != _THROTTLE_SQL:
             raise AccountStoreSchemaError(f"Account store table constraints do not match v{expected_version}.")
-        if expected_version == SCHEMA_VERSION and sql_by_name["recovery_codes"] != _RECOVERY_CODES_SQL:
+        if expected_version >= 2 and sql_by_name["recovery_codes"] != _RECOVERY_CODES_SQL:
             raise AccountStoreSchemaError("Account store recovery-code constraints do not match v2.")
+        if expected_version >= 3:
+            if sql_by_name["account_security_events"] != _SECURITY_EVENTS_SQL:
+                raise AccountStoreSchemaError(
+                    "Account store security-event constraints do not match v3."
+                )
+            if sql_by_name["idx_account_security_events_account_id"] != _SECURITY_EVENTS_INDEX_SQL:
+                raise AccountStoreSchemaError(
+                    "Account store security-event index does not match v3."
+                )
         if sql_by_name["idx_accounts_email_unique"] != _sql_norm(
             "CREATE UNIQUE INDEX idx_accounts_email_unique ON accounts(email)"
         ) or sql_by_name["idx_login_throttle_window"] != _sql_norm(
@@ -1167,7 +1323,7 @@ class AccountStore:
              ("last_login_at", "TEXT", 0, None, 0)],
             schema_version=expected_version,
         )
-        if expected_version == SCHEMA_VERSION:
+        if expected_version >= 2:
             AccountStore._expect_columns(
                 connection,
                 "recovery_codes",
@@ -1181,6 +1337,24 @@ class AccountStore:
             ]
             if actual_foreign_keys != [("accounts", "account_id", "id", "CASCADE")]:
                 raise AccountStoreSchemaError("Account store recovery-code foreign key does not match v2.")
+        if expected_version >= 3:
+            AccountStore._expect_columns(
+                connection,
+                "account_security_events",
+                [("id", "INTEGER", 1, None, 1), ("account_id", "TEXT", 1, None, 0),
+                 ("event_type", "TEXT", 1, None, 0), ("occurred_at", "TEXT", 1, None, 0)],
+                schema_version=expected_version,
+            )
+            security_foreign_keys = connection.execute(
+                "PRAGMA foreign_key_list(account_security_events)"
+            ).fetchall()
+            actual_security_foreign_keys = [
+                (row[2], row[3], row[4], row[6]) for row in security_foreign_keys
+            ]
+            if actual_security_foreign_keys != [("accounts", "account_id", "id", "CASCADE")]:
+                raise AccountStoreSchemaError(
+                    "Account store security-event foreign key does not match v3."
+                )
         AccountStore._expect_columns(
             connection,
             "login_throttle",
@@ -1226,7 +1400,7 @@ def validate_account_database(database_path: str | Path) -> None:
         with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True) as connection:
             connection.row_factory = sqlite3.Row
             version = connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (1, SCHEMA_VERSION):
+            if version not in (1, 2, SCHEMA_VERSION):
                 raise AccountStoreSchemaError("Account store schema version is unsupported.")
             AccountStore._validate_schema_connection(connection, expected_version=version)
     except AccountStoreSchemaError:
@@ -1243,9 +1417,12 @@ __all__ = [
     "CREDENTIAL_TOKEN_PATTERN",
     "MAX_EMAIL_LENGTH",
     "MAX_PASSWORD_LENGTH",
+    "MAX_SECURITY_EVENTS_PER_ACCOUNT",
+    "MAX_SECURITY_EVENTS_RETURNED",
     "MIN_PASSWORD_LENGTH",
     "RECOVERY_CODE_COUNT",
     "RECOVERY_CODE_PATTERN",
+    "SECURITY_EVENT_LABELS",
     "account_scope_id",
     "normalize_email",
     "validate_account_database",

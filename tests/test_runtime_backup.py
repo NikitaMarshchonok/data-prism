@@ -104,12 +104,19 @@ class RuntimeBackupTests(unittest.TestCase):
         with AccountStore(account_path) as accounts:
             account = accounts.register('backup@example.com', 'a sufficiently long password')
             self.assertIsNotNone(account)
+            self.assertIsNotNone(
+                accounts.authenticate('backup@example.com', 'a sufficiently long password')
+            )
 
         self.snapshot()
         self.assertIn('accounts/accounts.sqlite3', self.manifest()['files'])
         restore_backup(self.backup, self.restored, offline=True)
         with AccountStore(self.restored / 'accounts' / 'accounts.sqlite3') as accounts:
             self.assertEqual(accounts.get_account(account['id'])['email'], 'backup@example.com')
+            self.assertEqual(
+                [event['event_type'] for event in accounts.list_security_events(account['id'])],
+                ['signed_in', 'account_created'],
+            )
 
     def test_no_offline_acknowledgment_means_no_output(self):
         with self.assertRaises(BackupError):

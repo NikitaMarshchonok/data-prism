@@ -275,8 +275,8 @@ def _check_database(path, name):
     if name == 'accounts/accounts.sqlite3':
         # The generic table-presence check above is intentionally sufficient
         # for the older runtime databases, whose stores own their own schema
-        # contracts. AccountStore strictly validates current v2 databases and
-        # exact legacy v1 databases that the application can migrate on open;
+        # contracts. AccountStore strictly validates current v3 databases and
+        # exact legacy v1/v2 databases that the application can migrate on open;
         # same-named but incompatible tables must never enter a backup.
         try:
             from vibedash.accounts import validate_account_database

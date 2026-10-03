@@ -105,6 +105,7 @@ try:
         AccountExportTooLargeError,
         MAX_ACCOUNT_EXPORT_CASES,
         MAX_ACCOUNT_EXPORT_JOBS,
+        MAX_ACCOUNT_EXPORT_SECURITY_EVENTS,
         build_account_export,
         serialize_account_export,
     )
@@ -1222,9 +1223,20 @@ if vibedash_bp:
 
 
     def _render_account_settings(account, *, error=None, success=None, status=200):
+        security_activity = []
+        security_activity_unavailable = False
+        try:
+            store = _account_store()
+            if store is None:
+                raise RuntimeError('account store is unavailable')
+            security_activity = store.list_security_events(account['id'], limit=20)
+        except Exception:
+            security_activity_unavailable = True
         return render_template(
             'vibedash_account.html',
             account=account,
+            security_activity=security_activity,
+            security_activity_unavailable=security_activity_unavailable,
             auth_csrf_token=_auth_csrf_token(),
             error=error,
             success=success,
@@ -1284,37 +1296,46 @@ if vibedash_bp:
             # the helper fall back to a guest scope while still exporting the
             # authenticated account envelope.
             scope_id = account_scope_id(account['id'], current_app.secret_key)
-            # Serialize the read under the same scope write fence used by
-            # deletion.  This gives account export a clear linearization
-            # point: deletion waits for an already-started export, while a
-            # request arriving after the fence gets a closed-scope failure.
+            account_store = _account_store()
+            if account_store is None:
+                raise RuntimeError('account store is unavailable')
             job_store = _analysis_job_store()
             case_store = _decision_case_store()
+            # Use the same lock order as deletion: account fence first, then
+            # analysis-scope fence.  This prevents a successful export from
+            # being assembled after the account has been deleted and avoids
+            # a process-local lock inversion with delete_account_with_cleanup.
+            with account_store.deletion_lock(account['id']):
+                security_events = account_store.list_security_events(
+                    account['id'],
+                    limit=MAX_ACCOUNT_EXPORT_SECURITY_EVENTS,
+                )
 
-            def build_export(connection):
-                jobs, jobs_truncated = job_store.list_for_scope_page(
-                    scope_id,
-                    limit=MAX_ACCOUNT_EXPORT_JOBS,
-                    connection=connection,
-                )
-                cases, cases_truncated = case_store.list_for_scope_page(
-                    scope_id,
-                    limit=MAX_ACCOUNT_EXPORT_CASES,
-                    connection=connection,
-                )
-                document = build_account_export(
-                    account,
-                    jobs,
-                    jobs_truncated=jobs_truncated,
-                    decision_cases=cases,
-                    decisions_truncated=cases_truncated,
-                )
-                return serialize_account_export(document)
+                def build_export(connection):
+                    jobs, jobs_truncated = job_store.list_for_scope_page(
+                        scope_id,
+                        limit=MAX_ACCOUNT_EXPORT_JOBS,
+                        connection=connection,
+                    )
+                    cases, cases_truncated = case_store.list_for_scope_page(
+                        scope_id,
+                        limit=MAX_ACCOUNT_EXPORT_CASES,
+                        connection=connection,
+                    )
+                    document = build_account_export(
+                        account,
+                        jobs,
+                        jobs_truncated=jobs_truncated,
+                        decision_cases=cases,
+                        decisions_truncated=cases_truncated,
+                        security_events=security_events,
+                    )
+                    return serialize_account_export(document)
 
-            serialized = job_store.run_if_scope_open(
-                scope_id,
-                build_export,
-            )
+                serialized = job_store.run_if_scope_open(
+                    scope_id,
+                    build_export,
+                )
             if not isinstance(serialized, (str, bytes)):
                 raise TypeError('account export serializer returned an invalid value')
         except Exception as error:

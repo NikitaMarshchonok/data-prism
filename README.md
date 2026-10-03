@@ -110,7 +110,12 @@ SHA-256 digests are stored; generating a set replaces the previous set, and a
 successful recovery consumes the complete set, rotates the password, and
 invalidates old signed-in browser credentials. Codes are displayed once and
 must be stored independently. There is no email recovery, email verification,
-or support bypass for a missing code. The export contains the newest 50 jobs and newest 100 decision cases for
+or support bypass for a missing code. The account page also shows the newest 20
+of at most 100 retained, allowlisted security events: account creation,
+successful sign-in, password change, recovery-code replacement, and recovery.
+These events contain no IP address, device/browser detail, email address,
+session token, recovery code, or free-form metadata. The export contains the
+newest 50 jobs, newest 100 decision cases, and the retained security events for
 that account. It excludes raw datasets, prompts, filenames, schema/session
 data, and global pilot metrics, and is serialized in memory without creating an
 artifact. Account access is represented by
