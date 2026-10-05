@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from .chart_theme import CHART_CONFIG, apply_evidence_chart_theme, chart_kind_label
 from .spec import VizSpec, Metric, Chart, Filter
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
@@ -357,12 +358,16 @@ def _generate_charts(df: pd.DataFrame, charts: List[Chart]) -> List[Dict[str, st
             html = _create_chart_html(df, chart)
             chart_list.append({
                 "title": chart.title or f"График: {chart.type}",
+                "type": chart.type,
+                "kind": chart_kind_label(chart.type),
                 "html": html
             })
         except Exception as e:
             print(f"⚠️ Ошибка в графике {chart.title}: {e}")
             chart_list.append({
                 "title": chart.title or f"График: {chart.type}",
+                "type": chart.type,
+                "kind": chart_kind_label(chart.type),
                 "html": f"<div>Chart generation error: {escape(str(e))}</div>"
             })
     
@@ -486,17 +491,16 @@ def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
             value_counts = df[chart.x].value_counts().sort_index()
             fig = px.area(x=value_counts.index, y=value_counts.values, title=chart.title)
 
-    # Применяем стиль
-    fig.update_layout(
-        plot_bgcolor='#10201c',
-        paper_bgcolor='#10201c',
-        font=dict(color='#d8e8e2', family='DM Sans, sans-serif'),
-        margin=dict(t=40, b=30, l=0, r=0),
-        colorway=['#72e0b6', '#8eb6f7', '#efc477', '#c6a6f7'],
-    )
+    apply_evidence_chart_theme(fig, chart, df)
 
     # Plotly загружается один раз шаблоном страницы.
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return fig.to_html(
+        full_html=False,
+        include_plotlyjs=False,
+        config=CHART_CONFIG,
+        default_width="100%",
+        default_height="350px",
+    )
 
 
 def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]]:

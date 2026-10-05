@@ -10,6 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='vibedash_preview.css') }}">
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <script src="{{ url_for('static', filename='vibedash_charts.js') }}" defer></script>
 </head>
 <body>
     <nav class="topbar" aria-label="Dashboard navigation">
@@ -257,7 +258,7 @@
         {% if dashboard_data.charts %}
         <section class="dashboard-section" aria-labelledby="charts-heading">
             <div class="section-heading"><div><span>08</span><h2 id="charts-heading">Visual diagnostics</h2></div><p>Charts support exploration; the evidence panels carry the conclusions.</p></div>
-            <div class="chart-grid">{% for chart in dashboard_data.charts %}<article class="chart-card"><h3>{{ chart.title }}</h3><div class="chart-container">{{ chart.html | safe }}</div></article>{% endfor %}</div>
+            <div class="chart-grid">{% for chart in dashboard_data.charts %}<article class="chart-card chart-card--{{ chart.type }}"><header class="chart-card-heading"><div><span>{{ chart.kind }}</span><h3>{{ chart.title }}</h3></div><small>Hover to inspect</small></header><div class="chart-container">{{ chart.html | safe }}</div></article>{% endfor %}</div>
         </section>
         {% endif %}
 
