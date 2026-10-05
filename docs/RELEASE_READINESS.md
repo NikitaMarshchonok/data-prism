@@ -1,6 +1,6 @@
 # Release readiness: evidence, scope, and pilot controls
 
-As of **2026-09-23**, the public Data Prism service is a portfolio demo and an
+As of **2026-10-06**, the public Data Prism service is a portfolio demo and an
 invite-only, supervised pilot candidate. It is **not** a durable production SaaS,
 an enterprise analytics environment, or proof of product-market fit.
 
@@ -20,24 +20,25 @@ cannot be established by tests, commits, page views, or self-reported intent.
 
 | Evidence | Confirmed result |
 | --- | --- |
-| Git revision | `2393ec63b0e9976c5583773a4743afb9a91730ee` — merge of PR #33 |
-| Main CI | Run `35790946234` passed on Python 3.11, Python 3.12, analytical quality, VibeDash smoke, and the production-container smoke test |
-| GitHub deployment | Deployment `6601839291` succeeded for the same revision |
-| Public health | `https://data-prism.onrender.com/healthz` returned `status: ok` and version `2393ec63b0e9` |
-| Local pre-merge evidence | 354 tests, analytical quality gate 13/13, VibeDash smoke 3/3 |
+| Git revision | `e1d2baec2dd889457adc1bf727a9e1c5dc796d19` — merge of PR #50 |
+| Main CI | Run `37375393375` passed for the same revision |
+| GitHub deployment | Deployment `6869675153` succeeded for the same revision |
+| Public release check | `/healthz`, `/readyz`, request correlation, revision agreement, and `/vibedash/` passed for version `e1d2baec2dd8` |
+| Local pre-merge evidence | 430 tests, analytical quality gate 13/13, VibeDash smoke 3/3 |
 
 The current merged scope includes evidence-backed analysis, statistical and
 model guardrails, data readiness, anomaly/segment exploration, period
 comparison, background jobs, scoped history, decision cases and outcomes,
 optional pseudonymous pilot measurement, fixed-choice value feedback, optional
 pilot accounts, password rotation, bounded account export, guarded account
-deletion, observability, drift tooling, and offline backup/restore tooling.
+deletion, observability, drift tooling, offline backup/restore tooling, and a
+shared responsive evidence-chart contract with semantic number formatting.
 
 The latest full public synthetic journey was recorded for the earlier PR #24
-baseline. Later changes have unit/integration coverage, CI container coverage,
-successful deployments, and matching health revisions, but have not all been
-replayed as one public browser journey on PR #33. Do not describe the historical
-PR #24 journey as a current real-user validation.
+baseline. Later changes through PR #50 have unit/integration coverage, CI
+container coverage, successful deployment, and a matching technical release
+check, but have not all been replayed as one public browser journey. Do not
+describe the historical PR #24 journey as a current real-user validation.
 
 ## What the current deployment is suitable for
 
@@ -94,7 +95,7 @@ does not by itself satisfy a release gate.
 | Automated analytical/regression controls | Complete | Unit suite, 13-check analytical gate, CI matrix |
 | Deployment, health, and diagnostic logging documented | Complete | Render runbook, health endpoints, request correlation |
 | Opt-in pilot measurement with stated limits | Complete | Retention, withdrawal, cohort separation, value-feedback migration |
-| Release candidate passes CI and technical deployment acceptance | Complete | PR #33 main CI, deployment record, matching health revision |
+| Release candidate passes CI and technical deployment acceptance | Complete | PR #50 main CI, deployment record, and matching six-check public verification |
 | Durable state and tested real recovery | Pending | Configure durable storage and complete a timed recovery rehearsal with retained secrets and deletion handling |
 | Recoverable identity and full data lifecycle | Partial | Account login/password/export/deletion exist; email recovery, durable hosting, and backup-erasure operations do not |
 | Observed real-user usefulness and repeat use | Pending | 5–10 relevant pilots across at least two reporting cycles |
@@ -117,6 +118,19 @@ test from the repository root:
 ```bash
 python -m unittest tests.test_release_acceptance_journey
 ```
+
+Then verify that the intended revision, rather than merely a healthy older
+deployment, is serving the public pilot URL:
+
+```bash
+python release_check.py \
+  --base-url https://data-prism.onrender.com \
+  --expected-revision "$(git rev-parse HEAD)"
+```
+
+Do not begin a pilot session when this command fails. Its pass result is
+technical release evidence only and does not satisfy the real-user,
+durable-state, recovery-rehearsal, or operational-ownership gates.
 
 The test uses temporary SQLite databases and runtime directories. It verifies
 registration, a real deterministic analysis worker run, the retained result
