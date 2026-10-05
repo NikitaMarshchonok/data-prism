@@ -42,6 +42,12 @@ flowchart TB
 
 The same drift algorithms and persistence layer are shared by the browser, API, and CLI. This reduces the chance that interactive and automated checks produce different answers.
 
+VibeDash applies one evidence-chart theme after chart construction. The shared
+theme owns business-readable axis labels, semantic number formatting, restrained
+colour, responsive Plotly controls, and accessible contrast. Chart styling does
+not generate findings or causal claims; those remain the responsibility of the
+evidence and statistical engines.
+
 ## Component map
 
 | Component | Responsibility | Does not own |
