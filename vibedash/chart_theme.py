@@ -103,7 +103,8 @@ def _numeric_values(frame: pd.DataFrame, column: Optional[str]) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce").dropna()
 
 
-def _semantic_kind(frame: pd.DataFrame, column: Optional[str]) -> str:
+def semantic_value_kind(frame: pd.DataFrame, column: Optional[str]) -> str:
+    """Infer a display format from a column name and its observed values."""
     terms = _column_terms(column)
     if terms & _PERCENT_TERMS:
         values = _numeric_values(frame, column)
@@ -118,7 +119,7 @@ def _semantic_kind(frame: pd.DataFrame, column: Optional[str]) -> str:
 def _axis_format(frame: pd.DataFrame, column: Optional[str]) -> dict[str, Any]:
     if _numeric_values(frame, column).empty:
         return {}
-    kind = _semantic_kind(frame, column)
+    kind = semantic_value_kind(frame, column)
     if kind == "ratio":
         return {"tickformat": ".1%"}
     if kind == "percent":
@@ -129,7 +130,7 @@ def _axis_format(frame: pd.DataFrame, column: Optional[str]) -> dict[str, Any]:
 
 
 def _hover_value(frame: pd.DataFrame, column: Optional[str], axis: str) -> str:
-    kind = _semantic_kind(frame, column)
+    kind = semantic_value_kind(frame, column)
     if kind == "ratio":
         return f"%{{{axis}:.2%}}"
     if kind == "percent":
@@ -143,7 +144,7 @@ def _display_value(frame: pd.DataFrame, column: Optional[str], value: Any) -> st
     if not isinstance(value, Number) or not math.isfinite(float(value)):
         return str(value)
     numeric = float(value)
-    kind = _semantic_kind(frame, column)
+    kind = semantic_value_kind(frame, column)
     if kind == "ratio":
         return f"{numeric * 100:.1f}%"
     if kind == "percent":
