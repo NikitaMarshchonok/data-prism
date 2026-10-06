@@ -231,6 +231,25 @@ Render supplies `RENDER_GIT_COMMIT` automatically. Data Prism exposes its shorte
 
 ## Operational verification
 
+Run the read-only release verifier before a supervised pilot. Pass the intended
+Git SHA; a healthy service on an older revision is a failed release check.
+
+```bash
+python release_check.py \
+  --base-url https://YOUR-SERVICE.onrender.com \
+  --expected-revision "$(git rev-parse HEAD)"
+```
+
+The command verifies the liveness and readiness JSON contracts, revision
+agreement, request-ID propagation, and the VibeDash landing page. It follows no
+redirects, uploads no data, and creates no account or analysis. A successful
+result confirms only technical deployment acceptance. Any reported ephemeral
+storage warning still applies, and the command does not demonstrate usability,
+durability, recovery, or product value. Use `--json` when a machine-readable
+`data-prism-release-check-v1` result is needed for private release records.
+
+The individual checks remain useful while diagnosing a failed result:
+
 ```bash
 curl -i https://YOUR-SERVICE.onrender.com/healthz
 curl -i https://YOUR-SERVICE.onrender.com/readyz
