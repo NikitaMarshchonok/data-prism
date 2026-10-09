@@ -1,6 +1,6 @@
 # Release readiness: evidence, scope, and pilot controls
 
-As of **2026-10-06**, the public Data Prism service is a portfolio demo and an
+As of **2026-10-09**, the public Data Prism service is a portfolio demo and an
 invite-only, supervised pilot candidate. It is **not** a durable production SaaS,
 an enterprise analytics environment, or proof of product-market fit.
 
@@ -11,34 +11,37 @@ This document separates four different claims that must not be conflated:
 3. a supervised participant can complete the intended workflow;
 4. repeated real use demonstrates enough value to justify adoption.
 
-Only the first two are confirmed for the current revision. Historical synthetic
-workflow evidence supports the third technically, but the current revision still
-needs an observed public-pilot pass. The fourth requires real participants and
-cannot be established by tests, commits, page views, or self-reported intent.
+The first two are confirmed for the current revision, and a current public
+synthetic browser pass supports the third technically. The third is not yet
+confirmed for an independent real participant. The fourth requires real
+participants and cannot be established by tests, commits, page views, synthetic
+demo runs, or self-reported intent.
 
 ## Current confirmed baseline
 
 | Evidence | Confirmed result |
 | --- | --- |
-| Git revision | `e1d2baec2dd889457adc1bf727a9e1c5dc796d19` — merge of PR #50 |
-| Main CI | Run `37375393375` passed for the same revision |
-| GitHub deployment | Deployment `6869675153` succeeded for the same revision |
-| Public release check | `/healthz`, `/readyz`, request correlation, revision agreement, and `/vibedash/` passed for version `e1d2baec2dd8` |
-| Local pre-merge evidence | 430 tests, analytical quality gate 13/13, VibeDash smoke 3/3 |
+| Git revision | `1d2583ab8161e98574b696fd9c50f89c2fecf3eb` — merge of PR #52 |
+| Main CI | Run `37948465886` passed for the same revision |
+| GitHub deployment | Deployment `6963957399` succeeded for the same revision |
+| Public release check | `/healthz`, `/readyz`, request correlation, revision agreement, and `/vibedash/` passed for version `1d2583ab8161` |
+| Public synthetic browser journey | Built-in demo completed on version `1d2583ab8161`; evidence, charts, audit tables, result rendering, and the reproducibility record were inspected |
+| Local pre-merge evidence | 441 tests, analytical quality gate 13/13, VibeDash smoke 3/3 |
 
 The current merged scope includes evidence-backed analysis, statistical and
 model guardrails, data readiness, anomaly/segment exploration, period
 comparison, background jobs, scoped history, decision cases and outcomes,
 optional pseudonymous pilot measurement, fixed-choice value feedback, optional
 pilot accounts, password rotation, bounded account export, guarded account
-deletion, observability, drift tooling, offline backup/restore tooling, and a
-shared responsive evidence-chart contract with semantic number formatting.
+deletion, observability, drift tooling, offline backup/restore tooling, and
+shared responsive evidence-chart and audit-table contracts with semantic number
+formatting.
 
-The latest full public synthetic journey was recorded for the earlier PR #24
-baseline. Later changes through PR #50 have unit/integration coverage, CI
-container coverage, successful deployment, and a matching technical release
-check, but have not all been replayed as one public browser journey. Do not
-describe the historical PR #24 journey as a current real-user validation.
+The latest full public synthetic browser journey was recorded for the PR #52
+baseline. It verified the deployed revision, built-in demo completion, evidence
+and chart rendering, readable audit-table values, and the matching
+reproducibility record. This is technical synthetic evidence, not real-user
+validation, repeat use, willingness to pay, or product-market fit.
 
 ## What the current deployment is suitable for
 
@@ -95,7 +98,7 @@ does not by itself satisfy a release gate.
 | Automated analytical/regression controls | Complete | Unit suite, 13-check analytical gate, CI matrix |
 | Deployment, health, and diagnostic logging documented | Complete | Render runbook, health endpoints, request correlation |
 | Opt-in pilot measurement with stated limits | Complete | Retention, withdrawal, cohort separation, value-feedback migration |
-| Release candidate passes CI and technical deployment acceptance | Complete | PR #50 main CI, deployment record, and matching six-check public verification |
+| Release candidate passes CI and technical deployment acceptance | Complete | PR #52 main CI, deployment record, matching six-check public verification, and current synthetic browser pass |
 | Durable state and tested real recovery | Pending | Configure durable storage and complete a timed recovery rehearsal with retained secrets and deletion handling |
 | Recoverable identity and full data lifecycle | Partial | Account login/password/export/deletion exist; email recovery, durable hosting, and backup-erasure operations do not |
 | Observed real-user usefulness and repeat use | Pending | 5–10 relevant pilots across at least two reporting cycles |
