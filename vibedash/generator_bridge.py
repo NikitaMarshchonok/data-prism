@@ -2,6 +2,7 @@
 Мост между VibeDash и существующим генератором дашборда
 """
 import ast
+import math
 import operator
 import re
 from functools import reduce
@@ -12,7 +13,12 @@ from typing import Any, Dict, List
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from .chart_theme import CHART_CONFIG, apply_evidence_chart_theme, chart_kind_label
+from .chart_theme import (
+    CHART_CONFIG,
+    apply_evidence_chart_theme,
+    chart_kind_label,
+    semantic_value_kind,
+)
 from .spec import VizSpec, Metric, Chart, Filter
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
@@ -349,6 +355,40 @@ def _format_value(value: float, fmt: str) -> str:
         return str(value)
 
 
+def _format_audit_value(
+    frame: pd.DataFrame,
+    column: str | None,
+    value: Any,
+    *,
+    metric: str | None = None,
+) -> str:
+    """Format a table cell for review without changing the source value."""
+    if value is None or pd.isna(value):
+        return "—"
+    if pd.api.types.is_bool(value):
+        return "Yes" if bool(value) else "No"
+    if not isinstance(value, Number):
+        return str(value)
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return str(value)
+    if not math.isfinite(numeric):
+        return "—"
+    if metric == "count":
+        return f"{numeric:,.0f}"
+
+    kind = semantic_value_kind(frame, column)
+    if kind == "ratio":
+        return f"{numeric:.2%}"
+    if kind == "percent":
+        return f"{numeric:,.2f}%"
+    if kind == "currency":
+        return f"${numeric:,.2f}"
+    return _format_value(numeric, "number")
+
+
 def _generate_charts(df: pd.DataFrame, charts: List[Chart]) -> List[Dict[str, str]]:
     """Генерирует графики"""
     chart_list = []
@@ -506,12 +546,19 @@ def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
 def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]]:
     """Генерирует таблицы"""
     tables = []
+    overview_rows = [
+        [
+            _format_audit_value(df, column, value)
+            for column, value in zip(df.columns, row)
+        ]
+        for row in df.head(10).itertuples(index=False, name=None)
+    ]
     
     # Основная таблица данных
     tables.append({
         "title": "Data Overview",
         "headers": list(df.columns),
-        "rows": df.head(10).values.tolist()
+        "rows": overview_rows,
     })
     
     # Статистика по числовым колонкам
@@ -521,7 +568,19 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
         tables.append({
             "title": "Numeric Columns Statistics",
             "headers": ["Metric"] + list(stats_df.columns),
-            "rows": [[idx] + row.tolist() for idx, row in stats_df.iterrows()]
+            "rows": [
+                [str(metric)]
+                + [
+                    _format_audit_value(
+                        df,
+                        column,
+                        value,
+                        metric=str(metric),
+                    )
+                    for column, value in row.items()
+                ]
+                for metric, row in stats_df.iterrows()
+            ],
         })
     
     # Топ значения по категориальным колонкам
@@ -533,7 +592,13 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
         tables.append({
             "title": f"Top Values: {col}",
             "headers": [col, "Count"],
-            "rows": [[val, count] for val, count in value_counts.items()]
+            "rows": [
+                [
+                    _format_audit_value(df, col, value),
+                    _format_audit_value(df, None, count, metric="count"),
+                ]
+                for value, count in value_counts.items()
+            ],
         })
     
     return tables
