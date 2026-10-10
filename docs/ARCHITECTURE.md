@@ -354,3 +354,10 @@ fitness for an unreviewed business domain.
 ## Verification
 
 Pull requests execute compilation, dependency consistency checks, unit/integration tests, the analytical quality gate, and VibeDash smoke tests on Python 3.11 and 3.12. After those jobs pass, CI builds and starts the production container, verifies readiness and request correlation, and checks for structured runtime logs. Tests cover both successful workflows and defensive behaviour such as invalid uploads, unsafe expressions, missing credentials, idempotency, path validation, and insufficient statistical support.
+
+Automatic VibeDash specifications use an aggregate-only dataframe profile to
+separate numeric measures from categorical dimensions. Identifier, rank,
+constant, and near-unique fields remain available in the audit preview but are
+excluded from automatically selected KPI metrics, category charts, and empty
+filter controls. The same profile sanitizes optional local-model output before
+rendering, so an LLM cannot reintroduce row identifiers as business cohorts.

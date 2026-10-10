@@ -3,9 +3,11 @@ VibeDash VizSpec Models
 Pydantic модели для спецификации визуализации дашборда
 """
 from pydantic import BaseModel, Field
-from typing import List, Optional, Literal, Union
+from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 import json
 import re
+
+from pandas.api.types import is_numeric_dtype
 
 
 MAX_AUTOMATIC_METRICS = 8
@@ -25,6 +27,13 @@ _CURRENCY_TERMS = {
 }
 _PERCENT_TERMS = {"percentage", "percent", "pct", "rate", "ratio", "share"}
 _TEMPORAL_TERMS = {"date", "datetime", "day", "month", "quarter", "time", "timestamp", "week", "year"}
+_IDENTIFIER_TERMS = {
+    "guid",
+    "id",
+    "identifier",
+    "key",
+    "uuid",
+}
 _ABBREVIATIONS = {"api": "API", "arpu": "ARPU", "id": "ID", "kpi": "KPI", "mrr": "MRR", "nps": "NPS", "roi": "ROI"}
 
 
@@ -129,7 +138,12 @@ def create_saas_demo_viz_spec() -> VizSpec:
     )
 
 
-def parse_prompt_to_viz_spec(prompt: str, df_columns: List[str]) -> VizSpec:
+def parse_prompt_to_viz_spec(
+    prompt: str,
+    df_columns: List[str],
+    *,
+    dataframe: Optional[Any] = None,
+) -> VizSpec:
     """
     Парсинг текстового промпта в VizSpec
     Сначала пробуем эвристики, потом Ollama (если доступен)
@@ -137,8 +151,10 @@ def parse_prompt_to_viz_spec(prompt: str, df_columns: List[str]) -> VizSpec:
     # Очищаем промпт
     prompt = prompt.strip().lower()
     
+    column_profiles = _profile_dataframe_columns(dataframe, df_columns)
+
     # Эвристический парсинг
-    spec = _parse_heuristics(prompt, df_columns)
+    spec = _parse_heuristics(prompt, df_columns, column_profiles)
     
     # Пробуем улучшить через Ollama
     try:
@@ -146,11 +162,15 @@ def parse_prompt_to_viz_spec(prompt: str, df_columns: List[str]) -> VizSpec:
         if ollama_generate:
             improved_spec = _improve_with_ollama(prompt, spec, df_columns)
             if improved_spec:
-                return _sanitize_generated_spec(improved_spec, df_columns)
+                return _sanitize_generated_spec(
+                    improved_spec,
+                    df_columns,
+                    column_profiles,
+                )
     except Exception as e:
         print(f"⚠️ Ollama недоступен, используем эвристики: {e}")
     
-    return _sanitize_generated_spec(spec, df_columns)
+    return _sanitize_generated_spec(spec, df_columns, column_profiles)
 
 
 def _column_terms(column: str) -> set[str]:
@@ -176,6 +196,73 @@ def _is_temporal_column(column: str) -> bool:
     return bool(_column_terms(column) & _TEMPORAL_TERMS)
 
 
+def _is_identifier_column(column: str) -> bool:
+    """Recognize fields whose values identify or order rows, not cohorts."""
+    terms = _column_terms(column)
+    normalized = re.sub(r"[^a-z0-9]+", "", str(column).lower())
+    return (
+        normalized in {
+            "index",
+            "rank",
+            "ranking",
+            "recordid",
+            "rk",
+            "rowid",
+            "rowindex",
+            "rownumber",
+        }
+        or bool(terms & (_IDENTIFIER_TERMS - {"id", "key"}))
+        or "id" in terms
+        or (
+            "key" in terms
+            and str(column).lower().rstrip().endswith("key")
+        )
+    )
+
+
+def _profile_dataframe_columns(
+    dataframe: Optional[Any],
+    df_columns: List[str],
+) -> Dict[str, Dict[str, Union[bool, int, float]]]:
+    """Build a bounded, aggregate-only profile for automatic semantics."""
+    if dataframe is None:
+        return {}
+
+    profiles: Dict[str, Dict[str, Union[bool, int, float]]] = {}
+    for column in df_columns:
+        if column not in dataframe.columns:
+            continue
+        series = dataframe[column]
+        non_missing_count = int(series.notna().sum())
+        unique_count = int(series.nunique(dropna=True))
+        profiles[column] = {
+            "is_numeric": bool(is_numeric_dtype(series.dtype)),
+            "non_missing_count": non_missing_count,
+            "unique_count": unique_count,
+            "unique_ratio": (
+                unique_count / non_missing_count if non_missing_count else 0.0
+            ),
+        }
+    return profiles
+
+
+def _is_useful_automatic_category(
+    column: str,
+    column_profiles: Mapping[str, Mapping[str, Union[bool, int, float]]],
+) -> bool:
+    """Keep repeatable business cohorts; reject IDs and near-unique labels."""
+    if _is_temporal_column(column) or _is_identifier_column(column):
+        return False
+    profile = column_profiles.get(column)
+    if not profile:
+        return True
+    non_missing_count = int(profile.get("non_missing_count", 0))
+    unique_count = int(profile.get("unique_count", 0))
+    if non_missing_count == 0 or unique_count <= 1:
+        return False
+    return unique_count < 20 or unique_count / non_missing_count <= 0.5
+
+
 def _metric_format_for_column(column: str) -> str:
     terms = _column_terms(column)
     if terms & _CURRENCY_TERMS:
@@ -194,7 +281,13 @@ def _metric_column(expression: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
-def _sanitize_generated_spec(spec: VizSpec, df_columns: List[str]) -> VizSpec:
+def _sanitize_generated_spec(
+    spec: VizSpec,
+    df_columns: List[str],
+    column_profiles: Optional[
+        Mapping[str, Mapping[str, Union[bool, int, float]]]
+    ] = None,
+) -> VizSpec:
     """Apply conservative product rules to automatically generated specs.
 
     Automatic dashboards must not imply targets that the user never supplied.
@@ -203,6 +296,7 @@ def _sanitize_generated_spec(spec: VizSpec, df_columns: List[str]) -> VizSpec:
     not pass through this function.
     """
     known_columns = set(df_columns)
+    profiles = column_profiles or {}
     metrics: List[Metric] = []
     metric_expressions = set()
     for metric in spec.metrics:
@@ -211,6 +305,15 @@ def _sanitize_generated_spec(spec: VizSpec, df_columns: List[str]) -> VizSpec:
             continue
         column = _metric_column(metric.expr)
         if column and column not in known_columns:
+            continue
+        if column and _is_identifier_column(column):
+            continue
+        if (
+            column
+            and profiles
+            and not bool(profiles.get(column, {}).get("is_numeric", False))
+            and not re.match(r"\s*(?:count|nunique)\s*\(", metric.expr, re.IGNORECASE)
+        ):
             continue
         if column:
             expected_format = _metric_format_for_column(column)
@@ -232,6 +335,11 @@ def _sanitize_generated_spec(spec: VizSpec, df_columns: List[str]) -> VizSpec:
         else:
             referenced.append(chart.y)
         if any(column and column not in known_columns for column in referenced):
+            continue
+        category = chart.group
+        if not category and chart.type in {"bar", "pie"} and not chart.y:
+            category = chart.x
+        if category and not _is_useful_automatic_category(category, profiles):
             continue
         if (
             chart.type in {"bar", "pie"}
@@ -259,10 +367,28 @@ def _sanitize_generated_spec(spec: VizSpec, df_columns: List[str]) -> VizSpec:
         if len(charts) >= MAX_AUTOMATIC_CHARTS:
             break
 
-    return spec.model_copy(update={"metrics": metrics, "charts": charts})
+    filters = [
+        filter_obj
+        for filter_obj in spec.filters
+        if filter_obj.field in known_columns
+        and (
+            filter_obj.where
+            or _is_useful_automatic_category(filter_obj.field, profiles)
+        )
+    ]
+
+    return spec.model_copy(
+        update={"metrics": metrics, "charts": charts, "filters": filters}
+    )
 
 
-def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
+def _parse_heuristics(
+    prompt: str,
+    df_columns: List[str],
+    column_profiles: Optional[
+        Mapping[str, Mapping[str, Union[bool, int, float]]]
+    ] = None,
+) -> VizSpec:
     """Эвристический парсинг промпта"""
     
     # Определяем тип дашборда по ключевым словам
@@ -278,18 +404,20 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
     numeric_cols = []
     categorical_cols = []
     
+    profiles = column_profiles or {}
     for col in df_columns:
+        if _is_identifier_column(col):
+            continue
         if _is_temporal_column(col):
             categorical_cols.append(col)
             continue
-        if _is_numeric_column(col):
-            # Дополнительная проверка - исключаем явно строковые ID
-            if not ("customer" in col.lower() and "id" in col.lower()) and \
-               not ("user" in col.lower() and "id" in col.lower()) and \
-               not ("product" in col.lower() and "id" in col.lower()):
+        if col in profiles:
+            if bool(profiles[col].get("is_numeric", False)):
                 numeric_cols.append(col)
             else:
                 categorical_cols.append(col)
+        elif _is_numeric_column(col):
+            numeric_cols.append(col)
         else:
             categorical_cols.append(col)
     
@@ -364,7 +492,9 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
     
     temporal_cols = [col for col in categorical_cols if _is_temporal_column(col)]
     business_categories = [
-        col for col in categorical_cols if not _is_temporal_column(col)
+        col
+        for col in categorical_cols
+        if _is_useful_automatic_category(col, profiles)
     ]
 
     # Временная динамика строится по оси времени, а не как рейтинг дат.
