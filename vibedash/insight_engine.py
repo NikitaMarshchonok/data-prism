@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from src.column_semantics import columns_for_role, profile_dataframe_columns
+
 
 @dataclass(frozen=True)
 class EvidenceInsight:
@@ -38,6 +40,7 @@ class EvidenceBasedInsightEngine:
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         self.df = df
+        self.column_profiles = profile_dataframe_columns(df)
 
     def generate(self, max_insights: int = 6) -> List[Dict[str, Any]]:
         if max_insights < 1:
@@ -83,8 +86,8 @@ class EvidenceBasedInsightEngine:
             title="Dataset coverage",
             statement=f"The analysis covers {row_count:,} rows and {column_count:,} columns.",
             evidence=[
-                f"Numeric columns: {numeric_count}",
-                f"Categorical columns: {categorical_count}",
+                f"Numeric measure columns: {numeric_count}",
+                f"Categorical columns (including numeric codes): {categorical_count}",
             ],
             recommendation="Use these counts to confirm that the uploaded scope matches the intended analysis.",
             confidence="high",
@@ -382,31 +385,36 @@ class EvidenceBasedInsightEngine:
         )
 
     def _numeric_columns(self, exclude_identifiers: bool = False) -> List[Any]:
-        columns = list(self.df.select_dtypes(include=[np.number]).columns)
-        if not exclude_identifiers:
-            return columns
-        return [column for column in columns if not self._looks_like_identifier(column)]
+        del exclude_identifiers  # Role filtering always excludes identifiers.
+        return [
+            column
+            for column in columns_for_role(
+                self.df,
+                "measure",
+                profiles=self.column_profiles,
+                require_variation=False,
+            )
+            if pd.api.types.is_numeric_dtype(self.df[column])
+            and not pd.api.types.is_bool_dtype(self.df[column])
+            and not pd.api.types.is_complex_dtype(self.df[column])
+        ]
 
     def _categorical_columns(self) -> List[Any]:
-        return list(self.df.select_dtypes(include=["object", "string", "category", "bool"]).columns)
-
-    def _looks_like_identifier(self, column: Any) -> bool:
-        normalized = str(column).strip().lower().replace("-", "_").replace(" ", "_")
-        id_name = normalized == "id" or normalized.endswith("_id") or normalized in {"index", "row_number"}
-        return id_name and self.df[column].nunique(dropna=True) >= max(1, int(len(self.df) * 0.95))
+        return columns_for_role(
+            self.df,
+            "category",
+            profiles=self.column_profiles,
+            require_variation=False,
+        )
 
     def _time_column(self) -> Optional[Any]:
-        for column in self.df.columns:
-            if pd.api.types.is_datetime64_any_dtype(self.df[column]):
-                return column
-        keywords = ("date", "time", "timestamp", "datetime", "дата", "время")
-        for column in self.df.columns:
-            if not any(keyword in str(column).lower() for keyword in keywords):
-                continue
-            parsed = pd.to_datetime(self.df[column], errors="coerce")
-            if parsed.notna().mean() >= 0.80:
-                return column
-        return None
+        columns = columns_for_role(
+            self.df,
+            "temporal",
+            profiles=self.column_profiles,
+            require_variation=True,
+        )
+        return columns[0] if columns else None
 
     @staticmethod
     def _sample_confidence(sample_size: int) -> str:

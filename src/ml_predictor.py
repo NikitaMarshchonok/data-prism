@@ -31,6 +31,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from src.model_reliability import analyze_model_reliability
+from src.column_semantics import column_role, profile_dataframe_columns
 
 
 RANDOM_STATE = 42
@@ -181,7 +182,13 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
 def _select_target(df: pd.DataFrame, requested: Optional[str]) -> Optional[Any]:
     if requested and requested in df.columns:
         return requested
-    candidates = [column for column in df.columns if df[column].nunique(dropna=True) >= 2]
+    profiles = profile_dataframe_columns(df)
+    candidates = [
+        column
+        for column in df.columns
+        if column_role(column, profiles) in {"measure", "category"}
+        and df[column].nunique(dropna=True) >= 2
+    ]
     return candidates[-1] if candidates else None
 
 
@@ -204,24 +211,21 @@ def _prepare_features(X: pd.DataFrame, target: pd.Series) -> Tuple[pd.DataFrame,
     prepared = X.copy()
     dropped: List[str] = []
     supported_columns = []
+    semantic_profiles = profile_dataframe_columns(prepared)
 
     for column in prepared.columns:
         series = prepared[column]
         unique_count = int(series.nunique(dropna=True))
         unique_ratio = unique_count / max(int(series.notna().sum()), 1)
-        normalized_name = str(column).strip().lower().replace("-", "_").replace(" ", "_")
-        looks_like_id = (
-            normalized_name == "id"
-            or normalized_name.endswith("_id")
-            or normalized_name in {"index", "row_number"}
-        ) and unique_ratio >= 0.95
+        role = column_role(column, semantic_profiles)
+        looks_like_id = role == "identifier"
         duplicates_target = series.reset_index(drop=True).equals(target.reset_index(drop=True))
         high_cardinality_text = (
             not pd.api.types.is_numeric_dtype(series)
             and unique_count > MAX_CATEGORICAL_LEVELS
             and unique_ratio >= 0.50
         )
-        unsupported = pd.api.types.is_datetime64_any_dtype(series)
+        unsupported = role == "temporal" or pd.api.types.is_datetime64_any_dtype(series)
 
         if unique_count <= 1 or looks_like_id or duplicates_target or high_cardinality_text or unsupported:
             dropped.append(str(column))
@@ -229,7 +233,12 @@ def _prepare_features(X: pd.DataFrame, target: pd.Series) -> Tuple[pd.DataFrame,
             supported_columns.append(column)
 
     prepared = prepared[supported_columns]
-    categorical_columns = prepared.select_dtypes(exclude=[np.number]).columns
+    categorical_columns = [
+        column
+        for column in prepared.columns
+        if column_role(column, semantic_profiles) == "category"
+        or not pd.api.types.is_numeric_dtype(prepared[column])
+    ]
     for column in categorical_columns:
         prepared[column] = prepared[column].astype("object")
     return prepared, dropped

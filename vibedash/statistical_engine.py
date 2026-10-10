@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
+from src.column_semantics import columns_for_role, profile_dataframe_columns
+
 
 DEFAULT_ALPHA = 0.05
 MIN_PAIRED_SAMPLE = 8
@@ -55,6 +57,7 @@ class StatisticalValidationEngine:
             raise ValueError("alpha must be between 0 and 1")
         self.df = df
         self.alpha = float(alpha)
+        self.column_profiles = profile_dataframe_columns(df)
 
     def analyze(self, max_results: int = 6) -> Dict[str, Any]:
         """Return corrected test results, ordered by adjusted p-value."""
@@ -100,6 +103,7 @@ class StatisticalValidationEngine:
                     f"The automatic scan is bounded to the first {MAX_NUMERIC_COLUMNS} eligible numeric "
                     f"and {MAX_CATEGORICAL_COLUMNS} categorical columns; group tests require exactly two levels."
                 ),
+                "Identifiers and temporal fields are excluded; numeric category codes are tested as categories, not measures.",
                 "Confidence intervals quantify uncertainty; effect sizes quantify practical magnitude.",
                 "Statistical association alone does not establish causality or business importance.",
             ],
@@ -363,27 +367,28 @@ class StatisticalValidationEngine:
         )
 
     def _numeric_columns(self) -> List[Any]:
-        columns = list(self.df.select_dtypes(include=[np.number]).columns)
+        columns = columns_for_role(
+            self.df,
+            "measure",
+            profiles=self.column_profiles,
+            require_variation=True,
+        )
         return [
             column
             for column in columns
-            if not self._looks_like_identifier(column)
+            if pd.api.types.is_numeric_dtype(self.df[column])
+            and not pd.api.types.is_bool_dtype(self.df[column])
+            and not pd.api.types.is_complex_dtype(self.df[column])
             and self.df[column].replace([np.inf, -np.inf], np.nan).nunique(dropna=True) >= 2
         ]
 
     def _categorical_columns(self) -> List[Any]:
-        return list(
-            self.df.select_dtypes(include=["object", "string", "category", "bool"]).columns
+        return columns_for_role(
+            self.df,
+            "category",
+            profiles=self.column_profiles,
+            require_variation=True,
         )
-
-    def _looks_like_identifier(self, column: Any) -> bool:
-        normalized = str(column).strip().lower().replace("-", "_").replace(" ", "_")
-        id_name = normalized == "id" or normalized.endswith("_id") or normalized in {
-            "index",
-            "row_number",
-        }
-        unique_ratio = self.df[column].nunique(dropna=True) / max(int(self.df[column].notna().sum()), 1)
-        return id_name and unique_ratio >= 0.95
 
     def _empty_report(self, message: str) -> Dict[str, Any]:
         return {
