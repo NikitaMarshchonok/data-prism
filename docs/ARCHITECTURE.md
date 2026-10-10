@@ -56,6 +56,16 @@ unknown chart columns. Date-like and near-unique text fields are also excluded
 from categorical `Top Values` audit tables. The fixed synthetic demo keeps its
 explicit versioned specification and does not depend on these prompt heuristics.
 
+For uploaded data, the same boundary profiles values as well as column names.
+Parseable date strings become temporal axes; sequential integer fields and
+identifier names are excluded from measures; low-cardinality integer codes
+become categories unless their names carry an explicit measurement meaning.
+Exact column names mentioned in the request are prioritized for metrics,
+trends, and grouped comparisons, while explicit English or Russian exclusions
+are enforced again after optional LLM output. These rules reduce unsafe
+automatic interpretations but do not replace domain definitions or a future
+user-editable schema contract.
+
 ## Component map
 
 | Component | Responsibility | Does not own |
