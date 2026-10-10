@@ -8,6 +8,26 @@ import json
 import re
 
 
+MAX_AUTOMATIC_METRICS = 8
+MAX_AUTOMATIC_CHARTS = 6
+
+_CURRENCY_TERMS = {
+    "amount",
+    "cost",
+    "expense",
+    "income",
+    "margin",
+    "price",
+    "profit",
+    "revenue",
+    "sales",
+    "spend",
+}
+_PERCENT_TERMS = {"percentage", "percent", "pct", "rate", "ratio", "share"}
+_TEMPORAL_TERMS = {"date", "datetime", "day", "month", "quarter", "time", "timestamp", "week", "year"}
+_ABBREVIATIONS = {"api": "API", "arpu": "ARPU", "id": "ID", "kpi": "KPI", "mrr": "MRR", "nps": "NPS", "roi": "ROI"}
+
+
 class Metric(BaseModel):
     """Метрика для KPI карточки"""
     title: str
@@ -126,11 +146,120 @@ def parse_prompt_to_viz_spec(prompt: str, df_columns: List[str]) -> VizSpec:
         if ollama_generate:
             improved_spec = _improve_with_ollama(prompt, spec, df_columns)
             if improved_spec:
-                return improved_spec
+                return _sanitize_generated_spec(improved_spec, df_columns)
     except Exception as e:
         print(f"⚠️ Ollama недоступен, используем эвристики: {e}")
     
-    return spec
+    return _sanitize_generated_spec(spec, df_columns)
+
+
+def _column_terms(column: str) -> set[str]:
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(column))
+    return {
+        part
+        for part in re.split(r"[^a-z0-9]+", normalized.lower())
+        if part
+    }
+
+
+def _humanize_column(column: str) -> str:
+    normalized = re.sub(r"[_\-]+", " ", str(column).strip())
+    normalized = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", normalized)
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
+    return " ".join(
+        _ABBREVIATIONS.get(word.lower(), word.capitalize())
+        for word in normalized.split()
+    )
+
+
+def _is_temporal_column(column: str) -> bool:
+    return bool(_column_terms(column) & _TEMPORAL_TERMS)
+
+
+def _metric_format_for_column(column: str) -> str:
+    terms = _column_terms(column)
+    if terms & _CURRENCY_TERMS:
+        return "currency"
+    if terms & _PERCENT_TERMS:
+        return "percent"
+    return "number"
+
+
+def _metric_column(expression: str) -> Optional[str]:
+    match = re.fullmatch(
+        r"\s*(?:sum|mean|median|min|max|std|count|nunique)\(\s*`?([^()`]+?)`?\s*\)\s*",
+        expression or "",
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else None
+
+
+def _sanitize_generated_spec(spec: VizSpec, df_columns: List[str]) -> VizSpec:
+    """Apply conservative product rules to automatically generated specs.
+
+    Automatic dashboards must not imply targets that the user never supplied.
+    The sanitizer therefore removes gauges, deduplicates output, caps visual
+    volume, and repairs obvious semantic units. Explicit built-in demo specs do
+    not pass through this function.
+    """
+    known_columns = set(df_columns)
+    metrics: List[Metric] = []
+    metric_expressions = set()
+    for metric in spec.metrics:
+        expression_key = re.sub(r"\s+", "", metric.expr).lower()
+        if expression_key in metric_expressions:
+            continue
+        column = _metric_column(metric.expr)
+        if column and column not in known_columns:
+            continue
+        if column:
+            expected_format = _metric_format_for_column(column)
+            if metric.fmt in {None, "number"} and expected_format != "number":
+                metric = metric.model_copy(update={"fmt": expected_format})
+        metrics.append(metric)
+        metric_expressions.add(expression_key)
+        if len(metrics) >= MAX_AUTOMATIC_METRICS:
+            break
+
+    charts: List[Chart] = []
+    chart_signatures = set()
+    for chart in spec.charts:
+        if chart.type == "gauge":
+            continue
+        referenced = [chart.x, chart.group]
+        if isinstance(chart.y, list):
+            referenced.extend(chart.y)
+        else:
+            referenced.append(chart.y)
+        if any(column and column not in known_columns for column in referenced):
+            continue
+        if (
+            chart.type in {"bar", "pie"}
+            and chart.x
+            and _is_temporal_column(chart.x)
+            and (
+                not chart.y
+                or chart.top is not None
+                or "top" in (chart.title or "").lower()
+                or "rank" in (chart.title or "").lower()
+            )
+        ):
+            continue
+        signature = (
+            chart.type,
+            chart.x,
+            tuple(chart.y) if isinstance(chart.y, list) else chart.y,
+            chart.group,
+            chart.agg,
+        )
+        if signature in chart_signatures:
+            continue
+        charts.append(chart)
+        chart_signatures.add(signature)
+        if len(charts) >= MAX_AUTOMATIC_CHARTS:
+            break
+
+    return spec.model_copy(update={"metrics": metrics, "charts": charts})
 
 
 def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
@@ -150,6 +279,9 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
     categorical_cols = []
     
     for col in df_columns:
+        if _is_temporal_column(col):
+            categorical_cols.append(col)
+            continue
         if _is_numeric_column(col):
             # Дополнительная проверка - исключаем явно строковые ID
             if not ("customer" in col.lower() and "id" in col.lower()) and \
@@ -165,23 +297,43 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
     charts = []
     filters = []
     comments = []
+    revenue_cols = []
     
-    # Базовые метрики - создаем больше KPI
+    # Базовые метрики: небольшой набор без дубликатов и с явными единицами.
     if numeric_cols:
-        # Ищем колонки с суммами/доходами
-        revenue_cols = [col for col in numeric_cols if any(word in col.lower() for word in ["revenue", "sales", "доход", "сумма", "amount", "price", "cost"])]
+        revenue_cols = [
+            col for col in numeric_cols
+            if _column_terms(col) & _CURRENCY_TERMS
+        ]
         if revenue_cols:
-            metrics.append(Metric(title="Total Amount", expr=f"sum({revenue_cols[0]})", fmt="currency"))
-            metrics.append(Metric(title="Average Value", expr=f"mean({revenue_cols[0]})", fmt="currency"))
+            revenue = revenue_cols[0]
+            revenue_label = _humanize_column(revenue)
+            metrics.append(Metric(
+                title=f"Total {revenue_label}",
+                expr=f"sum({revenue})",
+                fmt="currency",
+            ))
+            metrics.append(Metric(
+                title=f"Average {revenue_label}",
+                expr=f"mean({revenue})",
+                fmt="currency",
+            ))
         
-        # Считаем записи
         metrics.append(Metric(title="Record Count", expr="count()", fmt="number"))
-        
-        # Основные статистики для первых 3 числовых колонок
-        for i, col in enumerate(numeric_cols[:3]):
-            metrics.append(Metric(title=f"Avg {col}", expr=f"mean({col})", fmt="number"))
-            metrics.append(Metric(title=f"Max {col}", expr=f"max({col})", fmt="number"))
-            metrics.append(Metric(title=f"Min {col}", expr=f"min({col})", fmt="number"))
+
+        represented_expressions = {metric.expr for metric in metrics}
+        for col in numeric_cols:
+            expression = f"mean({col})"
+            if expression in represented_expressions:
+                continue
+            metrics.append(Metric(
+                title=f"Average {_humanize_column(col)}",
+                expr=expression,
+                fmt=_metric_format_for_column(col),
+            ))
+            represented_expressions.add(expression)
+            if len(metrics) >= MAX_AUTOMATIC_METRICS:
+                break
     
     # Базовые графики - создаем больше визуализаций
     if numeric_cols:
@@ -210,68 +362,46 @@ def _parse_heuristics(prompt: str, df_columns: List[str]) -> VizSpec:
                 title=f"Correlation: {numeric_cols[1]} vs {numeric_cols[2]}"
             ))
     
-    # Категориальные графики
-    if categorical_cols:
-        # Столбчатый график топ-10 категорий
+    temporal_cols = [col for col in categorical_cols if _is_temporal_column(col)]
+    business_categories = [
+        col for col in categorical_cols if not _is_temporal_column(col)
+    ]
+
+    # Временная динамика строится по оси времени, а не как рейтинг дат.
+    if temporal_cols and numeric_cols and any(
+        word in prompt for word in ["динамик", "тренд", "trend", "time"]
+    ):
+        trend_metric = revenue_cols[0] if revenue_cols else numeric_cols[0]
         charts.append(Chart(
-            type="bar",
-            x=categorical_cols[0],
-            y=numeric_cols[0] if numeric_cols else None,
-            agg="count",
-            top=10,
-            title=f"Top 10 {categorical_cols[0]}"
+            type="line",
+            x=temporal_cols[0],
+            y=trend_metric,
+            title=f"{_humanize_column(trend_metric)} over time",
         ))
-        
-        # Если есть вторая категориальная колонка
-        if len(categorical_cols) > 1:
+
+    # Категориальные графики показывают честную агрегацию, а не сумму строк
+    # под вводящим в заблуждение названием Top 10.
+    for category in business_categories[:2]:
+        if revenue_cols:
+            value_column = revenue_cols[0]
             charts.append(Chart(
                 type="bar",
-                x=categorical_cols[1],
-                y=numeric_cols[0] if numeric_cols else None,
-                agg="count",
+                y=value_column,
+                agg="sum",
+                group=category,
+                title=f"Total {_humanize_column(value_column)} by {_humanize_column(category)}",
+            ))
+        else:
+            charts.append(Chart(
+                type="bar",
+                x=category,
                 top=10,
-                title=f"Top 10 {categorical_cols[1]}"
+                title=f"Record count by {_humanize_column(category)}",
             ))
-    
-    # Дополнительные графики по ключевым словам
-    if "тренд" in prompt or "trend" in prompt:
-        if len(numeric_cols) > 1:
-            charts.append(Chart(
-                type="line",
-                x=numeric_cols[0],
-                y=numeric_cols[1],
-                title="Trend Analysis"
-            ))
-    
-    if "корреляц" in prompt or "correlation" in prompt:
-        if len(numeric_cols) > 1:
-            charts.append(Chart(
-                type="scatter",
-                x=numeric_cols[0],
-                y=numeric_cols[1],
-                title="Correlation Analysis"
-            ))
-    
-    # Добавляем gauge charts для KPI
-    if numeric_cols:
-        # Gauge для первой числовой колонки
-        charts.append(Chart(
-            type="gauge",
-            y=numeric_cols[0],
-            agg="mean",
-            title=f"Performance Gauge: {numeric_cols[0]}"
-        ))
-        
-        # Gauge для количества записей
-        charts.append(Chart(
-            type="gauge",
-            agg="count",
-            title="Data Completeness"
-        ))
     
     # Фильтры
-    if categorical_cols:
-        filters.append(Filter(field=categorical_cols[0], values=None))
+    if business_categories:
+        filters.append(Filter(field=business_categories[0], values=None))
     
     # Комментарии
     comments.append("Дашборд создан автоматически на основе вашего запроса")

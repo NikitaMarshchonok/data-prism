@@ -587,7 +587,11 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
     categorical_cols = df.select_dtypes(
         include=["object", "string", "category", "bool"]
     ).columns
-    for col in categorical_cols[:3]:  # Первые 3 категориальные колонки
+    useful_categorical_cols = [
+        col for col in categorical_cols
+        if _is_useful_category_summary(df, col)
+    ]
+    for col in useful_categorical_cols[:3]:
         value_counts = df[col].value_counts().head(10)
         tables.append({
             "title": f"Top Values: {col}",
@@ -602,6 +606,25 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
         })
     
     return tables
+
+
+def _is_useful_category_summary(df: pd.DataFrame, column: str) -> bool:
+    """Exclude date-like and near-unique fields from Top Values tables."""
+    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(column))
+    terms = {
+        part for part in re.split(r"[^a-z0-9]+", normalized.lower()) if part
+    }
+    temporal_terms = {
+        "date", "datetime", "day", "month", "quarter", "time", "timestamp", "week", "year"
+    }
+    if terms & temporal_terms:
+        return False
+
+    non_missing_count = int(df[column].notna().sum())
+    if non_missing_count == 0:
+        return False
+    unique_count = int(df[column].nunique(dropna=True))
+    return unique_count < 20 or unique_count / non_missing_count <= 0.5
 
 
 def _generate_ai_summary(df: pd.DataFrame, viz_spec: VizSpec) -> str:
@@ -621,9 +644,19 @@ def _generate_ai_summary(df: pd.DataFrame, viz_spec: VizSpec) -> str:
         chart_types = [chart.type for chart in viz_spec.charts]
         summary_parts.append(f"📊 Created {len(viz_spec.charts)} charts: {', '.join(set(chart_types))}")
     
-    # Информация о фильтрах
-    if viz_spec.filters:
-        summary_parts.append(f"🔍 Applied {len(viz_spec.filters)} filters")
+    # Не называем пустые поля фильтра фактически применёнными ограничениями.
+    active_filters = [
+        filter_obj
+        for filter_obj in viz_spec.filters
+        if filter_obj.where or filter_obj.values
+    ]
+    if active_filters:
+        summary_parts.append(f"🔍 Applied {len(active_filters)} filters")
+    elif viz_spec.filters:
+        field_label = "field" if len(viz_spec.filters) == 1 else "fields"
+        summary_parts.append(
+            f"🔍 Configured {len(viz_spec.filters)} filter {field_label}"
+        )
     
     # Комментарии из спецификации
     if viz_spec.comments:

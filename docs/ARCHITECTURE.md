@@ -48,6 +48,14 @@ colour, responsive Plotly controls, and accessible contrast. Chart styling does
 not generate findings or causal claims; those remain the responsibility of the
 evidence and statistical engines.
 
+Automatically generated VibeDash specifications pass through a conservative
+semantic boundary before rendering. The boundary deduplicates and caps KPI
+cards, infers currency and percentage display units from column semantics,
+removes gauges that have no user-supplied target, and rejects date rankings and
+unknown chart columns. Date-like and near-unique text fields are also excluded
+from categorical `Top Values` audit tables. The fixed synthetic demo keeps its
+explicit versioned specification and does not depend on these prompt heuristics.
+
 ## Component map
 
 | Component | Responsibility | Does not own |
