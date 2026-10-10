@@ -27,6 +27,30 @@ PILOT_COLUMNS = [
 
 
 class VibeDashAutomaticSemanticsTests(unittest.TestCase):
+    @staticmethod
+    def _bike_sharing_frame():
+        rows = 60
+        return pd.DataFrame(
+            {
+                "instant": range(1, rows + 1),
+                "dteday": pd.date_range("2011-01-01", periods=rows).astype(str),
+                "season": [1, 2, 3, 4] * 15,
+                "yr": [0] * 30 + [1] * 30,
+                "mnth": [1, 2, 3, 4, 5] * 12,
+                "holiday": [0, 0, 0, 0, 1] * 12,
+                "weekday": [index % 7 for index in range(rows)],
+                "workingday": [0, 1] * 30,
+                "weathersit": [1, 1, 2, 2, 3] * 12,
+                "temp": [0.2 + index / 1000 for index in range(rows)],
+                "atemp": [0.25 + index / 1000 for index in range(rows)],
+                "hum": [0.4 + index / 1000 for index in range(rows)],
+                "windspeed": [0.1 + index / 2000 for index in range(rows)],
+                "casual": [20 + index for index in range(rows)],
+                "registered": [100 + index * 2 for index in range(rows)],
+                "cnt": [120 + index * 3 for index in range(rows)],
+            }
+        )
+
     @patch("vibedash.spec._improve_with_ollama", return_value=None)
     def test_automatic_spec_uses_bounded_semantic_metrics(self, _ollama):
         spec = parse_prompt_to_viz_spec(
@@ -236,6 +260,99 @@ class VibeDashAutomaticSemanticsTests(unittest.TestCase):
 
         self.assertEqual([chart.x for chart in spec.charts], ["Region"])
         self.assertEqual([filter_obj.field for filter_obj in spec.filters], ["Region"])
+
+    @patch("vibedash.spec._improve_with_ollama", return_value=None)
+    def test_realistic_encoded_schema_uses_requested_business_roles(self, _ollama):
+        frame = self._bike_sharing_frame()
+        spec = parse_prompt_to_viz_spec(
+            "Покажи динамику общего числа аренд cnt по дате dteday. "
+            "Сравни cnt по season, weathersit и workingday. "
+            "Не используй instant как метрику.",
+            list(frame.columns),
+            dataframe=frame,
+        )
+
+        metric_expressions = {metric.expr for metric in spec.metrics}
+        self.assertIn("sum(cnt)", metric_expressions)
+        self.assertIn("mean(cnt)", metric_expressions)
+        self.assertEqual(spec.metrics[0].title, "Total Count")
+        self.assertFalse(
+            metric_expressions
+            & {
+                "mean(instant)",
+                "mean(season)",
+                "mean(yr)",
+                "mean(mnth)",
+                "mean(holiday)",
+                "mean(weekday)",
+                "mean(workingday)",
+                "mean(weathersit)",
+            }
+        )
+
+        trend = next(chart for chart in spec.charts if chart.type == "line")
+        self.assertEqual((trend.x, trend.y), ("dteday", "cnt"))
+        self.assertEqual(trend.title, "Count over time")
+        grouped = {
+            chart.group: chart
+            for chart in spec.charts
+            if chart.type == "bar" and chart.group
+        }
+        self.assertEqual(
+            set(grouped),
+            {"season", "weathersit", "workingday"},
+        )
+        self.assertTrue(all(chart.y == "cnt" for chart in grouped.values()))
+        self.assertTrue(all(chart.agg == "sum" for chart in grouped.values()))
+        self.assertEqual(grouped["workingday"].title, "Total Count by Working Day")
+        self.assertEqual(
+            grouped["weathersit"].title,
+            "Total Count by Weather Situation",
+        )
+        self.assertFalse(
+            any(
+                "instant" in {
+                    chart.x,
+                    chart.group,
+                    chart.y if isinstance(chart.y, str) else None,
+                }
+                for chart in spec.charts
+            )
+        )
+
+    @patch("vibedash.spec._improve_with_ollama")
+    def test_explicit_exclusion_survives_llm_output(self, improve):
+        improve.return_value = VizSpec(
+            title="Unsafe bike dashboard",
+            metrics=[
+                Metric(title="Average row", expr="mean(instant)"),
+                Metric(title="Average season", expr="mean(season)"),
+            ],
+            charts=[
+                Chart(type="hist", x="instant"),
+                Chart(type="scatter", x="instant", y="cnt"),
+            ],
+        )
+        frame = self._bike_sharing_frame()
+
+        spec = parse_prompt_to_viz_spec(
+            "Покажи cnt по dteday и не используй instant",
+            list(frame.columns),
+            dataframe=frame,
+        )
+
+        self.assertTrue(any(metric.expr == "sum(cnt)" for metric in spec.metrics))
+        self.assertFalse(any("instant" in metric.expr for metric in spec.metrics))
+        self.assertFalse(
+            any(
+                "instant" in {
+                    chart.x,
+                    chart.group,
+                    chart.y if isinstance(chart.y, str) else None,
+                }
+                for chart in spec.charts
+            )
+        )
 
 
 if __name__ == "__main__":

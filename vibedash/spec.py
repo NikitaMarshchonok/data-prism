@@ -7,7 +7,8 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 import json
 import re
 
-from pandas.api.types import is_numeric_dtype
+import pandas as pd
+from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
 
 
 MAX_AUTOMATIC_METRICS = 8
@@ -26,6 +27,34 @@ _CURRENCY_TERMS = {
     "spend",
 }
 _PERCENT_TERMS = {"percentage", "percent", "pct", "rate", "ratio", "share"}
+_ADDITIVE_TERMS = {
+    "amount",
+    "cnt",
+    "count",
+    "expense",
+    "income",
+    "quantity",
+    "revenue",
+    "sales",
+    "spend",
+    "total",
+    "units",
+    "volume",
+}
+_MEASURE_TERMS = _CURRENCY_TERMS | _PERCENT_TERMS | _ADDITIVE_TERMS | {
+    "age",
+    "atemp",
+    "distance",
+    "duration",
+    "hum",
+    "humidity",
+    "score",
+    "speed",
+    "temp",
+    "temperature",
+    "weight",
+    "windspeed",
+}
 _TEMPORAL_TERMS = {"date", "datetime", "day", "month", "quarter", "time", "timestamp", "week", "year"}
 _IDENTIFIER_TERMS = {
     "guid",
@@ -35,6 +64,16 @@ _IDENTIFIER_TERMS = {
     "uuid",
 }
 _ABBREVIATIONS = {"api": "API", "arpu": "ARPU", "id": "ID", "kpi": "KPI", "mrr": "MRR", "nps": "NPS", "roi": "ROI"}
+_COLUMN_LABEL_OVERRIDES = {
+    "atemp": "Apparent Temperature",
+    "cnt": "Count",
+    "dteday": "Date",
+    "hum": "Humidity",
+    "mnth": "Month",
+    "weathersit": "Weather Situation",
+    "workingday": "Working Day",
+    "yr": "Year",
+}
 
 
 class Metric(BaseModel):
@@ -152,9 +191,15 @@ def parse_prompt_to_viz_spec(
     prompt = prompt.strip().lower()
     
     column_profiles = _profile_dataframe_columns(dataframe, df_columns)
+    excluded_columns = _prompt_excluded_columns(prompt, df_columns)
 
     # Эвристический парсинг
-    spec = _parse_heuristics(prompt, df_columns, column_profiles)
+    spec = _parse_heuristics(
+        prompt,
+        df_columns,
+        column_profiles,
+        excluded_columns=excluded_columns,
+    )
     
     # Пробуем улучшить через Ollama
     try:
@@ -162,15 +207,29 @@ def parse_prompt_to_viz_spec(
         if ollama_generate:
             improved_spec = _improve_with_ollama(prompt, spec, df_columns)
             if improved_spec:
+                if _prompt_mentioned_columns(prompt, df_columns):
+                    improved_spec = improved_spec.model_copy(
+                        update={
+                            "metrics": spec.metrics + improved_spec.metrics,
+                            "charts": spec.charts + improved_spec.charts,
+                            "filters": spec.filters + improved_spec.filters,
+                        }
+                    )
                 return _sanitize_generated_spec(
                     improved_spec,
                     df_columns,
                     column_profiles,
+                    excluded_columns=excluded_columns,
                 )
     except Exception as e:
         print(f"⚠️ Ollama недоступен, используем эвристики: {e}")
     
-    return _sanitize_generated_spec(spec, df_columns, column_profiles)
+    return _sanitize_generated_spec(
+        spec,
+        df_columns,
+        column_profiles,
+        excluded_columns=excluded_columns,
+    )
 
 
 def _column_terms(column: str) -> set[str]:
@@ -183,6 +242,9 @@ def _column_terms(column: str) -> set[str]:
 
 
 def _humanize_column(column: str) -> str:
+    override = _COLUMN_LABEL_OVERRIDES.get(str(column).strip().lower())
+    if override:
+        return override
     normalized = re.sub(r"[_\-]+", " ", str(column).strip())
     normalized = re.sub(r"(?<=[A-Z])(?=[A-Z][a-z])", " ", normalized)
     normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
@@ -190,6 +252,58 @@ def _humanize_column(column: str) -> str:
         _ABBREVIATIONS.get(word.lower(), word.capitalize())
         for word in normalized.split()
     )
+
+
+def _column_aliases(column: str) -> set[str]:
+    """Return conservative prompt aliases for an exact dataset column."""
+    original = str(column).strip().lower()
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(column)).lower()
+    spaced = re.sub(r"[^a-z0-9а-яё]+", " ", spaced).strip()
+    aliases = {original, spaced, spaced.replace(" ", "_")}
+    return {alias for alias in aliases if alias}
+
+
+def _prompt_contains_alias(prompt: str, alias: str) -> bool:
+    return bool(
+        re.search(
+            rf"(?<![a-z0-9а-яё]){re.escape(alias)}(?![a-z0-9а-яё])",
+            prompt,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _prompt_mentioned_columns(prompt: str, df_columns: List[str]) -> List[str]:
+    """Find explicitly named columns without fuzzy guesses or invented fields."""
+    return [
+        column
+        for column in df_columns
+        if any(
+            _prompt_contains_alias(prompt, alias)
+            for alias in _column_aliases(column)
+        )
+    ]
+
+
+def _prompt_excluded_columns(prompt: str, df_columns: List[str]) -> set[str]:
+    """Honor explicit English and Russian requests to ignore a column."""
+    exclusion_prefix = (
+        r"(?:не\s+(?:используй|использовать|учитывай|учитывать)|"
+        r"исключи|исключить|игнорируй|игнорировать|"
+        r"do\s+not\s+use|don't\s+use|exclude|ignore|without)"
+    )
+    excluded = set()
+    for column in df_columns:
+        for alias in _column_aliases(column):
+            if re.search(
+                rf"{exclusion_prefix}[^.!?\n]{{0,40}}"
+                rf"(?<![a-z0-9а-яё]){re.escape(alias)}(?![a-z0-9а-яё])",
+                prompt,
+                flags=re.IGNORECASE,
+            ):
+                excluded.add(column)
+                break
+    return excluded
 
 
 def _is_temporal_column(column: str) -> bool:
@@ -223,35 +337,114 @@ def _is_identifier_column(column: str) -> bool:
 def _profile_dataframe_columns(
     dataframe: Optional[Any],
     df_columns: List[str],
-) -> Dict[str, Dict[str, Union[bool, int, float]]]:
+) -> Dict[str, Dict[str, Any]]:
     """Build a bounded, aggregate-only profile for automatic semantics."""
     if dataframe is None:
         return {}
 
-    profiles: Dict[str, Dict[str, Union[bool, int, float]]] = {}
+    profiles: Dict[str, Dict[str, Any]] = {}
     for column in df_columns:
         if column not in dataframe.columns:
             continue
         series = dataframe[column]
         non_missing_count = int(series.notna().sum())
         unique_count = int(series.nunique(dropna=True))
+        is_numeric = bool(is_numeric_dtype(series.dtype))
+        is_temporal = bool(is_datetime64_any_dtype(series.dtype))
+        if not is_temporal and not is_numeric and non_missing_count:
+            sample = series.dropna().astype(str).head(200)
+            if not sample.empty:
+                date_like = sample.str.match(
+                    r"^\s*(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
+                    r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4})(?:[T\s].*)?\s*$"
+                )
+                if date_like.mean() >= 0.9:
+                    parsed = pd.to_datetime(sample, errors="coerce")
+                    is_temporal = bool(parsed.notna().mean() >= 0.9)
+
+        numeric_values = (
+            pd.to_numeric(series.dropna(), errors="coerce")
+            if is_numeric
+            else None
+        )
+        is_integer_like = bool(
+            is_numeric
+            and numeric_values is not None
+            and not numeric_values.empty
+            and ((numeric_values - numeric_values.round()).abs() <= 1e-9).all()
+        )
+        is_monotonic_unique = bool(
+            is_integer_like
+            and non_missing_count >= 3
+            and unique_count == non_missing_count
+            and (
+                numeric_values.is_monotonic_increasing
+                or numeric_values.is_monotonic_decreasing
+            )
+        )
+        is_sequential_identifier = bool(
+            is_monotonic_unique
+            and numeric_values.diff().dropna().abs().eq(1).all()
+        )
+        low_cardinality_integer = bool(
+            is_integer_like
+            and unique_count > 1
+            and (
+                unique_count <= 20
+                or unique_count / non_missing_count <= 0.02
+            )
+        )
+
+        if is_temporal or _is_temporal_column(column):
+            role = "temporal"
+        elif _is_identifier_column(column) or is_sequential_identifier:
+            role = "identifier"
+        elif is_numeric and _column_terms(column) & _MEASURE_TERMS:
+            role = "measure"
+        elif is_numeric and low_cardinality_integer:
+            role = "category"
+        elif is_numeric:
+            role = "measure"
+        else:
+            role = "category"
+
         profiles[column] = {
-            "is_numeric": bool(is_numeric_dtype(series.dtype)),
+            "is_numeric": is_numeric,
+            "is_temporal": is_temporal,
+            "is_integer_like": is_integer_like,
+            "is_monotonic_unique": is_monotonic_unique,
+            "is_sequential_identifier": is_sequential_identifier,
             "non_missing_count": non_missing_count,
             "unique_count": unique_count,
             "unique_ratio": (
                 unique_count / non_missing_count if non_missing_count else 0.0
             ),
+            "role": role,
         }
     return profiles
 
 
+def _column_role(
+    column: str,
+    column_profiles: Mapping[str, Mapping[str, Any]],
+) -> str:
+    profile = column_profiles.get(column, {})
+    role = profile.get("role")
+    if role in {"temporal", "identifier", "category", "measure"}:
+        return str(role)
+    if _is_temporal_column(column):
+        return "temporal"
+    if _is_identifier_column(column):
+        return "identifier"
+    return "measure" if _is_numeric_column(column) else "category"
+
+
 def _is_useful_automatic_category(
     column: str,
-    column_profiles: Mapping[str, Mapping[str, Union[bool, int, float]]],
+    column_profiles: Mapping[str, Mapping[str, Any]],
 ) -> bool:
     """Keep repeatable business cohorts; reject IDs and near-unique labels."""
-    if _is_temporal_column(column) or _is_identifier_column(column):
+    if _column_role(column, column_profiles) != "category":
         return False
     profile = column_profiles.get(column)
     if not profile:
@@ -285,8 +478,10 @@ def _sanitize_generated_spec(
     spec: VizSpec,
     df_columns: List[str],
     column_profiles: Optional[
-        Mapping[str, Mapping[str, Union[bool, int, float]]]
+        Mapping[str, Mapping[str, Any]]
     ] = None,
+    *,
+    excluded_columns: Optional[set[str]] = None,
 ) -> VizSpec:
     """Apply conservative product rules to automatically generated specs.
 
@@ -297,6 +492,7 @@ def _sanitize_generated_spec(
     """
     known_columns = set(df_columns)
     profiles = column_profiles or {}
+    excluded = excluded_columns or set()
     metrics: List[Metric] = []
     metric_expressions = set()
     for metric in spec.metrics:
@@ -306,7 +502,14 @@ def _sanitize_generated_spec(
         column = _metric_column(metric.expr)
         if column and column not in known_columns:
             continue
-        if column and _is_identifier_column(column):
+        if column and column in excluded:
+            continue
+        aggregate = (metric.expr or "").strip().split("(", 1)[0].lower()
+        if (
+            column
+            and _column_role(column, profiles) != "measure"
+            and aggregate not in {"count", "nunique"}
+        ):
             continue
         if (
             column
@@ -336,6 +539,33 @@ def _sanitize_generated_spec(
             referenced.append(chart.y)
         if any(column and column not in known_columns for column in referenced):
             continue
+        if any(column and column in excluded for column in referenced):
+            continue
+        if (
+            chart.type == "hist"
+            and chart.x
+            and _column_role(chart.x, profiles) != "measure"
+        ):
+            continue
+        if chart.type == "scatter" and any(
+            column and _column_role(column, profiles) != "measure"
+            for column in [
+                chart.x,
+                chart.y if isinstance(chart.y, str) else None,
+            ]
+        ):
+            continue
+        if chart.type in {"line", "area"}:
+            if chart.x and _column_role(chart.x, profiles) == "identifier":
+                continue
+            if (
+                isinstance(chart.y, str)
+                and _column_role(chart.y, profiles) != "measure"
+            ):
+                continue
+        if chart.type in {"bar", "pie"} and isinstance(chart.y, str):
+            if _column_role(chart.y, profiles) != "measure":
+                continue
         category = chart.group
         if not category and chart.type in {"bar", "pie"} and not chart.y:
             category = chart.x
@@ -371,6 +601,7 @@ def _sanitize_generated_spec(
         filter_obj
         for filter_obj in spec.filters
         if filter_obj.field in known_columns
+        and filter_obj.field not in excluded
         and (
             filter_obj.where
             or _is_useful_automatic_category(filter_obj.field, profiles)
@@ -386,8 +617,10 @@ def _parse_heuristics(
     prompt: str,
     df_columns: List[str],
     column_profiles: Optional[
-        Mapping[str, Mapping[str, Union[bool, int, float]]]
+        Mapping[str, Mapping[str, Any]]
     ] = None,
+    *,
+    excluded_columns: Optional[set[str]] = None,
 ) -> VizSpec:
     """Эвристический парсинг промпта"""
     
@@ -400,27 +633,40 @@ def _parse_heuristics(
     elif any(word in prompt for word in ["недвижим", "real estate", "property", "квартир"]):
         title = "Анализ недвижимости"
     
-    # Ищем числовые колонки для метрик (более точная проверка)
+    # Разделяем роли по реальным значениям, затем учитываем явные указания
+    # пользователя. Числовой dtype сам по себе не делает поле метрикой.
     numeric_cols = []
     categorical_cols = []
-    
+
     profiles = column_profiles or {}
+    excluded = excluded_columns or set()
+    mentioned_columns = [
+        column
+        for column in _prompt_mentioned_columns(prompt, df_columns)
+        if column not in excluded
+    ]
     for col in df_columns:
-        if _is_identifier_column(col):
+        if col in excluded:
             continue
-        if _is_temporal_column(col):
+        role = _column_role(col, profiles)
+        if role == "identifier":
+            continue
+        if role == "temporal":
             categorical_cols.append(col)
             continue
-        if col in profiles:
-            if bool(profiles[col].get("is_numeric", False)):
-                numeric_cols.append(col)
-            else:
-                categorical_cols.append(col)
-        elif _is_numeric_column(col):
+        if role == "measure":
             numeric_cols.append(col)
         else:
             categorical_cols.append(col)
-    
+
+    mentioned_measures = [col for col in mentioned_columns if col in numeric_cols]
+    mentioned_categories = [
+        col for col in mentioned_columns if col in categorical_cols
+    ]
+    numeric_cols = mentioned_measures + [
+        col for col in numeric_cols if col not in mentioned_measures
+    ]
+
     metrics = []
     charts = []
     filters = []
@@ -429,8 +675,9 @@ def _parse_heuristics(
     
     # Базовые метрики: небольшой набор без дубликатов и с явными единицами.
     if numeric_cols:
+        metric_columns = mentioned_measures or numeric_cols
         revenue_cols = [
-            col for col in numeric_cols
+            col for col in metric_columns
             if _column_terms(col) & _CURRENCY_TERMS
         ]
         if revenue_cols:
@@ -447,10 +694,22 @@ def _parse_heuristics(
                 fmt="currency",
             ))
         
+        additive_cols = [
+            col for col in mentioned_measures
+            if _column_terms(col) & _ADDITIVE_TERMS
+            and col not in revenue_cols
+        ]
+        for column in additive_cols[:2]:
+            metrics.append(Metric(
+                title=f"Total {_humanize_column(column)}",
+                expr=f"sum({column})",
+                fmt=_metric_format_for_column(column),
+            ))
+
         metrics.append(Metric(title="Record Count", expr="count()", fmt="number"))
 
         represented_expressions = {metric.expr for metric in metrics}
-        for col in numeric_cols:
+        for col in metric_columns:
             expression = f"mean({col})"
             if expression in represented_expressions:
                 continue
@@ -465,43 +724,60 @@ def _parse_heuristics(
     
     # Базовые графики - создаем больше визуализаций
     if numeric_cols:
+        chart_measure_cols = mentioned_measures or numeric_cols
         # Гистограмма для первой числовой колонки
         charts.append(Chart(
             type="hist",
-            x=numeric_cols[0],
-            title=f"Distribution of {numeric_cols[0]}"
+            x=chart_measure_cols[0],
+            title=f"Distribution of {chart_measure_cols[0]}"
         ))
         
         # Если есть вторая числовая колонка - scatter plot
-        if len(numeric_cols) > 1:
+        if len(chart_measure_cols) > 1:
             charts.append(Chart(
                 type="scatter",
-                x=numeric_cols[0],
-                y=numeric_cols[1],
-                title=f"Correlation: {numeric_cols[0]} vs {numeric_cols[1]}"
+                x=chart_measure_cols[0],
+                y=chart_measure_cols[1],
+                title=f"Correlation: {chart_measure_cols[0]} vs {chart_measure_cols[1]}"
             ))
         
         # Если есть третья числовая колонка - еще один scatter
-        if len(numeric_cols) > 2:
+        if len(chart_measure_cols) > 2:
             charts.append(Chart(
                 type="scatter",
-                x=numeric_cols[1],
-                y=numeric_cols[2],
-                title=f"Correlation: {numeric_cols[1]} vs {numeric_cols[2]}"
+                x=chart_measure_cols[1],
+                y=chart_measure_cols[2],
+                title=f"Correlation: {chart_measure_cols[1]} vs {chart_measure_cols[2]}"
             ))
-    
-    temporal_cols = [col for col in categorical_cols if _is_temporal_column(col)]
+
+    temporal_cols = [
+        col for col in categorical_cols
+        if _column_role(col, profiles) == "temporal"
+    ]
     business_categories = [
         col
         for col in categorical_cols
         if _is_useful_automatic_category(col, profiles)
     ]
+    mentioned_temporals = [col for col in mentioned_columns if col in temporal_cols]
+    mentioned_business_categories = [
+        col for col in mentioned_categories if col in business_categories
+    ]
+    temporal_cols = mentioned_temporals + [
+        col for col in temporal_cols if col not in mentioned_temporals
+    ]
+    business_categories = mentioned_business_categories + [
+        col for col in business_categories if col not in mentioned_business_categories
+    ]
 
     # Временная динамика строится по оси времени, а не как рейтинг дат.
-    if temporal_cols and numeric_cols and any(
-        word in prompt for word in ["динамик", "тренд", "trend", "time"]
+    if temporal_cols and numeric_cols and (
+        mentioned_temporals
+        or any(word in prompt for word in ["динамик", "тренд", "trend", "time"])
     ):
-        trend_metric = revenue_cols[0] if revenue_cols else numeric_cols[0]
+        trend_metric = mentioned_measures[0] if mentioned_measures else (
+            revenue_cols[0] if revenue_cols else numeric_cols[0]
+        )
         charts.append(Chart(
             type="line",
             x=temporal_cols[0],
@@ -511,15 +787,26 @@ def _parse_heuristics(
 
     # Категориальные графики показывают честную агрегацию, а не сумму строк
     # под вводящим в заблуждение названием Top 10.
-    for category in business_categories[:2]:
-        if revenue_cols:
-            value_column = revenue_cols[0]
+    chart_categories = mentioned_business_categories or business_categories[:2]
+    for category in chart_categories:
+        if mentioned_measures or revenue_cols:
+            value_column = (
+                mentioned_measures[0] if mentioned_measures else revenue_cols[0]
+            )
+            aggregation = (
+                "sum"
+                if _column_terms(value_column) & _ADDITIVE_TERMS
+                else "mean"
+            )
             charts.append(Chart(
                 type="bar",
                 y=value_column,
-                agg="sum",
+                agg=aggregation,
                 group=category,
-                title=f"Total {_humanize_column(value_column)} by {_humanize_column(category)}",
+                title=(
+                    f"{'Total' if aggregation == 'sum' else 'Average'} "
+                    f"{_humanize_column(value_column)} by {_humanize_column(category)}"
+                ),
             ))
         else:
             charts.append(Chart(
