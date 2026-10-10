@@ -791,7 +791,11 @@ if vibedash_bp:
                 raise ValueError('The demonstration dataset is invalid.')
             viz_spec = create_saas_demo_viz_spec()
         else:
-            viz_spec = parse_prompt_to_viz_spec(prompt, list(df.columns))
+            viz_spec = parse_prompt_to_viz_spec(
+                prompt,
+                list(df.columns),
+                dataframe=df,
+            )
         dashboard_data = bridge_generate_dashboard_data(df, viz_spec)
         dashboard_data['readiness'] = readiness
         dashboard_data['decision_brief'] = build_decision_brief(

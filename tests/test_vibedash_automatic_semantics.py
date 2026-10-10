@@ -167,6 +167,76 @@ class VibeDashAutomaticSemanticsTests(unittest.TestCase):
         self.assertNotIn("Applied 1 filters", configured_summary)
         self.assertIn("Applied 1 filters", applied_summary)
 
+    @patch("vibedash.spec._improve_with_ollama", return_value=None)
+    def test_dataframe_profile_excludes_ids_and_near_unique_categories(
+        self, _ollama
+    ):
+        frame = pd.DataFrame(
+            {
+                "Rk": range(1, 31),
+                "Player": [f"Player {index}" for index in range(30)],
+                "Age": [20 + index % 12 for index in range(30)],
+                "Pos": ["C", "LW", "RW"] * 10,
+                "Team": ["A", "B", "C", "D", "E"] * 6,
+                "Shot_percent": [10.0 + index / 10 for index in range(30)],
+            }
+        )
+
+        spec = parse_prompt_to_viz_spec(
+            "Compare player performance",
+            list(frame.columns),
+            dataframe=frame,
+        )
+
+        chart_categories = {
+            category
+            for chart in spec.charts
+            for category in [
+                chart.group,
+                chart.x if chart.type in {"bar", "pie"} and not chart.y else None,
+            ]
+            if category
+        }
+        self.assertNotIn("Rk", chart_categories)
+        self.assertNotIn("Player", chart_categories)
+        self.assertEqual(chart_categories, {"Pos", "Team"})
+        self.assertEqual([filter_obj.field for filter_obj in spec.filters], ["Pos"])
+        metrics = {metric.expr: metric for metric in spec.metrics}
+        self.assertNotIn("mean(Rk)", metrics)
+        self.assertEqual(metrics["mean(Shot_percent)"].fmt, "percent")
+
+    @patch("vibedash.spec._improve_with_ollama")
+    def test_dataframe_profile_sanitizes_llm_categories(self, improve):
+        improve.return_value = VizSpec(
+            title="Unsafe categories",
+            charts=[
+                Chart(type="bar", x="RowID", top=10),
+                Chart(type="bar", x="ExternalReference", top=10),
+                Chart(type="bar", x="Region", top=10),
+            ],
+            filters=[
+                Filter(field="RowID"),
+                Filter(field="ExternalReference"),
+                Filter(field="Region"),
+            ],
+        )
+        frame = pd.DataFrame(
+            {
+                "RowID": range(30),
+                "ExternalReference": [f"ref-{index}" for index in range(30)],
+                "Region": ["Europe", "North America"] * 15,
+            }
+        )
+
+        spec = parse_prompt_to_viz_spec(
+            "Analyze regions",
+            list(frame.columns),
+            dataframe=frame,
+        )
+
+        self.assertEqual([chart.x for chart in spec.charts], ["Region"])
+        self.assertEqual([filter_obj.field for filter_obj in spec.filters], ["Region"])
+
 
 if __name__ == "__main__":
     unittest.main()
