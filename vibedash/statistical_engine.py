@@ -1,13 +1,17 @@
 """Auditable statistical validation for automatically generated hypotheses."""
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
 from src.column_semantics import columns_for_role, profile_dataframe_columns
+from src.statistical_primitives import (
+    benjamini_hochberg as _benjamini_hochberg,
+    pearson_summary,
+    welch_independent_summary,
+)
 
 
 DEFAULT_ALPHA = 0.05
@@ -181,10 +185,11 @@ class StatisticalValidationEngine:
                 ):
                     continue
 
-                correlation, p_value = stats.pearsonr(paired["left"], paired["right"])
-                if not np.isfinite(correlation) or not np.isfinite(p_value):
+                summary = pearson_summary(paired["left"], paired["right"])
+                if summary is None:
                     continue
-                lower, upper = _pearson_confidence_interval(float(correlation), len(paired))
+                correlation = summary.correlation
+                lower, upper = summary.confidence_interval
                 results.append(
                     StatisticalTestResult(
                         test_id=f"pearson-{left}-{right}",
@@ -195,7 +200,7 @@ class StatisticalValidationEngine:
                         columns=[str(left), str(right)],
                         sample_size=int(len(paired)),
                         statistic=round(float(correlation), 6),
-                        raw_p_value=float(np.clip(p_value, 0.0, 1.0)),
+                        raw_p_value=summary.p_value,
                         adjusted_p_value=None,
                         significant=None,
                         effect_size={
@@ -259,40 +264,9 @@ class StatisticalValidationEngine:
     ) -> Optional[StatisticalTestResult]:
         left_values = left.to_numpy(dtype=float)
         right_values = right.to_numpy(dtype=float)
-        left_variance = float(np.var(left_values, ddof=1))
-        right_variance = float(np.var(right_values, ddof=1))
-        pooled_denominator = len(left_values) + len(right_values) - 2
-        pooled_variance = (
-            ((len(left_values) - 1) * left_variance)
-            + ((len(right_values) - 1) * right_variance)
-        ) / pooled_denominator
-        if not np.isfinite(pooled_variance) or pooled_variance <= 0:
+        summary = welch_independent_summary(left_values, right_values)
+        if summary is None:
             return None
-
-        statistic, p_value = stats.ttest_ind(
-            left_values,
-            right_values,
-            equal_var=False,
-            nan_policy="omit",
-        )
-        if not np.isfinite(statistic) or not np.isfinite(p_value):
-            return None
-
-        difference = float(np.mean(left_values) - np.mean(right_values))
-        standard_error_squared = (
-            left_variance / len(left_values) + right_variance / len(right_values)
-        )
-        standard_error = float(np.sqrt(standard_error_squared))
-        degrees_of_freedom = (standard_error_squared ** 2) / (
-            ((left_variance / len(left_values)) ** 2) / (len(left_values) - 1)
-            + ((right_variance / len(right_values)) ** 2) / (len(right_values) - 1)
-        )
-        critical_value = float(stats.t.ppf(0.975, degrees_of_freedom))
-        margin = critical_value * standard_error
-
-        cohen_d = difference / float(np.sqrt(pooled_variance))
-        correction = 1 - (3 / (4 * (len(left_values) + len(right_values)) - 9))
-        hedges_g = float(cohen_d * correction)
         left_name = str(left_level)
         right_name = str(right_level)
         return StatisticalTestResult(
@@ -303,19 +277,19 @@ class StatisticalValidationEngine:
             null_hypothesis=f"Mean {numeric} is equal for {left_name} and {right_name}.",
             columns=[str(numeric), str(category)],
             sample_size=int(len(left_values) + len(right_values)),
-            statistic=round(float(statistic), 6),
-            raw_p_value=float(np.clip(p_value, 0.0, 1.0)),
+            statistic=round(summary.statistic, 6),
+            raw_p_value=summary.p_value,
             adjusted_p_value=None,
             significant=None,
             effect_size={
                 "name": "Hedges' g",
-                "value": round(hedges_g, 6),
-                "magnitude": _standardized_effect_magnitude(hedges_g),
+                "value": round(summary.hedges_g, 6),
+                "magnitude": _standardized_effect_magnitude(summary.hedges_g),
             },
             confidence_interval={
                 "level": 0.95,
-                "lower": round(float(difference - margin), 6),
-                "upper": round(float(difference + margin), 6),
+                "lower": round(summary.confidence_interval[0], 6),
+                "upper": round(summary.confidence_interval[1], 6),
                 "parameter": f"Mean difference ({left_name} - {right_name})",
             },
             estimates={
@@ -327,8 +301,8 @@ class StatisticalValidationEngine:
                 "group_b_size": int(len(right_values)),
                 "group_a_mean": round(float(np.mean(left_values)), 6),
                 "group_b_mean": round(float(np.mean(right_values)), 6),
-                "mean_difference": round(difference, 6),
-                "welch_degrees_of_freedom": round(float(degrees_of_freedom), 3),
+                "mean_difference": round(summary.mean_difference, 6),
+                "welch_degrees_of_freedom": round(summary.degrees_of_freedom, 3),
             },
             limitations=[
                 "Welch's t-test assumes independent observations and estimates a difference in means.",
@@ -406,40 +380,6 @@ class StatisticalValidationEngine:
                 "Automatic group comparison currently supports categorical columns with exactly two levels.",
             ],
         }
-
-
-def _benjamini_hochberg(p_values: Sequence[float]) -> List[float]:
-    """Adjust p-values while preserving their original order."""
-    if not p_values:
-        return []
-    values = np.asarray(p_values, dtype=float)
-    if np.any(~np.isfinite(values)) or np.any((values < 0) | (values > 1)):
-        raise ValueError("p-values must be finite and between 0 and 1")
-
-    order = np.argsort(values)
-    ranked = values[order]
-    adjusted_ranked = np.empty(len(values), dtype=float)
-    running_minimum = 1.0
-    for index in range(len(values) - 1, -1, -1):
-        rank = index + 1
-        candidate = float(ranked[index] * len(values) / rank)
-        running_minimum = min(running_minimum, candidate)
-        adjusted_ranked[index] = min(running_minimum, 1.0)
-
-    adjusted = np.empty(len(values), dtype=float)
-    adjusted[order] = adjusted_ranked
-    return [float(value) for value in adjusted]
-
-
-def _pearson_confidence_interval(correlation: float, sample_size: int) -> tuple[float, float]:
-    if sample_size <= 3:
-        return -1.0, 1.0
-    if abs(correlation) >= 1.0:
-        boundary = 1.0 if correlation > 0 else -1.0
-        return boundary, boundary
-    fisher_z = float(np.arctanh(correlation))
-    margin = float(stats.norm.ppf(0.975) / np.sqrt(sample_size - 3))
-    return float(np.tanh(fisher_z - margin)), float(np.tanh(fisher_z + margin))
 
 
 def _finite_numeric(values: pd.Series) -> pd.Series:

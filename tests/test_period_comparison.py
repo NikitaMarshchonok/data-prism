@@ -87,8 +87,12 @@ class PeriodComparisonTests(unittest.TestCase):
         # The displayed p-value rounds to 0.05, but its actual value is just
         # above the alpha threshold and must not be marked significant.
         with patch(
-            "vibedash.period_comparison.stats.ttest_ind",
-            return_value=SimpleNamespace(pvalue=0.050000004, df=20.0),
+            "src.statistical_primitives.stats.ttest_ind",
+            return_value=SimpleNamespace(
+                statistic=0.0,
+                pvalue=0.050000004,
+                df=20.0,
+            ),
         ):
             metric = build_period_comparison(baseline, current)["numeric_metrics"]["metrics"][0]
         self.assertEqual(metric["raw_p_value"], 0.05)
@@ -210,7 +214,7 @@ class PeriodComparisonTests(unittest.TestCase):
         baseline = pd.DataFrame({f"x{i}": np.arange(40, dtype=float) for i in range(40)})
         current = pd.DataFrame({f"x{i}": np.arange(40, dtype=float) + 1 for i in range(40)})
         with patch(
-            "vibedash.period_comparison.stats.ttest_ind",
+            "src.statistical_primitives.stats.ttest_ind",
             wraps=__import__("scipy").stats.ttest_ind,
         ) as ttest:
             block = build_period_comparison(baseline, current)["numeric_metrics"]

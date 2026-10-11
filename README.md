@@ -319,6 +319,7 @@ data-prism/
 ├── evaluation/
 │   └── quality_gate.json      # Reviewed behavioural acceptance thresholds
 ├── src/
+│   ├── column_semantics.py    # Shared analytical role contract
 │   ├── data_loader.py         # Validated tabular ingestion
 │   ├── demo_data.py           # Deterministic, privacy-safe product demo
 │   ├── data_analyzer.py       # Profiling and data-quality checks
@@ -326,6 +327,7 @@ data-prism/
 │   ├── ml_predictor.py        # Leakage-safe model selection and evaluation
 │   ├── model_reliability.py   # Stability and subgroup diagnostics
 │   ├── quality_evaluation.py  # Synthetic benchmark scenarios and checks
+│   ├── statistical_primitives.py # Shared validated statistical formulas
 │   ├── data_drift.py          # Aggregate baseline and drift algorithms
 │   ├── drift_store.py         # SQLite history and alert persistence
 │   ├── monitoring_api.py      # Authenticated monitoring endpoints

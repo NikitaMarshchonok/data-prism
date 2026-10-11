@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 
 from src.column_semantics import column_role, profile_dataframe_columns
+from src.statistical_primitives import (
+    population_stability_index as _population_stability_index,
+    total_variation_distance,
+)
 
 
 PROFILE_VERSION = 2
@@ -19,7 +23,6 @@ SUPPORTED_PROFILE_VERSIONS = {1, PROFILE_VERSION}
 MAX_PROFILE_FEATURES = 100
 MAX_CATEGORIES = 20
 NUMERIC_BINS = 10
-EPSILON = 1e-6
 MISSING_CATEGORY = "__DATA_PRISM_MISSING__"
 OTHER_CATEGORY = "__DATA_PRISM_OTHER__"
 CATEGORY_VALUE_PREFIX = "__DATA_PRISM_VALUE__:"
@@ -274,11 +277,7 @@ def _compare_categorical(
     current_proportions = _categorical_proportions(_category_values(current), categories)
     baseline_proportions = baseline.get("category_proportions", [])
     score = (
-        0.5
-        * sum(
-            abs(float(left) - float(right))
-            for left, right in zip(baseline_proportions, current_proportions)
-        )
+        total_variation_distance(baseline_proportions, current_proportions)
         if len(baseline_proportions) == len(current_proportions)
         else 0.0
     )
@@ -422,16 +421,6 @@ def _categorical_proportions(values: pd.Series, categories: List[str]) -> List[f
     ordered = categories + [MISSING_CATEGORY, OTHER_CATEGORY]
     counts = bucketed.value_counts(normalize=True)
     return [float(counts.get(category, 0.0)) for category in ordered]
-
-
-def _population_stability_index(expected: Iterable[float], actual: Iterable[float]) -> float:
-    expected_values = np.asarray(list(expected), dtype=float)
-    actual_values = np.asarray(list(actual), dtype=float)
-    expected_values = np.clip(expected_values, EPSILON, None)
-    actual_values = np.clip(actual_values, EPSILON, None)
-    expected_values /= expected_values.sum()
-    actual_values /= actual_values.sum()
-    return float(np.sum((actual_values - expected_values) * np.log(actual_values / expected_values)))
 
 
 def _distribution_severity(score: float, metric: str) -> str:
