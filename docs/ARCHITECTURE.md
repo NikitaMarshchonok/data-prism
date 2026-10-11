@@ -66,6 +66,17 @@ are enforced again after optional LLM output. These rules reduce unsafe
 automatic interpretations but do not replace domain definitions or a future
 user-editable schema contract.
 
+The deterministic analysis stack shares this data-aware role contract through
+`src/column_semantics.py`. Every profiled field receives exactly one role:
+`measure`, `category`, `temporal`, or `identifier`. Dashboard specification,
+evidence findings, statistical validation, anomaly/segment analysis,
+two-period inference, drift profiling, and predictive feature preparation use
+that assignment instead of treating every numeric dtype as a measured
+quantity. This prevents row numbers and integer category codes from entering
+correlations, mean comparisons, anomaly models, or regression features merely
+because pandas stores them as numbers. The assignment remains heuristic and
+must not be represented as a confirmed business definition.
+
 ## Component map
 
 | Component | Responsibility | Does not own |
@@ -73,6 +84,7 @@ user-editable schema contract.
 | `web_app.py` | Flask configuration, upload/session workflow, dashboard route, health endpoints | Statistical or ML algorithms |
 | `src/observability.py` | Request correlation, structured application logs, deployment version, response safety headers | External log storage or tracing backend |
 | `src/data_loader.py` | Format validation, bounded loading, normalization | Business interpretation |
+| `src/column_semantics.py` | Shared data-aware analytical roles used by supported deterministic engines | Confirmed domain meaning or user-authored schema overrides |
 | `src/demo_data.py` | Deterministic synthetic SaaS data for the product demo | User data or production fixtures |
 | `src/data_analyzer.py` | Descriptive profiling and data-quality checks | Predictive modelling |
 | `vibedash/insight_engine.py` | Deterministic evidence-backed findings | Causal claims |
@@ -234,6 +246,14 @@ sequenceDiagram
 ```
 
 Monitoring compares numeric distributions with PSI and categorical distributions with frequency-based drift measures. It also detects missingness and schema changes. Batch identities or content hashes prevent duplicate events from producing duplicate runs.
+
+Drift profile version 2 persists the semantic role and applies role-specific
+checks: measures use PSI, categories use total-variation distance, identifiers
+monitor missingness and uniqueness without retaining raw values, and temporal
+fields monitor parseability and missingness rather than ordinary passage of
+time. Version 1 aggregate profiles remain readable and are compared with their
+original dtype-based interpretation; newly created profiles always use version
+2.
 
 ## Persistence
 

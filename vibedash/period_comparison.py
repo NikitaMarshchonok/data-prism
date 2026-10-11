@@ -12,6 +12,7 @@ import pandas as pd
 from scipy import stats
 
 from src.data_drift import compare_to_baseline, create_baseline_profile
+from src.column_semantics import column_role, profile_dataframe_columns
 from .readiness_engine import DatasetReadinessEngine
 
 MAX_ROWS = 100_000
@@ -203,14 +204,27 @@ def _label(value: Any, name: str) -> str:
 
 
 def _finite(series: pd.Series) -> np.ndarray:
-    values = pd.to_numeric(series, errors="coerce").to_numpy(dtype=float)
-    return values[np.isfinite(values)]
+    return (
+        pd.to_numeric(series, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+        .astype(float)
+        .to_numpy()
+    )
 
 
 def _metric_candidates(baseline: pd.DataFrame, current: pd.DataFrame) -> List[Dict[str, Any]]:
     common = sorted(set(baseline.columns) & set(current.columns), key=str)
+    combined = pd.concat(
+        [baseline[common], current[common]],
+        axis=0,
+        ignore_index=True,
+    )
+    semantic_profiles = profile_dataframe_columns(combined)
     result: List[Dict[str, Any]] = []
     for column in common:
+        if column_role(column, semantic_profiles) != "measure":
+            continue
         if pd.api.types.is_bool_dtype(baseline[column]) or pd.api.types.is_bool_dtype(current[column]):
             continue
         # Complex values do not have a meaningful scalar mean difference for
@@ -310,8 +324,10 @@ def _descriptive(values: np.ndarray, original: pd.Series) -> Dict[str, Any]:
     # Non-finite numeric values are excluded from the estimates and should be
     # reported as unavailable observations rather than silently counted as
     # observed in the missingness rate.
-    finite_mask = np.isfinite(pd.to_numeric(original, errors="coerce").to_numpy(dtype=float))
-    unavailable = int((~finite_mask).sum())
+    numeric = pd.to_numeric(original, errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    )
+    unavailable = int(numeric.isna().sum())
     return {"n": int(len(values)), "mean": _round(np.mean(values) if len(values) else None), "median": _round(np.median(values) if len(values) else None), "missing_rate": _round(float(unavailable / len(original)) if len(original) else 1.0)}
 
 

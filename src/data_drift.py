@@ -11,8 +11,11 @@ from typing import Any, Dict, Iterable, List
 import numpy as np
 import pandas as pd
 
+from src.column_semantics import column_role, profile_dataframe_columns
 
-PROFILE_VERSION = 1
+
+PROFILE_VERSION = 2
+SUPPORTED_PROFILE_VERSIONS = {1, PROFILE_VERSION}
 MAX_PROFILE_FEATURES = 100
 MAX_CATEGORIES = 20
 NUMERIC_BINS = 10
@@ -34,19 +37,29 @@ def create_baseline_profile(
 
     columns: Dict[str, Dict[str, Any]] = {}
     column_map = _column_map(data)
+    semantic_profiles = profile_dataframe_columns(data)
     for feature, column in list(column_map.items())[:MAX_PROFILE_FEATURES]:
         series = data[column]
-        feature_type = _feature_type(series)
+        feature_type = _feature_type(
+            series,
+            column=column,
+            profiles=semantic_profiles,
+        )
         profile: Dict[str, Any] = {
             "feature_type": feature_type,
+            "semantic_role": semantic_profiles[column]["role"],
             "dtype": str(series.dtype),
             "missing_rate": round(_missing_rate(series, feature_type), 8),
             "non_null_count": int(series.notna().sum()),
         }
         if feature_type == "numeric":
             profile.update(_numeric_profile(series))
-        else:
+        elif feature_type == "categorical":
             profile.update(_categorical_profile(series))
+        elif feature_type == "identifier":
+            profile.update(_identifier_profile(series))
+        else:
+            profile.update(_temporal_profile(series))
         columns[feature] = profile
 
     return {
@@ -100,11 +113,21 @@ def compare_to_baseline(
     new_columns = sorted(set(current_columns) - set(baseline_columns))
     type_changes: List[Dict[str, str]] = []
     feature_drift: List[Dict[str, Any]] = []
+    semantic_profiles = profile_dataframe_columns(current_data)
+    profile_version = int(baseline_profile["profile_version"])
 
     for feature in sorted(set(baseline_columns) & set(current_columns)):
         baseline = baseline_columns[feature]
         current_series = current_data[current_columns[feature]]
-        current_type = _feature_type(current_series)
+        current_type = (
+            _legacy_feature_type(current_series)
+            if profile_version == 1
+            else _feature_type(
+                current_series,
+                column=current_columns[feature],
+                profiles=semantic_profiles,
+            )
+        )
         if current_type != baseline["feature_type"]:
             type_changes.append(
                 {
@@ -117,8 +140,12 @@ def compare_to_baseline(
 
         if current_type == "numeric":
             result = _compare_numeric(feature, current_series, baseline)
-        else:
+        elif current_type == "categorical":
             result = _compare_categorical(feature, current_series, baseline)
+        elif current_type == "identifier":
+            result = _compare_identifier(feature, current_series, baseline)
+        else:
+            result = _compare_temporal(feature, current_series, baseline)
         feature_drift.append(result)
 
     feature_drift.sort(
@@ -154,6 +181,8 @@ def compare_to_baseline(
         "methodology_notes": [
             "Numeric drift uses Population Stability Index over bins fixed by the baseline.",
             "Categorical drift uses total variation distance over baseline categories and an other bucket.",
+            "Identifier fields monitor missingness and uniqueness, not numeric magnitude or raw values.",
+            "Temporal fields monitor parseability and missingness; ordinary passage of time is not treated as drift.",
             "Missing-rate changes contribute to feature severity.",
             "Thresholds are operational screening rules and should be calibrated for each business context.",
             (
@@ -194,6 +223,23 @@ def _categorical_profile(series: pd.Series) -> Dict[str, Any]:
         "categories": tracked_categories,
         "category_proportions": [round(value, 12) for value in proportions],
     }
+
+
+def _identifier_profile(series: pd.Series) -> Dict[str, Any]:
+    observed = int(series.notna().sum())
+    unique = int(series.nunique(dropna=True))
+    return {
+        "unique_ratio": round(unique / observed, 12) if observed else 0.0,
+    }
+
+
+def _temporal_profile(series: pd.Series) -> Dict[str, Any]:
+    observed = series.dropna()
+    if observed.empty:
+        parseable_rate = 0.0
+    else:
+        parseable_rate = float(pd.to_datetime(observed, errors="coerce").notna().mean())
+    return {"parseable_rate": round(parseable_rate, 12)}
 
 
 def _compare_numeric(
@@ -246,6 +292,46 @@ def _compare_categorical(
     )
 
 
+def _compare_identifier(
+    feature: str,
+    current: pd.Series,
+    baseline: Dict[str, Any],
+) -> Dict[str, Any]:
+    observed = int(current.notna().sum())
+    current_ratio = int(current.nunique(dropna=True)) / observed if observed else 0.0
+    baseline_ratio = float(baseline.get("unique_ratio", 0.0))
+    return _feature_result(
+        feature=feature,
+        feature_type="identifier",
+        metric="uniqueness-rate delta",
+        score=abs(current_ratio - baseline_ratio),
+        baseline_missing=float(baseline["missing_rate"]),
+        current_missing=float(current.isna().mean()) if len(current) else 0.0,
+    )
+
+
+def _compare_temporal(
+    feature: str,
+    current: pd.Series,
+    baseline: Dict[str, Any],
+) -> Dict[str, Any]:
+    observed = current.dropna()
+    current_rate = (
+        float(pd.to_datetime(observed, errors="coerce").notna().mean())
+        if len(observed)
+        else 0.0
+    )
+    baseline_rate = float(baseline.get("parseable_rate", 0.0))
+    return _feature_result(
+        feature=feature,
+        feature_type="temporal",
+        metric="parseable-rate delta",
+        score=abs(current_rate - baseline_rate),
+        baseline_missing=float(baseline["missing_rate"]),
+        current_missing=float(current.isna().mean()) if len(current) else 0.0,
+    )
+
+
 def _feature_result(
     *,
     feature: str,
@@ -274,10 +360,24 @@ def _feature_result(
     }
 
 
-def _feature_type(series: pd.Series) -> str:
+def _legacy_feature_type(series: pd.Series) -> str:
     if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
         return "numeric"
     return "categorical"
+
+
+def _feature_type(
+    series: pd.Series,
+    *,
+    column: Any | None = None,
+    profiles: Dict[Any, Dict[str, Any]] | None = None,
+) -> str:
+    role = column_role(column, profiles or {}) if column is not None else None
+    if role == "measure":
+        return "numeric"
+    if role in {"category", "identifier", "temporal"}:
+        return role if role != "category" else "categorical"
+    return _legacy_feature_type(series)
 
 
 def _finite_numeric(series: pd.Series) -> List[float]:
@@ -359,7 +459,7 @@ def _missing_severity(delta: float) -> str:
 def _validate_profile(profile: Dict[str, Any]) -> None:
     if not isinstance(profile, dict):
         raise ValueError("Baseline profile must be a dictionary.")
-    if profile.get("profile_version") != PROFILE_VERSION:
+    if profile.get("profile_version") not in SUPPORTED_PROFILE_VERSIONS:
         raise ValueError("Unsupported baseline profile version.")
     required = {"created_at", "row_count", "column_count", "columns"}
     if not required.issubset(profile) or not isinstance(profile["columns"], dict):
@@ -368,7 +468,7 @@ def _validate_profile(profile: Dict[str, Any]) -> None:
         if not isinstance(feature, str) or not isinstance(column, dict):
             raise ValueError("Baseline profile contains an invalid column entry.")
         feature_type = column.get("feature_type")
-        if feature_type not in {"numeric", "categorical"}:
+        if feature_type not in {"numeric", "categorical", "identifier", "temporal"}:
             raise ValueError("Baseline profile contains an unsupported feature type.")
         if "missing_rate" not in column:
             raise ValueError("Baseline profile is missing column statistics.")
@@ -391,6 +491,10 @@ def _validate_profile(profile: Dict[str, Any]) -> None:
             column["category_proportions"]
         ):
             raise ValueError("Baseline categorical buckets are inconsistent.")
+        if feature_type == "identifier" and "unique_ratio" not in column:
+            raise ValueError("Baseline identifier profile is incomplete.")
+        if feature_type == "temporal" and "parseable_rate" not in column:
+            raise ValueError("Baseline temporal profile is incomplete.")
 
 
 def _column_map(data: pd.DataFrame) -> Dict[str, Any]:

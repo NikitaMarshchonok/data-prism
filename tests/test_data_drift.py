@@ -133,6 +133,23 @@ class DataDriftTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unsupported"):
                 load_baseline_profile(path)
 
+    def test_version_one_profiles_remain_comparable(self):
+        baseline = pd.DataFrame(
+            {
+                "amount": list(range(20)),
+                "region": ["north", "south"] * 10,
+            }
+        )
+        profile = create_baseline_profile(baseline)
+        profile["profile_version"] = 1
+        for column in profile["columns"].values():
+            column.pop("semantic_role", None)
+
+        report = compare_to_baseline(baseline.copy(), profile)
+
+        self.assertEqual(report["status"], "stable")
+        self.assertTrue(all(item["score"] == 0 for item in report["feature_drift"]))
+
     def test_duplicate_string_column_names_are_rejected(self):
         data = pd.DataFrame([[1, 2]], columns=[1, "1"])
 

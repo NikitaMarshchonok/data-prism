@@ -275,7 +275,7 @@ class WebUploadTests(unittest.TestCase):
 
         baseline_path = self.baseline_folder / baseline_filename
         self.assertTrue(baseline_path.exists())
-        self.assertIn('"profile_version": 1', baseline_path.read_text(encoding="utf-8"))
+        self.assertIn('"profile_version": 2', baseline_path.read_text(encoding="utf-8"))
 
     @patch("src.dashboard_generator.generate_dashboard_data")
     @patch("src.data_loader.load_data")

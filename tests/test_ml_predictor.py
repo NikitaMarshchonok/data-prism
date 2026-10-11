@@ -3,10 +3,22 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from src.ml_predictor import predict_target
+from src.ml_predictor import _select_target, predict_target
 
 
 class ModelEvaluationTests(unittest.TestCase):
+    def test_inferred_target_skips_trailing_identifier_and_date(self):
+        data = pd.DataFrame(
+            {
+                "feature": np.linspace(0, 1, 40),
+                "converted": ["yes", "no"] * 20,
+                "event_date": pd.date_range("2025-01-01", periods=40).astype(str),
+                "row_id": np.arange(1, 41),
+            }
+        )
+
+        self.assertEqual(_select_target(data, None), "converted")
+
     def test_classification_handles_categories_missing_values_and_leakage(self):
         row_count = 120
         target = pd.Series(

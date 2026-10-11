@@ -10,6 +10,8 @@ from sklearn.impute import SimpleImputer
 from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import RobustScaler
 
+from src.column_semantics import columns_for_role, profile_dataframe_columns
+
 
 RANDOM_STATE = 42
 MIN_ANALYSIS_ROWS = 20
@@ -25,6 +27,7 @@ class AnomalySegmentationEngine:
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         self.df = df
+        self.column_profiles = profile_dataframe_columns(df)
 
     def analyze(self, max_anomalies: int = 10) -> Dict[str, Any]:
         features = self._feature_columns()
@@ -112,23 +115,25 @@ class AnomalySegmentationEngine:
 
     def _feature_columns(self) -> List[Any]:
         selected = []
-        for column in self.df.select_dtypes(include=[np.number]).columns:
+        for column in columns_for_role(
+            self.df,
+            "measure",
+            profiles=self.column_profiles,
+            require_variation=True,
+        ):
+            if (
+                not pd.api.types.is_numeric_dtype(self.df[column])
+                or pd.api.types.is_bool_dtype(self.df[column])
+                or pd.api.types.is_complex_dtype(self.df[column])
+            ):
+                continue
             series = pd.to_numeric(self.df[column], errors="coerce").replace(
                 [np.inf, -np.inf], np.nan
             )
-            if series.nunique(dropna=True) < 2 or self._looks_like_identifier(column, series):
+            if series.nunique(dropna=True) < 2:
                 continue
             selected.append(column)
         return selected[:MAX_FEATURES]
-
-    def _looks_like_identifier(self, column: Any, series: pd.Series) -> bool:
-        normalized = str(column).strip().lower().replace("-", "_").replace(" ", "_")
-        id_name = normalized == "id" or normalized.endswith("_id") or normalized in {
-            "index",
-            "row_number",
-        }
-        unique_ratio = series.nunique(dropna=True) / max(int(series.notna().sum()), 1)
-        return id_name and unique_ratio >= 0.95
 
     def _prepare(self, features: List[Any]) -> Tuple[np.ndarray, np.ndarray]:
         frame = self.df[features].apply(pd.to_numeric, errors="coerce").replace(

@@ -8,7 +8,15 @@ import json
 import re
 
 import pandas as pd
-from pandas.api.types import is_datetime64_any_dtype, is_numeric_dtype
+from pandas.api.types import is_numeric_dtype
+
+from src.column_semantics import (
+    column_role as _shared_column_role,
+    column_terms as _shared_column_terms,
+    is_identifier_name as _shared_is_identifier_name,
+    is_temporal_name as _shared_is_temporal_name,
+    profile_dataframe_columns as _shared_profile_dataframe_columns,
+)
 
 
 MAX_AUTOMATIC_METRICS = 8
@@ -40,28 +48,6 @@ _ADDITIVE_TERMS = {
     "total",
     "units",
     "volume",
-}
-_MEASURE_TERMS = _CURRENCY_TERMS | _PERCENT_TERMS | _ADDITIVE_TERMS | {
-    "age",
-    "atemp",
-    "distance",
-    "duration",
-    "hum",
-    "humidity",
-    "score",
-    "speed",
-    "temp",
-    "temperature",
-    "weight",
-    "windspeed",
-}
-_TEMPORAL_TERMS = {"date", "datetime", "day", "month", "quarter", "time", "timestamp", "week", "year"}
-_IDENTIFIER_TERMS = {
-    "guid",
-    "id",
-    "identifier",
-    "key",
-    "uuid",
 }
 _ABBREVIATIONS = {"api": "API", "arpu": "ARPU", "id": "ID", "kpi": "KPI", "mrr": "MRR", "nps": "NPS", "roi": "ROI"}
 _COLUMN_LABEL_OVERRIDES = {
@@ -233,12 +219,7 @@ def parse_prompt_to_viz_spec(
 
 
 def _column_terms(column: str) -> set[str]:
-    normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(column))
-    return {
-        part
-        for part in re.split(r"[^a-z0-9]+", normalized.lower())
-        if part
-    }
+    return _shared_column_terms(column)
 
 
 def _humanize_column(column: str) -> str:
@@ -307,131 +288,27 @@ def _prompt_excluded_columns(prompt: str, df_columns: List[str]) -> set[str]:
 
 
 def _is_temporal_column(column: str) -> bool:
-    return bool(_column_terms(column) & _TEMPORAL_TERMS)
+    return _shared_is_temporal_name(column)
 
 
 def _is_identifier_column(column: str) -> bool:
-    """Recognize fields whose values identify or order rows, not cohorts."""
-    terms = _column_terms(column)
-    normalized = re.sub(r"[^a-z0-9]+", "", str(column).lower())
-    return (
-        normalized in {
-            "index",
-            "rank",
-            "ranking",
-            "recordid",
-            "rk",
-            "rowid",
-            "rowindex",
-            "rownumber",
-        }
-        or bool(terms & (_IDENTIFIER_TERMS - {"id", "key"}))
-        or "id" in terms
-        or (
-            "key" in terms
-            and str(column).lower().rstrip().endswith("key")
-        )
-    )
+    return _shared_is_identifier_name(column)
 
 
 def _profile_dataframe_columns(
     dataframe: Optional[Any],
     df_columns: List[str],
 ) -> Dict[str, Dict[str, Any]]:
-    """Build a bounded, aggregate-only profile for automatic semantics."""
-    if dataframe is None:
-        return {}
-
-    profiles: Dict[str, Dict[str, Any]] = {}
-    for column in df_columns:
-        if column not in dataframe.columns:
-            continue
-        series = dataframe[column]
-        non_missing_count = int(series.notna().sum())
-        unique_count = int(series.nunique(dropna=True))
-        is_numeric = bool(is_numeric_dtype(series.dtype))
-        is_temporal = bool(is_datetime64_any_dtype(series.dtype))
-        if not is_temporal and not is_numeric and non_missing_count:
-            sample = series.dropna().astype(str).head(200)
-            if not sample.empty:
-                date_like = sample.str.match(
-                    r"^\s*(?:\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
-                    r"\d{1,2}[-/]\d{1,2}[-/]\d{2,4})(?:[T\s].*)?\s*$"
-                )
-                if date_like.mean() >= 0.9:
-                    parsed = pd.to_datetime(sample, errors="coerce")
-                    is_temporal = bool(parsed.notna().mean() >= 0.9)
-
-        numeric_values = (
-            pd.to_numeric(series.dropna(), errors="coerce")
-            if is_numeric
-            else None
-        )
-        is_integer_like = bool(
-            is_numeric
-            and numeric_values is not None
-            and not numeric_values.empty
-            and ((numeric_values - numeric_values.round()).abs() <= 1e-9).all()
-        )
-        is_monotonic_unique = bool(
-            is_integer_like
-            and non_missing_count >= 3
-            and unique_count == non_missing_count
-            and (
-                numeric_values.is_monotonic_increasing
-                or numeric_values.is_monotonic_decreasing
-            )
-        )
-        is_sequential_identifier = bool(
-            is_monotonic_unique
-            and numeric_values.diff().dropna().abs().eq(1).all()
-        )
-        low_cardinality_integer = bool(
-            is_integer_like
-            and unique_count > 1
-            and (
-                unique_count <= 20
-                or unique_count / non_missing_count <= 0.02
-            )
-        )
-
-        if is_temporal or _is_temporal_column(column):
-            role = "temporal"
-        elif _is_identifier_column(column) or is_sequential_identifier:
-            role = "identifier"
-        elif is_numeric and _column_terms(column) & _MEASURE_TERMS:
-            role = "measure"
-        elif is_numeric and low_cardinality_integer:
-            role = "category"
-        elif is_numeric:
-            role = "measure"
-        else:
-            role = "category"
-
-        profiles[column] = {
-            "is_numeric": is_numeric,
-            "is_temporal": is_temporal,
-            "is_integer_like": is_integer_like,
-            "is_monotonic_unique": is_monotonic_unique,
-            "is_sequential_identifier": is_sequential_identifier,
-            "non_missing_count": non_missing_count,
-            "unique_count": unique_count,
-            "unique_ratio": (
-                unique_count / non_missing_count if non_missing_count else 0.0
-            ),
-            "role": role,
-        }
-    return profiles
+    return _shared_profile_dataframe_columns(dataframe, df_columns)
 
 
 def _column_role(
     column: str,
     column_profiles: Mapping[str, Mapping[str, Any]],
 ) -> str:
-    profile = column_profiles.get(column, {})
-    role = profile.get("role")
-    if role in {"temporal", "identifier", "category", "measure"}:
-        return str(role)
+    role = _shared_column_role(column, column_profiles)
+    if role is not None:
+        return role
     if _is_temporal_column(column):
         return "temporal"
     if _is_identifier_column(column):

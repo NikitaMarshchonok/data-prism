@@ -218,8 +218,8 @@ class PeriodComparisonTests(unittest.TestCase):
         self.assertEqual(ttest.call_count, 32)
 
     def test_candidate_cap_does_not_hide_later_testable_metrics(self):
-        baseline = pd.DataFrame({f"constant{i}": [1] * 40 for i in range(32)})
-        current = pd.DataFrame({f"constant{i}": [2] * 40 for i in range(32)})
+        baseline = pd.DataFrame({f"metric_{i}": [1] * 40 for i in range(32)})
+        current = pd.DataFrame({f"metric_{i}": [2] * 40 for i in range(32)})
         baseline["important"] = np.arange(40, dtype=float)
         current["important"] = baseline["important"] + 100
 
