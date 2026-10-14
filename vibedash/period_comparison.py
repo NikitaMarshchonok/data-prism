@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import json
-import math
-import warnings
 from typing import Any, Dict, Iterable, List
 
 import numpy as np
 import pandas as pd
-from scipy import stats
 
-from src.data_drift import compare_to_baseline, create_baseline_profile
 from src.column_semantics import column_role, profile_dataframe_columns
+from src.data_drift import compare_to_baseline, create_baseline_profile
+from src.statistical_primitives import (
+    benjamini_hochberg as _benjamini_hochberg,
+    welch_independent_summary,
+)
 from .readiness_engine import DatasetReadinessEngine
 
 MAX_ROWS = 100_000
@@ -272,52 +273,28 @@ def _populate_inferential_metric(
 ) -> None:
     """Run the bounded inferential calculation for one selected metric."""
     b, c = _finite(baseline[column_key]), _finite(current[column_key])
-    # Welch's implementation emits a RuntimeWarning for a constant group even
-    # though the one-constant/one-varying case is still analyzable. Non-finite
-    # outputs become an explicit insufficient-evidence result.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        test = stats.ttest_ind(c, b, equal_var=False)
-        baseline_variance = float(np.var(b, ddof=1))
-        current_variance = float(np.var(c, ddof=1))
-    se = math.sqrt(current_variance / len(c) + baseline_variance / len(b))
-    dof = float(test.df)
-    if (
-        not np.isfinite(se)
-        or se <= 0
-        or not np.isfinite(dof)
-        or dof <= 0
-        or not np.isfinite(test.pvalue)
-    ):
+    summary = welch_independent_summary(c, b)
+    if summary is None:
         entry["status"] = "insufficient_evidence"
         return
-    crit = float(stats.t.ppf(0.975, dof))
-    delta = float(np.mean(c) - np.mean(b))
-    pooled = math.sqrt(
-        ((len(c) - 1) * current_variance + (len(b) - 1) * baseline_variance)
-        / (len(c) + len(b) - 2)
-    )
-    d = delta / pooled if pooled else None
-    correction = 1.0 - 3.0 / (4.0 * (len(b) + len(c)) - 9.0)
-    g = d * correction if d is not None else None
     entry["method"] = "Welch independent-samples t-test"
     entry["null_hypothesis"] = "The baseline and current population means are equal."
     entry["estimate"] = {
         "parameter": "mean_difference",
         "direction": "current_minus_baseline",
-        "value": _round(delta),
+        "value": _round(summary.mean_difference),
     }
     entry["alpha"] = 0.05
     entry["fdr_method"] = "Benjamini-Hochberg"
-    entry["raw_p_value"] = float(test.pvalue)
+    entry["raw_p_value"] = summary.p_value
     entry["confidence_interval"] = {
         "level": 0.95,
         "parameter": "current_minus_baseline_mean",
-        "lower": _round(delta - crit * se),
-        "upper": _round(delta + crit * se),
+        "lower": _round(summary.confidence_interval[0]),
+        "upper": _round(summary.confidence_interval[1]),
     }
-    entry["hedges_g"] = _round(g)
-    entry["magnitude"] = _magnitude(g)
+    entry["hedges_g"] = _round(summary.hedges_g)
+    entry["magnitude"] = _magnitude(summary.hedges_g)
 
 
 def _descriptive(values: np.ndarray, original: pd.Series) -> Dict[str, Any]:
@@ -329,18 +306,6 @@ def _descriptive(values: np.ndarray, original: pd.Series) -> Dict[str, Any]:
     )
     unavailable = int(numeric.isna().sum())
     return {"n": int(len(values)), "mean": _round(np.mean(values) if len(values) else None), "median": _round(np.median(values) if len(values) else None), "missing_rate": _round(float(unavailable / len(original)) if len(original) else 1.0)}
-
-
-def _benjamini_hochberg(p_values: Iterable[float]) -> List[float]:
-    values = list(p_values)
-    order = sorted(range(len(values)), key=lambda i: (values[i], i))
-    adjusted = [1.0] * len(values)
-    running = 1.0
-    for rank in range(len(values), 0, -1):
-        index = order[rank - 1]
-        running = min(running, values[index] * len(values) / rank)
-        adjusted[index] = min(1.0, running)
-    return adjusted
 
 
 def _safe_drift_signals(signals: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:

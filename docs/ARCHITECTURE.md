@@ -85,6 +85,7 @@ must not be represented as a confirmed business definition.
 | `src/observability.py` | Request correlation, structured application logs, deployment version, response safety headers | External log storage or tracing backend |
 | `src/data_loader.py` | Format validation, bounded loading, normalization | Business interpretation |
 | `src/column_semantics.py` | Shared data-aware analytical roles used by supported deterministic engines | Confirmed domain meaning or user-authored schema overrides |
+| `src/statistical_primitives.py` | Validated Pearson intervals, Welch inference, Hedges' g, Benjamini–Hochberg FDR, PSI, and total-variation calculations shared across engines | Eligibility rules, semantic interpretation, or causal claims |
 | `src/demo_data.py` | Deterministic synthetic SaaS data for the product demo | User data or production fixtures |
 | `src/data_analyzer.py` | Descriptive profiling and data-quality checks | Predictive modelling |
 | `vibedash/insight_engine.py` | Deterministic evidence-backed findings | Causal claims |
@@ -224,6 +225,16 @@ The statistical engine separates discovery from presentation:
 - multiple hypotheses use Benjamini–Hochberg false-discovery-rate correction;
 - correlation results are explicitly observational;
 - small or unsupported samples are withheld rather than presented with false confidence.
+
+The inferential engine, two-period comparison, and drift engine use the same
+validated mathematical primitives rather than maintaining independent copies
+of the formulas. Frozen reference examples cover Pearson/Fisher intervals,
+Welch statistics and degrees of freedom, Hedges' g, Benjamini–Hochberg adjusted
+p-values, PSI, and total variation distance. Seeded simulations additionally
+guard against inflated null rejection rates, materially incorrect confidence
+interval coverage, direction errors, and non-monotonic drift distances. These
+checks validate implementation behaviour; they do not certify a dataset's
+sampling process, independence assumptions, business semantics, or causality.
 
 LLM summaries are optional and supplementary. They do not calculate the core metrics and are not required for deterministic analysis.
 
