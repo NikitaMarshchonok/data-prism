@@ -244,12 +244,14 @@
             {% endif %}
 
             {% if dashboard_data.pattern_analysis.segmentation.status == 'ok' %}
-            <div class="subsection-copy"><h3>Exploratory segmentation</h3><p>{{ dashboard_data.pattern_analysis.segmentation.summary }} Flagged anomalies were excluded while fitting centroids.</p></div>
+            <div class="subsection-copy"><h3>Exploratory segmentation</h3><p>{{ dashboard_data.pattern_analysis.segmentation.summary }} Review candidates were excluded while fitting centroids.</p></div>
             <div class="segment-grid">
                 {% for segment in dashboard_data.pattern_analysis.segmentation.segments %}
                 <article class="segment-card"><div class="card-heading"><h3>Segment {{ segment.segment }}</h3><span>{{ "%.1f%%"|format(segment.share * 100) }}</span></div><p>{{ segment.size }} rows</p><ul>{% for feature in segment.distinguishing_features %}<li><strong>{{ feature.feature }}</strong><span>mean {{ "%.3f"|format(feature.segment_mean) }} · robust difference {{ "%+.2f"|format(feature.robust_difference) }}</span></li>{% endfor %}</ul></article>
                 {% endfor %}
             </div>
+            {% else %}
+            <div class="subsection-copy"><h3>Segmentation evidence</h3><p>{{ dashboard_data.pattern_analysis.segmentation.summary }}</p></div>
             {% endif %}
             <p class="guardrail">Review candidates with domain experts. Do not automatically delete anomalies or operationalize segments.</p>
         </section>

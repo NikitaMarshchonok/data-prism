@@ -21,7 +21,7 @@ The project is designed as a decision-support system: every important conclusion
 | Decision brief | Up to three ranked priorities that connect a finding to evidence, decision risk, and the next verification action |
 | Decision workflow | Evidence snapshots, accountable owners, success metrics, targets, review dates, and measured outcomes |
 | Statistical validation | Welch group comparisons, Pearson correlation, effect sizes, 95% confidence intervals, and Benjamini–Hochberg FDR correction |
-| Exploratory ML | Multivariate anomaly scoring and quality-gated segmentation |
+| Exploratory ML | Fixed-budget anomaly review ranking and gap-statistic-gated, subsample-stability-tested segmentation |
 | Predictive ML | Leakage-safe preprocessing, holdout evaluation, cross-validated model selection, and naive-baseline comparison |
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
@@ -61,7 +61,7 @@ Start the application, open `http://localhost:5001/vibedash/`, and select **Run 
 - four traceable business KPIs and five visual diagnostics;
 - evidence-backed data-quality, correlation, trend, outlier, and concentration findings;
 - effect sizes, confidence intervals, p-values, and FDR-adjusted statistical results;
-- multivariate anomaly candidates and exploratory segments with explicit guardrails.
+- fixed-budget multivariate anomaly review candidates and exploratory segments that must pass a one-cluster gap-statistic guardrail;
 - a dataset-readiness record and a ranked decision brief that separates evidence, risk, and next action.
 
 ![Data Prism SaaS evidence dashboard](docs/assets/data-prism-evidence-dashboard.jpg)

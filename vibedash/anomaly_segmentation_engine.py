@@ -1,4 +1,4 @@
-"""Deterministic multivariate anomaly detection and validated segmentation."""
+"""Deterministic anomaly review ranking and guarded exploratory segmentation."""
 
 from typing import Any, Dict, List, Tuple
 
@@ -18,6 +18,9 @@ MIN_ANALYSIS_ROWS = 20
 MAX_FEATURES = 12
 MAX_SEGMENTS = 6
 ANOMALY_CONTAMINATION = 0.03
+GAP_REFERENCE_REPEATS = 5
+STABILITY_SUBSAMPLE_SHARE = 0.80
+STABILITY_SEEDS = (43, 44, 45, 46, 47)
 
 
 class AnomalySegmentationEngine:
@@ -49,9 +52,11 @@ class AnomalySegmentationEngine:
             "anomaly_detection": anomaly_report,
             "segmentation": segmentation_report,
             "methodology_notes": [
-                "Isolation Forest ranks multivariate anomaly candidates; flags are not proof of bad data or fraud.",
+                "Isolation Forest ranks a fixed review budget of multivariate candidates; flags are not an estimate of anomaly prevalence or proof of bad data or fraud.",
                 "Median imputation and robust scaling are fitted on the analyzed dataset.",
-                "K-means segmentation excludes flagged anomalies while fitting centroids, then assigns every row.",
+                "The gap statistic must support more than one cluster before K-means segments are reported.",
+                "Segmentation stability is measured by refitting K-means on deterministic 80% subsamples and comparing full-data assignments.",
+                "K-means segmentation excludes review candidates while fitting centroids, then assigns every row.",
                 "Segments are exploratory and require domain validation before operational use.",
             ],
         }
@@ -67,7 +72,7 @@ class AnomalySegmentationEngine:
             {
                 "insight_id": "multivariate-anomaly-scan",
                 "category": "anomaly",
-                "title": "Multivariate anomaly candidates",
+                "title": "Multivariate anomaly review candidates",
                 "statement": anomaly["summary"],
                 "evidence": [
                     f"Flagged rows: {anomaly['flagged_count']} of {anomaly['evaluated_rows']}",
@@ -75,8 +80,8 @@ class AnomalySegmentationEngine:
                     f"Features used: {len(report['features'])}",
                 ],
                 "recommendation": "Review high-scoring rows with domain owners; do not delete them automatically.",
-                "confidence": _sample_support(anomaly["evaluated_rows"]),
-                "severity": "warning" if anomaly["flagged_count"] else "info",
+                "confidence": "exploratory",
+                "severity": "info",
                 "sample_size": anomaly["evaluated_rows"],
                 "metrics": {
                     "flagged_count": anomaly["flagged_count"],
@@ -85,10 +90,13 @@ class AnomalySegmentationEngine:
                 "type": "evidence",
             }
         ]
-        if segmentation.get("status") == "ok":
+        if segmentation.get("status") == "ok" and segmentation.get("quality") in {
+            "moderate",
+            "strong",
+        }:
             insights.append(
                 {
-                    "insight_id": "validated-segmentation",
+                    "insight_id": "exploratory-segmentation",
                     "category": "segmentation",
                     "title": "Exploratory segment structure",
                     "statement": segmentation["summary"],
@@ -199,11 +207,14 @@ class AnomalySegmentationEngine:
                 "method": "Isolation Forest",
                 "evaluated_rows": int(len(scaled)),
                 "expected_contamination": ANOMALY_CONTAMINATION,
+                "candidate_policy": "fixed_review_budget",
+                "review_budget_rate": ANOMALY_CONTAMINATION,
                 "flagged_count": flagged_count,
                 "flagged_rate": round(float(flagged_rate), 6),
                 "summary": (
-                    f"Isolation Forest flagged {flagged_count} of {len(scaled)} rows "
-                    f"({flagged_rate:.1%}) as review candidates."
+                    f"Isolation Forest ranked {flagged_count} of {len(scaled)} rows "
+                    f"using a configured {ANOMALY_CONTAMINATION:.1%} review budget; "
+                    "these are candidates, not confirmed anomalies."
                 ),
                 "top_anomalies": top_anomalies,
             },
@@ -220,7 +231,19 @@ class AnomalySegmentationEngine:
         if len(features) < 2:
             return {
                 "status": "insufficient_data",
-                "summary": "Segmentation requires at least two varying numeric features.",
+                "method": "Gap statistic gate followed by K-means",
+                "selected_k": None,
+                "gap_selected_k": None,
+                "silhouette_score": None,
+                "stability_score": None,
+                "quality": "insufficient",
+                "fit_rows": int(len(scaled)),
+                "excluded_anomaly_rows": 0,
+                "candidate_scores": [],
+                "gap_scores": [],
+                "summary": (
+                    "Segmentation requires at least two varying numeric features."
+                ),
                 "segments": [],
             }
 
@@ -230,7 +253,26 @@ class AnomalySegmentationEngine:
             fit_mask = np.ones(len(scaled), dtype=bool)
             fit_scaled = scaled
 
-        max_k = min(MAX_SEGMENTS, len(fit_scaled) - 1)
+        unique_fit_rows = int(np.unique(fit_scaled, axis=0).shape[0])
+        max_k = min(MAX_SEGMENTS, len(fit_scaled) - 1, unique_fit_rows)
+        if max_k < 2:
+            return {
+                "status": "insufficient_evidence",
+                "method": "Gap statistic gate followed by K-means",
+                "selected_k": None,
+                "gap_selected_k": 1,
+                "silhouette_score": None,
+                "stability_score": None,
+                "quality": "insufficient",
+                "fit_rows": int(len(fit_scaled)),
+                "excluded_anomaly_rows": int((~fit_mask).sum()),
+                "candidate_scores": [],
+                "gap_scores": [],
+                "summary": (
+                    "Fewer than two distinct multivariate patterns remain after preparation."
+                ),
+                "segments": [],
+            }
         candidates = []
         fitted_models = {}
         for cluster_count in range(2, max_k + 1):
@@ -263,14 +305,68 @@ class AnomalySegmentationEngine:
         if not candidates:
             return {
                 "status": "insufficient_data",
+                "method": "Gap statistic gate followed by K-means",
+                "selected_k": None,
+                "gap_selected_k": None,
+                "silhouette_score": None,
+                "stability_score": None,
+                "quality": "insufficient",
+                "fit_rows": int(len(fit_scaled)),
+                "excluded_anomaly_rows": int((~fit_mask).sum()),
+                "candidate_scores": [],
+                "gap_scores": [],
                 "summary": "No valid segmentation could be fitted.",
                 "segments": [],
             }
 
+        gap_selected_k, gap_scores = self._gap_statistic(fit_scaled, max_k)
+        if gap_selected_k == 1:
+            return {
+                "status": "insufficient_evidence",
+                "method": "Gap statistic gate followed by K-means",
+                "selected_k": None,
+                "gap_selected_k": 1,
+                "silhouette_score": None,
+                "stability_score": None,
+                "quality": "insufficient",
+                "fit_rows": int(len(fit_scaled)),
+                "excluded_anomaly_rows": int((~fit_mask).sum()),
+                "candidate_scores": candidates,
+                "gap_scores": gap_scores,
+                "segments": [],
+                "summary": (
+                    "The gap statistic selected one cluster, so the data does not "
+                    "provide sufficient evidence for a multi-segment solution."
+                ),
+            }
+
         balanced_candidates = [
-            item for item in candidates if item["smallest_segment_share"] >= 0.05
+            item
+            for item in candidates
+            if item["smallest_segment_share"] >= 0.05
+            and item["k"] <= gap_selected_k
         ]
-        selection_pool = balanced_candidates or candidates
+        gap_candidates = [item for item in candidates if item["k"] <= gap_selected_k]
+        if not gap_candidates:
+            return {
+                "status": "insufficient_evidence",
+                "method": "Gap statistic gate followed by K-means",
+                "selected_k": None,
+                "gap_selected_k": gap_selected_k,
+                "silhouette_score": None,
+                "stability_score": None,
+                "quality": "insufficient",
+                "fit_rows": int(len(fit_scaled)),
+                "excluded_anomaly_rows": int((~fit_mask).sum()),
+                "candidate_scores": candidates,
+                "gap_scores": gap_scores,
+                "segments": [],
+                "summary": (
+                    "The gap statistic supported multiple clusters, but no partition "
+                    "within that bound retained at least two rows per segment."
+                ),
+            }
+        selection_pool = balanced_candidates or gap_candidates
         selected = max(selection_pool, key=lambda item: (item["silhouette_score"], -item["k"]))
         selected_k = int(selected["k"])
         model = fitted_models[selected_k]
@@ -286,14 +382,16 @@ class AnomalySegmentationEngine:
         segments = self._segment_profiles(features, values, all_labels, selected_k)
         return {
             "status": "ok",
-            "method": "K-means selected by silhouette score",
+            "method": "Gap-gated K-means selected by silhouette score",
             "selected_k": selected_k,
+            "gap_selected_k": gap_selected_k,
             "silhouette_score": selected["silhouette_score"],
             "stability_score": round(stability, 6),
             "quality": quality,
             "fit_rows": int(len(fit_scaled)),
             "excluded_anomaly_rows": int((~fit_mask).sum()),
             "candidate_scores": candidates,
+            "gap_scores": gap_scores,
             "segments": segments,
             "summary": (
                 f"The best exploratory solution contains {selected_k} segments with "
@@ -302,10 +400,83 @@ class AnomalySegmentationEngine:
             ),
         }
 
+    def _gap_statistic(
+        self,
+        values: np.ndarray,
+        max_k: int,
+    ) -> Tuple[int, List[Dict[str, Any]]]:
+        """Return the gap-statistic clusterability decision and diagnostics.
+
+        The one-standard-error rule may select ``k=1``. In that case the
+        engine must not manufacture a multi-segment result merely because
+        K-means can partition any finite dataset.
+        """
+        lower = np.min(values, axis=0)
+        spans = np.maximum(np.max(values, axis=0) - lower, 1e-12)
+        rng = np.random.default_rng(RANDOM_STATE)
+        references = [
+            lower + rng.random(values.shape) * spans
+            for _ in range(GAP_REFERENCE_REPEATS)
+        ]
+        diagnostics = []
+        raw_gaps = []
+        raw_standard_errors = []
+        for cluster_count in range(1, max_k + 1):
+            observed = KMeans(
+                n_clusters=cluster_count,
+                random_state=RANDOM_STATE,
+                n_init=10,
+            ).fit(values)
+            reference_logs = []
+            for reference_index, reference in enumerate(references):
+                reference_model = KMeans(
+                    n_clusters=cluster_count,
+                    random_state=RANDOM_STATE + reference_index + 1,
+                    n_init=10,
+                ).fit(reference)
+                reference_logs.append(
+                    float(np.log(max(float(reference_model.inertia_), 1e-12)))
+                )
+            reference_values = np.asarray(reference_logs, dtype=float)
+            gap = float(
+                np.mean(reference_values)
+                - np.log(max(float(observed.inertia_), 1e-12))
+            )
+            standard_error = float(
+                np.std(reference_values, ddof=1)
+                * np.sqrt(1.0 + 1.0 / GAP_REFERENCE_REPEATS)
+            )
+            raw_gaps.append(gap)
+            raw_standard_errors.append(standard_error)
+            diagnostics.append(
+                {
+                    "k": cluster_count,
+                    "gap": round(gap, 6),
+                    "standard_error": round(standard_error, 6),
+                }
+            )
+
+        selected_k = int(diagnostics[-1]["k"])
+        for index in range(len(diagnostics) - 1):
+            if raw_gaps[index] >= raw_gaps[index + 1] - raw_standard_errors[index + 1]:
+                selected_k = int(diagnostics[index]["k"])
+                break
+        return selected_k, diagnostics
+
     def _cluster_stability(self, values: np.ndarray, reference: np.ndarray, k: int) -> float:
+        """Measure assignment stability after deterministic row subsampling."""
         scores = []
-        for seed in (43, 44, 45):
-            labels = KMeans(n_clusters=k, random_state=seed, n_init=10).fit_predict(values)
+        sample_size = max(k * 2, int(np.ceil(len(values) * STABILITY_SUBSAMPLE_SHARE)))
+        sample_size = min(sample_size, len(values))
+        for seed in STABILITY_SEEDS:
+            rng = np.random.default_rng(seed)
+            positions = np.sort(
+                rng.choice(len(values), size=sample_size, replace=False)
+            )
+            model = KMeans(n_clusters=k, random_state=seed, n_init=10).fit(
+                values[positions]
+            )
+            labels = model.predict(values)
             scores.append(float(adjusted_rand_score(reference, labels)))
         return float(np.mean(scores))
 
@@ -384,11 +555,3 @@ def _segmentation_quality(
     if silhouette >= 0.25 and stability >= 0.50:
         return "moderate"
     return "weak"
-
-
-def _sample_support(sample_size: int) -> str:
-    if sample_size >= 100:
-        return "high"
-    if sample_size >= 30:
-        return "medium"
-    return "low"

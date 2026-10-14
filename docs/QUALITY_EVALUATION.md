@@ -29,7 +29,7 @@ observed value, expected threshold, and description for every check.
 | Scenario | Known property | Regression guarded against |
 | --- | --- | --- |
 | `saas_known_signals` | Designed customer/revenue relationship, three operational incidents, quality issues, and segment structure | Lost evidence, lower signal sensitivity, missed incidents, unstable or weak segmentation |
-| `null_noise_guardrail` | Five independent numeric variables and no designed relationship | Strong claims or FDR discoveries manufactured from seeded random noise |
+| `null_noise_guardrail` | Five independent numeric variables with no designed relationship or segment structure | Strong claims, FDR discoveries, or defensible-looking segments manufactured from seeded random noise; anomaly candidates promoted beyond exploratory review |
 | `known_group_effect` | Balanced control/treatment groups with a fixed outcome shift | Failure to detect a large group effect or report uncertainty correctly |
 
 The datasets are generated in memory from fixed seeds and contain no personal
@@ -40,8 +40,10 @@ or random run identifier, making it reproducible and safe to share.
 
 Thresholds live in `evaluation/quality_gate.json` and are reviewed like source
 code. They express behavioural tolerances—for example a minimum correlation,
-minimum silhouette/stability score, and maximum false discoveries—instead of
-pinning exact floating-point output. This avoids fragile snapshots while still
+minimum silhouette/subsample-stability score, and maximum false discoveries—
+instead of pinning exact floating-point output. The null scenario additionally
+requires the gap statistic to select one cluster and keeps fixed-budget anomaly
+rankings explicitly exploratory. This avoids fragile snapshots while still
 failing on material analytical regressions.
 
 Changing an algorithm and changing its acceptance threshold should be treated

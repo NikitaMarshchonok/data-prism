@@ -63,6 +63,11 @@ def build_decision_brief(
                 "finding": str(anomaly.get("summary") or "Anomaly candidates were detected."),
                 "evidence": [
                     f"Flagged rows: {int(anomaly.get('flagged_count') or 0)} of {int(anomaly.get('evaluated_rows') or 0)}",
+                    (
+                        "Candidate policy: fixed review budget"
+                        if anomaly.get("candidate_policy") == "fixed_review_budget"
+                        else "Candidate policy: unspecified"
+                    ),
                     f"Top candidate row: {top.get('row_index', 'unavailable')}",
                     (
                         f"Leading deviation: {leading_reason.get('feature', 'unavailable')} "
@@ -71,7 +76,7 @@ def build_decision_brief(
                 ],
                 "risk": "Anomaly scores identify review candidates, not errors, fraud, or causal events.",
                 "action": "Verify the top rows against source systems and operational event logs.",
-                "confidence": _sample_support(int(anomaly.get("evaluated_rows") or 0)),
+                "confidence": "exploratory",
                 "source": "pattern_analysis",
             }
         )

@@ -167,7 +167,7 @@
             {% if dashboard_data.pattern_analysis.segmentation.status == 'ok' %}
             <p class="text-gray-300 mb-2">{{ dashboard_data.pattern_analysis.segmentation.summary }}</p>
             <p class="text-gray-500 text-sm mb-4">
-                Segment labels are exploratory. Flagged anomalies were excluded while fitting centroids.
+                Segment labels are exploratory. Review candidates were excluded while fitting centroids.
             </p>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {% for segment in dashboard_data.pattern_analysis.segmentation.segments %}
@@ -188,6 +188,8 @@
                 </article>
                 {% endfor %}
             </div>
+            {% else %}
+            <p class="text-gray-300 mb-2">{{ dashboard_data.pattern_analysis.segmentation.summary }}</p>
             {% endif %}
 
             <p class="text-yellow-200 text-xs mt-4">

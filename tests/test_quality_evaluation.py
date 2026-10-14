@@ -42,6 +42,8 @@ class QualityEvaluationTests(unittest.TestCase):
         self.assertTrue(checks["known-group-effect-detected"]["passed"])
         self.assertTrue(checks["false-discovery-guardrail"]["passed"])
         self.assertEqual(checks["false-discovery-guardrail"]["observed"], 0)
+        self.assertTrue(checks["no-invented-segmentation"]["passed"])
+        self.assertTrue(checks["anomaly-candidates-remain-exploratory"]["passed"])
 
     def test_tightened_threshold_fails_with_machine_readable_evidence(self):
         config = copy.deepcopy(_config())

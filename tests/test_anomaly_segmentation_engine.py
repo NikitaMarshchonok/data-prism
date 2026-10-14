@@ -33,6 +33,8 @@ class AnomalySegmentationEngineTests(unittest.TestCase):
         self.assertEqual(report["status"], "ok")
         self.assertNotIn("row_id", report["features"])
         self.assertGreaterEqual(anomaly["flagged_count"], 2)
+        self.assertEqual(anomaly["candidate_policy"], "fixed_review_budget")
+        self.assertIn("not confirmed anomalies", anomaly["summary"])
         top_positions = {item["row_position"] for item in anomaly["top_anomalies"][:2]}
         self.assertEqual(top_positions, {180, 181})
         self.assertTrue(anomaly["top_anomalies"][0]["reasons"])
@@ -45,9 +47,10 @@ class AnomalySegmentationEngineTests(unittest.TestCase):
 
         self.assertEqual(segmentation["status"], "ok")
         self.assertEqual(segmentation["selected_k"], 3)
+        self.assertEqual(segmentation["gap_selected_k"], 3)
         self.assertEqual(segmentation["quality"], "strong")
         self.assertGreater(segmentation["silhouette_score"], 0.8)
-        self.assertGreater(segmentation["stability_score"], 0.9)
+        self.assertGreater(segmentation["stability_score"], 0.95)
         self.assertEqual(sum(item["size"] for item in segmentation["segments"]), 182)
         self.assertEqual(len(segmentation["candidate_scores"]), 5)
 
@@ -59,6 +62,9 @@ class AnomalySegmentationEngineTests(unittest.TestCase):
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["anomaly_detection"]["status"], "ok")
         self.assertEqual(report["segmentation"]["status"], "insufficient_data")
+        self.assertEqual(report["segmentation"]["quality"], "insufficient")
+        self.assertIsNone(report["segmentation"]["selected_k"])
+        self.assertEqual(report["segmentation"]["gap_scores"], [])
 
     def test_small_dataset_returns_explanatory_result(self):
         data = pd.DataFrame({"x": range(10), "y": range(10)})
