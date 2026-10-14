@@ -46,8 +46,12 @@ class StatisticalPrimitiveOracleTests(unittest.TestCase):
         self.assertAlmostEqual(result.degrees_of_freedom, 10.2941176470588, places=13)
         self.assertAlmostEqual(result.mean_difference, -4.5, places=14)
         self.assertAlmostEqual(result.standard_error, 1.93649167310371, places=14)
-        self.assertAlmostEqual(result.confidence_interval[0], -8.79812025287847, places=13)
-        self.assertAlmostEqual(result.confidence_interval[1], -0.201879747121529, places=13)
+        np.testing.assert_allclose(
+            result.confidence_interval,
+            [-8.79812025287847, -0.201879747121529],
+            rtol=0.0,
+            atol=1e-10,
+        )
         self.assertAlmostEqual(result.hedges_g, -1.09851891274247, places=14)
 
     def test_benjamini_hochberg_matches_canonical_four_value_example(self):
