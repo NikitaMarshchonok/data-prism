@@ -98,7 +98,7 @@ must not be represented as a confirmed business definition.
 | `src/runtime_backup.py` and `runtime_backup.py` | Offline bounded snapshots, integrity verification, and fail-closed restore into a new directory | Hosting persistence, encryption, authenticity, scheduling, or account recovery |
 | `src/runtime_state.py` and `runtime_state.py` | Stable state-directory identity, secret-free readiness status, and wrong-mount detection | Physical durability, backup freshness, recovery success, or distributed consistency |
 | `vibedash/statistical_engine.py` | Hypothesis tests, confidence intervals, effect sizes, FDR | Experiment design |
-| `vibedash/anomaly_segmentation_engine.py` | Exploratory anomaly and segment analysis | Production clustering service |
+| `vibedash/anomaly_segmentation_engine.py` | Fixed-budget anomaly review ranking, gap-statistic clusterability gating, and subsample-tested exploratory segmentation | Estimated anomaly prevalence, confirmed incidents, or a production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
 | `vibedash/audit_manifest.py` | Versioned dataset, schema, request, specification, and evidence fingerprints | Raw-row persistence or identity management |
 | `src/quality_evaluation.py` | Known-signal and null-signal analytical regression scenarios | Domain certification or causal validation |
@@ -382,11 +382,19 @@ Unit tests exercise algorithms and defensive paths, while
 segmentation engines against seeded synthetic scenarios with known properties.
 
 The versioned threshold configuration checks signal recovery, false-discovery
-guardrails, incident ranking, segment quality, and deterministic repetition.
+guardrails, incident ranking, segment quality, deterministic repetition, and
+that independent noise is not promoted as a defensible segment structure.
 Results include observed and expected values for every check and are retained
 as CI artifacts. Thresholds are behavioural tolerances rather than exact
 floating-point snapshots, so supported runtime versions can differ in
 irrelevant numerical details without hiding material regressions.
+
+Anomaly output is explicitly a fixed review budget, not an estimate of anomaly
+prevalence. Segmentation first applies the gap statistic and reports no
+multi-segment result when its one-standard-error rule selects one cluster. For
+accepted solutions, stability is the mean adjusted Rand index after refitting
+on deterministic 80% row subsamples, not repeated initialization on unchanged
+data. These are still exploratory diagnostics and require domain validation.
 
 Passing this gate demonstrates that the implemented analytical contracts still
 hold. It does not establish causal validity, production model readiness, or

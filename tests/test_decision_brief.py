@@ -63,6 +63,7 @@ class DecisionBriefTests(unittest.TestCase):
             [item["category"] for item in brief["priorities"]],
             ["validated-signal", "anomaly-review", "data-readiness"],
         )
+        self.assertEqual(brief["priorities"][1]["confidence"], "exploratory")
         self.assertEqual([item["priority"] for item in brief["priorities"]], [1, 2, 3])
         json.dumps(brief)
 

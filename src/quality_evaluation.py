@@ -237,9 +237,22 @@ def _evaluate_null_noise(thresholds: Mapping[str, Any]) -> Dict[str, Any]:
     data["segment"] = rng.choice(["a", "b", "c"], size=row_count)
     insights = EvidenceBasedInsightEngine(data).generate(max_insights=10)
     statistics = StatisticalValidationEngine(data).analyze(max_results=100)
+    pattern_engine = AnomalySegmentationEngine(data)
+    patterns = pattern_engine.analyze(max_anomalies=10)
+    pattern_insights = pattern_engine.evidence_insights(patterns)
     insight_ids = [item["insight_id"] for item in insights]
     forbidden_insights = list(thresholds["forbidden_insight_ids"])
     significant_count = int(statistics["significant_test_count"])
+    segmentation = patterns.get("segmentation") or {}
+    anomaly = patterns.get("anomaly_detection") or {}
+    anomaly_insight = next(
+        (
+            item
+            for item in pattern_insights
+            if item.get("insight_id") == "multivariate-anomaly-scan"
+        ),
+        {},
+    )
 
     checks = [
         _check(
@@ -264,10 +277,44 @@ def _evaluate_null_noise(thresholds: Mapping[str, Any]) -> Dict[str, Any]:
             {"minimum": int(thresholds["minimum_candidate_tests"])},
             "The null guardrail evaluates enough hypotheses to be meaningful.",
         ),
+        _check(
+            "no-invented-segmentation",
+            segmentation.get("status") == "insufficient_evidence"
+            and segmentation.get("gap_selected_k") == 1
+            and not any(
+                item.get("insight_id") == "exploratory-segmentation"
+                for item in pattern_insights
+            ),
+            {
+                "status": segmentation.get("status"),
+                "gap_selected_k": segmentation.get("gap_selected_k"),
+                "insight_ids": [item.get("insight_id") for item in pattern_insights],
+            },
+            {
+                "status": "insufficient_evidence",
+                "gap_selected_k": 1,
+                "excludes_insight": "exploratory-segmentation",
+            },
+            "Independent noise is not promoted as a defensible segment structure.",
+        ),
+        _check(
+            "anomaly-candidates-remain-exploratory",
+            anomaly.get("candidate_policy") == "fixed_review_budget"
+            and anomaly_insight.get("confidence") == "exploratory",
+            {
+                "candidate_policy": anomaly.get("candidate_policy"),
+                "insight_confidence": anomaly_insight.get("confidence"),
+            },
+            {
+                "candidate_policy": "fixed_review_budget",
+                "insight_confidence": "exploratory",
+            },
+            "Unsupervised anomaly rankings remain review candidates rather than validated findings.",
+        ),
     ]
     return _scenario(
         "null_noise_guardrail",
-        "Independent numeric noise with no designed relationship",
+        "Independent numeric noise with no designed relationship or segment structure",
         data,
         checks,
     )
