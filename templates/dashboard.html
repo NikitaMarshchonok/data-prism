@@ -333,6 +333,20 @@
         <p><strong>Модель:</strong> {{ ml_card.model_name }}</p>
     {% endif %}
     <p><strong>Метрика модели:</strong> {{ ml_card.metric }}</p>
+    {% if ml_card.predictive_support %}
+        <h3 style="color: #74b9ff; margin-top: 20px;">Проверка предсказательной поддержки</h3>
+        <p style="color: {% if ml_card.predictive_support.status == 'supported_on_holdout' %}#55efc4{% else %}#ffeaa7{% endif %};">
+            {{ ml_card.predictive_support.summary }}
+        </p>
+        {% if ml_card.predictive_support.permutation_p_value is defined %}
+            <p style="color: #b2bec3;">
+                {{ ml_card.predictive_support.primary_metric }}:
+                {{ ml_card.predictive_support.observed_score }} против baseline
+                {{ ml_card.predictive_support.baseline_score }};
+                permutation p={{ ml_card.predictive_support.permutation_p_value }}.
+            </p>
+        {% endif %}
+    {% endif %}
     {% if ml_card.model_comparison %}
         <h3 style="color: #74b9ff; margin-top: 20px;">Сравнение моделей</h3>
         <p style="color: #b2bec3;">

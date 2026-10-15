@@ -37,6 +37,9 @@ from src.column_semantics import column_role, profile_dataframe_columns
 RANDOM_STATE = 42
 MIN_TRAINING_ROWS = 10
 MAX_CATEGORICAL_LEVELS = 50
+HOLDOUT_PERMUTATION_REPEATS = 499
+PREDICTIVE_SUPPORT_ALPHA = 0.05
+TARGET_PROXY_MIN_COVERAGE = 0.80
 
 
 def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dict[str, Any]:
@@ -108,6 +111,12 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
     else:
         metrics, metric_text, baseline_text = _regression_metrics(y_train, y_test, predictions)
 
+    predictive_support = _holdout_predictive_support(
+        y_test,
+        predictions,
+        task_type,
+        metrics,
+    )
     diagnostics = _model_diagnostics(
         pipeline,
         X_test,
@@ -140,16 +149,13 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
             "and permutation diagnostics."
         ),
         baseline_text,
+        predictive_support["summary"],
         "Preprocessing was fitted on training rows only.",
         "Feature importance uses holdout permutation tests and is descriptive, not causal.",
     ]
-    if task_type == "classification" and metrics["accuracy_lift"] <= 0:
+    if predictive_support["status"] != "supported_on_holdout":
         evaluation_notes.append(
-            "Warning: the selected model did not beat the most-frequent holdout baseline on accuracy."
-        )
-    if task_type == "regression" and metrics["mae_improvement"] <= 0:
-        evaluation_notes.append(
-            "Warning: the selected model did not beat the mean holdout baseline on MAE."
+            "Warning: this dataset does not establish predictive support beyond the naive baseline."
         )
     if dropped_features:
         evaluation_notes.append(
@@ -164,6 +170,7 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
         "model_name": type(model).__name__,
         "metric": metric_text,
         "metrics": metrics,
+        "predictive_support": predictive_support,
         "diagnostics": diagnostics,
         "reliability": reliability,
         "model_comparison": model_comparison,
@@ -219,7 +226,12 @@ def _prepare_features(X: pd.DataFrame, target: pd.Series) -> Tuple[pd.DataFrame,
         unique_ratio = unique_count / max(int(series.notna().sum()), 1)
         role = column_role(column, semantic_profiles)
         looks_like_id = role == "identifier"
-        duplicates_target = series.reset_index(drop=True).equals(target.reset_index(drop=True))
+        target_proxy = _is_exact_target_proxy(
+            series,
+            target,
+            feature_name=str(column),
+            target_name=str(target.name or ""),
+        )
         high_cardinality_text = (
             not pd.api.types.is_numeric_dtype(series)
             and unique_count > MAX_CATEGORICAL_LEVELS
@@ -227,7 +239,7 @@ def _prepare_features(X: pd.DataFrame, target: pd.Series) -> Tuple[pd.DataFrame,
         )
         unsupported = role == "temporal" or pd.api.types.is_datetime64_any_dtype(series)
 
-        if unique_count <= 1 or looks_like_id or duplicates_target or high_cardinality_text or unsupported:
+        if unique_count <= 1 or looks_like_id or target_proxy or high_cardinality_text or unsupported:
             dropped.append(str(column))
         else:
             supported_columns.append(column)
@@ -242,6 +254,106 @@ def _prepare_features(X: pd.DataFrame, target: pd.Series) -> Tuple[pd.DataFrame,
     for column in categorical_columns:
         prepared[column] = prepared[column].astype("object")
     return prepared, dropped
+
+
+def _is_exact_target_proxy(
+    feature: pd.Series,
+    target: pd.Series,
+    *,
+    feature_name: str = "",
+    target_name: str = "",
+) -> bool:
+    """Identify exact target copies or reversible encodings.
+
+    Data alone cannot prove when a highly predictive feature became available.
+    This deliberately narrow guardrail only removes exact copies, explicitly
+    named affine target derivatives, and one-to-one encodings of
+    low-cardinality targets. Near-perfect relationships remain available but
+    require domain review for temporal leakage.
+    """
+    feature_values = feature.reset_index(drop=True)
+    target_values = target.reset_index(drop=True)
+    common = feature_values.notna() & target_values.notna()
+    if float(common.mean()) < TARGET_PROXY_MIN_COVERAGE or int(common.sum()) < 3:
+        return False
+
+    feature_common = feature_values[common].reset_index(drop=True)
+    target_common = target_values[common].reset_index(drop=True)
+    if feature_common.equals(target_common):
+        return True
+    try:
+        exact_values_match = bool(
+            np.all(
+                feature_common.to_numpy(dtype=object)
+                == target_common.to_numpy(dtype=object)
+            )
+        )
+    except (TypeError, ValueError):
+        exact_values_match = False
+    if exact_values_match:
+        return True
+
+    if (
+        _names_indicate_target_proxy(feature_name, target_name)
+        and pd.api.types.is_numeric_dtype(feature_common)
+        and pd.api.types.is_numeric_dtype(target_common)
+    ):
+        numeric_feature = pd.to_numeric(feature_common, errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        numeric_target = pd.to_numeric(target_common, errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        finite = numeric_feature.notna() & numeric_target.notna()
+        if int(finite.sum()) >= 3:
+            x = numeric_feature[finite].to_numpy(dtype=float)
+            y = numeric_target[finite].to_numpy(dtype=float)
+            centered_y = y - float(np.mean(y))
+            denominator = float(np.dot(centered_y, centered_y))
+            if denominator > 1e-12:
+                slope = float(
+                    np.dot(centered_y, x - float(np.mean(x))) / denominator
+                )
+                intercept = float(np.mean(x) - slope * np.mean(y))
+                residual = x - (slope * y + intercept)
+                tolerance = 1e-10 * max(
+                    1.0,
+                    float(np.ptp(x)),
+                    float(np.max(np.abs(x))),
+                )
+                if (
+                    abs(slope) > 1e-12
+                    and float(np.max(np.abs(residual))) <= tolerance
+                ):
+                    return True
+
+    target_levels = int(target_common.nunique(dropna=True))
+    feature_levels = int(feature_common.nunique(dropna=True))
+    if 2 <= target_levels <= 20 and feature_levels == target_levels:
+        pairs = pd.DataFrame({"feature": feature_common, "target": target_common})
+        feature_to_target = int(
+            pairs.groupby("feature", dropna=False)["target"].nunique().max()
+        )
+        target_to_feature = int(
+            pairs.groupby("target", dropna=False)["feature"].nunique().max()
+        )
+        return feature_to_target == 1 and target_to_feature == 1
+    return False
+
+
+def _names_indicate_target_proxy(feature_name: str, target_name: str) -> bool:
+    feature_key = "".join(
+        character for character in feature_name.casefold() if character.isalnum()
+    )
+    target_key = "".join(
+        character for character in target_name.casefold() if character.isalnum()
+    )
+    if target_key and len(target_key) >= 3 and target_key in feature_key:
+        return True
+    return any(
+        marker in feature_key
+        for marker in ("targetproxy", "labelproxy", "outcomeproxy", "targetencoded")
+    )
 
 
 def _build_preprocessor(numeric_columns: List[Any], categorical_columns: List[Any]):
@@ -413,10 +525,18 @@ def _classification_metrics(y_train, y_test, predictions):
     accuracy = float(accuracy_score(y_test, predictions))
     baseline_accuracy = float(accuracy_score(y_test, baseline_predictions))
     balanced_accuracy = float(balanced_accuracy_score(y_test, predictions))
+    baseline_balanced_accuracy = float(
+        balanced_accuracy_score(y_test, baseline_predictions)
+    )
     weighted_f1 = float(f1_score(y_test, predictions, average="weighted", zero_division=0))
     metrics = {
         "accuracy": round(accuracy, 6),
         "balanced_accuracy": round(balanced_accuracy, 6),
+        "baseline_balanced_accuracy": round(baseline_balanced_accuracy, 6),
+        "balanced_accuracy_lift": round(
+            balanced_accuracy - baseline_balanced_accuracy,
+            6,
+        ),
         "weighted_f1": round(weighted_f1, 6),
         "baseline_accuracy": round(baseline_accuracy, 6),
         "accuracy_lift": round(accuracy - baseline_accuracy, 6),
@@ -453,6 +573,87 @@ def _regression_metrics(y_train, y_test, predictions):
     )
     baseline_text = f"MAE improvement over mean baseline: {improvement:+.2%}."
     return metrics, metric_text, baseline_text
+
+
+def _holdout_predictive_support(
+    y_test,
+    predictions,
+    task_type: str,
+    metrics: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Test whether fixed holdout predictions outperform a shuffled null.
+
+    Model selection never sees the holdout. Once predictions are fixed, target
+    permutation provides an independent, deterministic guardrail against
+    promoting chance holdout performance as predictive evidence.
+    """
+    observed_target = np.asarray(y_test)
+    observed_predictions = np.asarray(predictions)
+    rng = np.random.default_rng(RANDOM_STATE + 1000)
+
+    if task_type == "classification":
+        observed_score = float(
+            balanced_accuracy_score(observed_target, observed_predictions)
+        )
+        baseline_score = float(metrics["baseline_balanced_accuracy"])
+        lift = observed_score - baseline_score
+        null_scores = [
+            float(
+                balanced_accuracy_score(
+                    rng.permutation(observed_target),
+                    observed_predictions,
+                )
+            )
+            for _ in range(HOLDOUT_PERMUTATION_REPEATS)
+        ]
+        extreme_count = sum(score >= observed_score for score in null_scores)
+        primary_metric = "balanced_accuracy"
+        direction = "higher_is_better"
+    else:
+        observed_score = float(
+            mean_absolute_error(observed_target, observed_predictions)
+        )
+        baseline_score = float(metrics["baseline_mae"])
+        lift = baseline_score - observed_score
+        null_scores = [
+            float(
+                mean_absolute_error(
+                    rng.permutation(observed_target),
+                    observed_predictions,
+                )
+            )
+            for _ in range(HOLDOUT_PERMUTATION_REPEATS)
+        ]
+        extreme_count = sum(score <= observed_score for score in null_scores)
+        primary_metric = "mae"
+        direction = "lower_is_better"
+
+    p_value = (extreme_count + 1) / (HOLDOUT_PERMUTATION_REPEATS + 1)
+    supported = lift > 0 and p_value <= PREDICTIVE_SUPPORT_ALPHA
+    status = "supported_on_holdout" if supported else "not_supported_on_holdout"
+    if supported:
+        summary = (
+            "Predictive support was detected on the untouched holdout: the selected "
+            f"model beat the naive baseline and the permutation p-value was {p_value:.4f}."
+        )
+    else:
+        summary = (
+            "Predictive support was not established on the untouched holdout: a positive "
+            "baseline lift and permutation p-value at or below 0.05 are both required."
+        )
+    return {
+        "status": status,
+        "method": "fixed-holdout target permutation test",
+        "primary_metric": primary_metric,
+        "direction": direction,
+        "observed_score": round(observed_score, 6),
+        "baseline_score": round(baseline_score, 6),
+        "absolute_lift": round(float(lift), 6),
+        "permutation_p_value": round(float(p_value), 6),
+        "permutation_repeats": HOLDOUT_PERMUTATION_REPEATS,
+        "alpha": PREDICTIVE_SUPPORT_ALPHA,
+        "summary": summary,
+    }
 
 
 def _model_diagnostics(pipeline, X_test, y_test, predictions, task_type: str):
@@ -611,6 +812,7 @@ def _error_report(message: str, target_col: Optional[Any] = None) -> Dict[str, A
         "model_name": None,
         "metric": f"⚠️ {message}",
         "metrics": {},
+        "predictive_support": {"status": "not_evaluated"},
         "diagnostics": {},
         "reliability": {},
         "model_comparison": [],

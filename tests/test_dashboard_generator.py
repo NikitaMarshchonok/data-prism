@@ -15,6 +15,10 @@ class DashboardGeneratorTests(unittest.TestCase):
             "task_type": "classification",
             "model_name": "LogisticRegression",
             "metric": "Accuracy: 100%",
+            "predictive_support": {
+                "status": "supported_on_holdout",
+                "summary": "Supported on holdout.",
+            },
             "model_comparison": [
                 {
                     "model_name": "LogisticRegression",
@@ -45,6 +49,10 @@ class DashboardGeneratorTests(unittest.TestCase):
         predict_target.assert_called_once_with(data, "target")
         ml_card = result[-1]
         self.assertEqual(ml_card["model_name"], "LogisticRegression")
+        self.assertEqual(
+            ml_card["predictive_support"]["status"],
+            "supported_on_holdout",
+        )
         self.assertEqual(ml_card["cv_folds"], 5)
         self.assertEqual(len(ml_card["model_comparison"]), 1)
         self.assertEqual(ml_card["diagnostics"]["type"], "classification")
