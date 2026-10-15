@@ -22,12 +22,12 @@ The project is designed as a decision-support system: every important conclusion
 | Decision workflow | Evidence snapshots, accountable owners, success metrics, targets, review dates, and measured outcomes |
 | Statistical validation | Welch group comparisons, Pearson correlation, effect sizes, 95% confidence intervals, and Benjamini–Hochberg FDR correction |
 | Exploratory ML | Fixed-budget anomaly review ranking and gap-statistic-gated, subsample-stability-tested segmentation |
-| Predictive ML | Leakage-safe preprocessing, holdout evaluation, cross-validated model selection, and naive-baseline comparison |
+| Predictive ML | Leakage-safe preprocessing, cross-validated model selection, untouched-holdout evaluation, naive-baseline comparison, and a holdout permutation support gate |
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
 | Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run and decision history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
 | Operations | Durable analysis-job states, bounded background execution, reproducibility fingerprints, request IDs, structured JSON logs, managed temporary-artifact retention, and a CI-gated Render Blueprint |
-| Quality evaluation | Versioned synthetic benchmarks for known signals, null-noise guardrails, reproducibility, and machine-readable CI evidence |
+| Quality evaluation | Versioned synthetic benchmarks for known statistical, anomaly, segmentation, and predictive signals; null-noise guardrails; reproducibility; and machine-readable CI evidence |
 
 ## System overview
 
@@ -305,7 +305,7 @@ python evaluate_quality.py --config evaluation/quality_gate.json
 python test_vibedash.py
 ```
 
-GitHub Actions runs the full suite on Python 3.11 and 3.12 for every pull request to `main`. The analytical gate checks a known SaaS scenario, a null-noise false-discovery guardrail, and a designed group effect. It emits a machine-readable report that CI preserves as an artifact, including the observed and expected value for every check. See [docs/QUALITY_EVALUATION.md](docs/QUALITY_EVALUATION.md) for the benchmark contract and threshold policy.
+GitHub Actions runs the full suite on Python 3.11 and 3.12 for every pull request to `main`. The analytical gate checks a known SaaS scenario (including predictive holdout support), a null-noise false-discovery and predictive-support guardrail, and a designed group effect. It emits a machine-readable report that CI preserves as an artifact, including the observed and expected value for every check. See [docs/QUALITY_EVALUATION.md](docs/QUALITY_EVALUATION.md) for the benchmark contract and threshold policy.
 
 The wider suite covers data loading, security boundaries, evidence generation, statistical validation, model evaluation, reliability diagnostics, drift persistence, API behaviour, CLI jobs, and Flask integration.
 
@@ -372,7 +372,7 @@ This is an actively developed portfolio system, not a managed enterprise platfor
 - Measured outcomes are user-entered observations. They support learning and accountability but do not establish that a decision caused the result.
 - Temporary-artifact cleanup is request-triggered, so it is not a wall-clock deletion SLA; strict retention guarantees require a scheduler or storage-provider lifecycle policy.
 - Account deletion is scoped to account-owned state and identifiable server artifacts; it does not erase user-held copies or historical offline backups, and it does not promise cross-store atomicity or complete removal of unidentifiable orphan files.
-- Predictive models are fast diagnostic baselines, not automatically deployable production models.
+- Predictive models are diagnostic baselines. Holdout support means the fitted pipeline beat its naive baseline under the documented permutation gate; it is not proof of temporal validity, causality, fairness, or production readiness.
 - Statistical findings are observational and must not be interpreted as causal conclusions.
 - External alert delivery, managed scheduling, access-control roles, and production telemetry are not yet implemented.
 

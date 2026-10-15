@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from src.demo_data import create_saas_growth_demo
+from src.ml_predictor import predict_target
 from vibedash.anomaly_segmentation_engine import AnomalySegmentationEngine
 from vibedash.insight_engine import EvidenceBasedInsightEngine
 from vibedash.statistical_engine import StatisticalValidationEngine
@@ -122,6 +123,7 @@ def _evaluate_saas_known_signals(thresholds: Mapping[str, Any]) -> Dict[str, Any
     statistics = StatisticalValidationEngine(data).analyze(max_results=100)
     repeated_statistics = StatisticalValidationEngine(data).analyze(max_results=100)
     patterns = AnomalySegmentationEngine(data).analyze(max_anomalies=10)
+    prediction = predict_target(data, "MonthlyRevenue")
 
     insight_ids = [item["insight_id"] for item in insights]
     required_insights = list(thresholds["required_insight_ids"])
@@ -147,6 +149,8 @@ def _evaluate_saas_known_signals(thresholds: Mapping[str, Any]) -> Dict[str, Any
     }
     required_incidents = {int(value) for value in thresholds["required_incident_rows"]}
     segmentation = patterns.get("segmentation", {})
+    predictive_support = prediction.get("predictive_support", {})
+    predictive_metrics = prediction.get("metrics", {})
 
     checks = [
         _check(
@@ -209,6 +213,34 @@ def _evaluate_saas_known_signals(thresholds: Mapping[str, Any]) -> Dict[str, Any
             "Exploratory segments remain sufficiently separated and stable.",
         ),
         _check(
+            "known-predictive-signal-supported",
+            prediction.get("status") == "ok"
+            and predictive_support.get("status") == "supported_on_holdout"
+            and float(predictive_support.get("permutation_p_value", 1.0))
+            <= float(thresholds["maximum_predictive_permutation_p_value"])
+            and float(predictive_metrics.get("mae_improvement", 0.0))
+            >= float(thresholds["minimum_predictive_mae_improvement"]),
+            {
+                "prediction_status": prediction.get("status"),
+                "support_status": predictive_support.get("status"),
+                "permutation_p_value": predictive_support.get(
+                    "permutation_p_value"
+                ),
+                "mae_improvement": predictive_metrics.get("mae_improvement"),
+            },
+            {
+                "prediction_status": "ok",
+                "support_status": "supported_on_holdout",
+                "maximum_permutation_p_value": float(
+                    thresholds["maximum_predictive_permutation_p_value"]
+                ),
+                "minimum_mae_improvement": float(
+                    thresholds["minimum_predictive_mae_improvement"]
+                ),
+            },
+            "The known customer/revenue signal beats a naive baseline on the untouched holdout with permutation support.",
+        ),
+        _check(
             "deterministic-evidence-and-statistics",
             insights == repeated_insights and statistics == repeated_statistics,
             {
@@ -240,6 +272,7 @@ def _evaluate_null_noise(thresholds: Mapping[str, Any]) -> Dict[str, Any]:
     pattern_engine = AnomalySegmentationEngine(data)
     patterns = pattern_engine.analyze(max_anomalies=10)
     pattern_insights = pattern_engine.evidence_insights(patterns)
+    prediction = predict_target(data, "segment")
     insight_ids = [item["insight_id"] for item in insights]
     forbidden_insights = list(thresholds["forbidden_insight_ids"])
     significant_count = int(statistics["significant_test_count"])
@@ -253,6 +286,8 @@ def _evaluate_null_noise(thresholds: Mapping[str, Any]) -> Dict[str, Any]:
         ),
         {},
     )
+    predictive_support = prediction.get("predictive_support", {})
+    predictive_metrics = prediction.get("metrics", {})
 
     checks = [
         _check(
@@ -296,6 +331,26 @@ def _evaluate_null_noise(thresholds: Mapping[str, Any]) -> Dict[str, Any]:
                 "excludes_insight": "exploratory-segmentation",
             },
             "Independent noise is not promoted as a defensible segment structure.",
+        ),
+        _check(
+            "no-invented-predictive-support",
+            prediction.get("status") == "ok"
+            and predictive_support.get("status") == "not_supported_on_holdout",
+            {
+                "prediction_status": prediction.get("status"),
+                "support_status": predictive_support.get("status"),
+                "permutation_p_value": predictive_support.get(
+                    "permutation_p_value"
+                ),
+                "balanced_accuracy_lift": predictive_metrics.get(
+                    "balanced_accuracy_lift"
+                ),
+            },
+            {
+                "prediction_status": "ok",
+                "support_status": "not_supported_on_holdout",
+            },
+            "Seeded independent noise is not promoted as predictive evidence beyond a naive baseline.",
         ),
         _check(
             "anomaly-candidates-remain-exploratory",

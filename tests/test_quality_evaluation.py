@@ -44,6 +44,20 @@ class QualityEvaluationTests(unittest.TestCase):
         self.assertEqual(checks["false-discovery-guardrail"]["observed"], 0)
         self.assertTrue(checks["no-invented-segmentation"]["passed"])
         self.assertTrue(checks["anomaly-candidates-remain-exploratory"]["passed"])
+        self.assertTrue(checks["known-predictive-signal-supported"]["passed"])
+        self.assertEqual(
+            checks["known-predictive-signal-supported"]["observed"][
+                "support_status"
+            ],
+            "supported_on_holdout",
+        )
+        self.assertTrue(checks["no-invented-predictive-support"]["passed"])
+        self.assertEqual(
+            checks["no-invented-predictive-support"]["observed"][
+                "support_status"
+            ],
+            "not_supported_on_holdout",
+        )
 
     def test_tightened_threshold_fails_with_machine_readable_evidence(self):
         config = copy.deepcopy(_config())
