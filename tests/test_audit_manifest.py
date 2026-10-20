@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import pandas as pd
 
 from vibedash.audit_manifest import build_audit_manifest
+from src.semantic_contract import infer_semantic_contract
 
 
 class AuditManifestTests(unittest.TestCase):
@@ -50,6 +51,10 @@ class AuditManifestTests(unittest.TestCase):
             },
             engine_version="test-release",
             retention_hours=24,
+            semantic_contract=infer_semantic_contract(
+                dataframe,
+                confirmed=True,
+            ),
             generated_at=datetime(2026, 9, 11, tzinfo=timezone.utc),
         )
 
@@ -64,8 +69,8 @@ class AuditManifestTests(unittest.TestCase):
             second = self._build(dataset_path, dataframe)
 
         self.assertEqual(first, second)
-        self.assertEqual(first["manifest_version"], 2)
-        self.assertEqual(first["analysis_contract"], "vibedash-evidence-v2")
+        self.assertEqual(first["manifest_version"], 3)
+        self.assertEqual(first["analysis_contract"], "vibedash-evidence-v3")
         self.assertEqual(first["dataset"]["analyzed_rows"], 2)
         self.assertEqual(first["dataset"]["column_count"], 2)
         self.assertEqual(first["evidence"]["statistical_test_count"], 2)
@@ -73,6 +78,8 @@ class AuditManifestTests(unittest.TestCase):
         self.assertEqual(first["evidence"]["anomaly_candidate_count"], 1)
         self.assertEqual(first["evidence"]["readiness"]["score"], 92)
         self.assertEqual(first["evidence"]["decision_brief"]["priority_count"], 2)
+        self.assertTrue(first["semantics"]["confirmed"])
+        self.assertRegex(first["semantics"]["sha256"], r"^[0-9a-f]{64}$")
         serialized = json.dumps(first)
         self.assertNotIn("private-a", serialized)
         self.assertNotIn("private-b", serialized)

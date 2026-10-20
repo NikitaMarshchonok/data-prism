@@ -190,7 +190,7 @@ class ReleaseAcceptanceJourneyTests(unittest.TestCase):
         self.assertEqual(manifest.status_code, 200)
         self.assertEqual(
             manifest.get_json()["analysis_contract"],
-            "vibedash-evidence-v2",
+            "vibedash-evidence-v3",
         )
 
         review_date = (date.today() + timedelta(days=30)).isoformat()

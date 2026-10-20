@@ -33,6 +33,13 @@ try:
         DEMO_PROMPT,
         create_saas_growth_demo,
     )
+    from src.semantic_contract import (
+        SemanticContractError,
+        infer_semantic_contract,
+        parse_semantic_contract_json,
+        profiles_from_semantic_contract,
+        validate_semantic_contract,
+    )
     from .spec import create_saas_demo_viz_spec, parse_prompt_to_viz_spec
     from .generator_bridge import generate_dashboard_data as bridge_generate_dashboard_data
     from .exporter import (
@@ -786,6 +793,23 @@ if vibedash_bp:
         if not readiness['analysis_allowed']:
             raise DatasetReadinessBlocked(readiness)
 
+        submitted_contract = payload.get('semantic_contract')
+        if demo_dataset:
+            semantic_contract = infer_semantic_contract(
+                source_df,
+                confirmed=True,
+            )
+        else:
+            semantic_contract = validate_semantic_contract(
+                source_df,
+                submitted_contract,
+            )
+        column_profiles = profiles_from_semantic_contract(
+            df,
+            semantic_contract,
+            prevalidated=True,
+        )
+
         if demo_dataset:
             if demo_dataset != DEMO_DATASET_ID:
                 raise ValueError('The demonstration dataset is invalid.')
@@ -795,8 +819,14 @@ if vibedash_bp:
                 prompt,
                 list(df.columns),
                 dataframe=df,
+                column_profiles=column_profiles,
             )
-        dashboard_data = bridge_generate_dashboard_data(df, viz_spec)
+        dashboard_data = bridge_generate_dashboard_data(
+            df,
+            viz_spec,
+            semantic_contract=semantic_contract,
+            semantic_contract_prevalidated=True,
+        )
         dashboard_data['readiness'] = readiness
         dashboard_data['decision_brief'] = build_decision_brief(
             dashboard_data,
@@ -817,6 +847,7 @@ if vibedash_bp:
             dashboard_data=dashboard_data,
             engine_version=current_app.config['SERVICE_VERSION'],
             retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
+            semantic_contract=semantic_contract,
         )
         session_id = str(uuid.uuid4())
         session_data = {
@@ -828,6 +859,7 @@ if vibedash_bp:
             'df_shape': df.shape,
             'file_path': str(upload_path),
             'audit_manifest': audit_manifest,
+            'semantic_contract': semantic_contract,
         }
         owner_scope = _session_persist_scope(scope_id)
         persisted = _analysis_job_store().run_if_scope_open(
@@ -1830,6 +1862,13 @@ if vibedash_bp:
         try:
             dataframe = _load_vibedash_csv(uploaded_file.stream)
             report = DatasetReadinessEngine(dataframe).assess()
+            semantic_contract = (
+                infer_semantic_contract(dataframe)
+                if report['analysis_allowed']
+                else None
+            )
+        except SemanticContractError as error:
+            return jsonify({'error': str(error)}), 422
         except Exception:
             current_app.logger.info(
                 "VibeDash readiness input rejected",
@@ -1843,7 +1882,10 @@ if vibedash_bp:
             "VibeDash readiness completed",
             extra={"event": "vibedash_readiness_completed"},
         )
-        return jsonify({'readiness': report})
+        return jsonify({
+            'readiness': report,
+            'semantic_contract': semantic_contract,
+        })
 
 
     @vibedash_bp.route('/preview', methods=['POST'])
@@ -1912,6 +1954,13 @@ if vibedash_bp:
                 'filename': filename,
                 'prompt': prompt,
                 'demo_dataset': demo_dataset,
+                'semantic_contract': (
+                    None
+                    if demo_dataset
+                    else parse_semantic_contract_json(
+                        request.form.get('semantic_contract')
+                    )
+                ),
             }, scope_id=request_scope)
             if analysis_result['truncated']:
                 max_rows = current_app.config['MAX_ROWS_PREVIEW']
@@ -1952,6 +2001,11 @@ if vibedash_bp:
                 extra={"event": "vibedash_readiness_blocked"},
             )
             flash(error.report['summary'], 'error')
+            return redirect(url_for('vibedash.index'))
+        except SemanticContractError as error:
+            if upload_path is not None:
+                upload_path.unlink(missing_ok=True)
+            flash(str(error), 'error')
             return redirect(url_for('vibedash.index'))
         except Exception:
             if upload_path is not None:
@@ -2021,9 +2075,8 @@ if vibedash_bp:
                 return jsonify({'error': 'The uploaded file could not be stored.'}), 500
 
         try:
-            readiness = DatasetReadinessEngine(
-                _load_vibedash_csv(upload_path)
-            ).assess()
+            dataframe = _load_vibedash_csv(upload_path)
+            readiness = DatasetReadinessEngine(dataframe).assess()
         except Exception:
             upload_path.unlink(missing_ok=True)
             return jsonify({
@@ -2041,6 +2094,25 @@ if vibedash_bp:
             }), 422
 
         try:
+            semantic_contract = (
+                infer_semantic_contract(dataframe, confirmed=True)
+                if demo_dataset
+                else validate_semantic_contract(
+                    dataframe,
+                    parse_semantic_contract_json(
+                        request.form.get('semantic_contract')
+                    ),
+                )
+            )
+        except SemanticContractError as error:
+            upload_path.unlink(missing_ok=True)
+            return jsonify({
+                'error': str(error),
+                'readiness': readiness,
+                'semantic_contract_error': True,
+            }), 422
+
+        try:
             store = _analysis_job_store()
             job = store.create(
                 request_scope,
@@ -2049,6 +2121,7 @@ if vibedash_bp:
                     'filename': filename,
                     'prompt': prompt,
                     'demo_dataset': demo_dataset,
+                    'semantic_contract': semantic_contract,
                 },
                 max_active_per_scope=current_app.config[
                     'VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE'

@@ -8,11 +8,16 @@ import re
 from functools import reduce
 from html import escape
 from numbers import Number
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Mapping, Optional
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from src.column_semantics import profile_dataframe_columns
+from src.semantic_contract import (
+    profiles_from_semantic_contract,
+    validate_semantic_contract,
+)
 from .chart_theme import (
     CHART_CONFIG,
     apply_evidence_chart_theme,
@@ -157,7 +162,13 @@ def _compare_filter_values(left, comparison_operator, right):
     return operation(left, right)
 
 
-def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, Any]:
+def generate_dashboard_data(
+    df: pd.DataFrame,
+    viz_spec: VizSpec,
+    *,
+    semantic_contract: Optional[Mapping[str, Any]] = None,
+    semantic_contract_prevalidated: bool = False,
+) -> Dict[str, Any]:
     """
     Генерирует данные дашборда на основе VizSpec
     Возвращает данные в формате, совместимом с существующим дашбордом
@@ -179,25 +190,62 @@ def generate_dashboard_data(df: pd.DataFrame, viz_spec: VizSpec) -> Dict[str, An
         result["decision_brief"] = build_decision_brief(result, readiness)
         return result
     
+    validated_contract = (
+        (
+            semantic_contract
+            if semantic_contract_prevalidated
+            else validate_semantic_contract(df, semantic_contract)
+        )
+        if semantic_contract is not None
+        else None
+    )
+
     # Применяем фильтры
     filtered_df = _apply_filters(df, viz_spec.filters)
     
+    column_profiles = (
+        profiles_from_semantic_contract(
+            filtered_df,
+            validated_contract,
+            prevalidated=True,
+        )
+        if validated_contract is not None
+        else profile_dataframe_columns(filtered_df)
+    )
+
     # Генерируем KPIs
     kpis = _generate_kpis(filtered_df, viz_spec.metrics)
     
     # Генерируем графики
-    charts = _generate_charts(filtered_df, viz_spec.charts)
+    charts = _generate_charts(
+        filtered_df,
+        viz_spec.charts,
+        column_profiles=column_profiles,
+    )
     
     # Генерируем таблицы
-    tables = _generate_tables(filtered_df, viz_spec)
+    tables = _generate_tables(
+        filtered_df,
+        viz_spec,
+        column_profiles=column_profiles,
+    )
     
     # AI summary
     ai_summary = _generate_ai_summary(filtered_df, viz_spec)
 
     # Доказательные выводы рассчитываются детерминированно, без LLM.
-    insights = EvidenceBasedInsightEngine(filtered_df).generate()
-    statistical_validation = StatisticalValidationEngine(filtered_df).analyze()
-    pattern_analysis = AnomalySegmentationEngine(filtered_df).analyze()
+    insights = EvidenceBasedInsightEngine(
+        filtered_df,
+        column_profiles=column_profiles,
+    ).generate()
+    statistical_validation = StatisticalValidationEngine(
+        filtered_df,
+        column_profiles=column_profiles,
+    ).analyze()
+    pattern_analysis = AnomalySegmentationEngine(
+        filtered_df,
+        column_profiles=column_profiles,
+    ).analyze()
     readiness = DatasetReadinessEngine(filtered_df).assess()
 
     result = {
@@ -361,6 +409,7 @@ def _format_audit_value(
     value: Any,
     *,
     metric: str | None = None,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
 ) -> str:
     """Format a table cell for review without changing the source value."""
     if value is None or pd.isna(value):
@@ -379,7 +428,7 @@ def _format_audit_value(
     if metric == "count":
         return f"{numeric:,.0f}"
 
-    kind = semantic_value_kind(frame, column)
+    kind = semantic_value_kind(frame, column, column_profiles)
     if kind == "ratio":
         return f"{numeric:.2%}"
     if kind == "percent":
@@ -389,13 +438,22 @@ def _format_audit_value(
     return _format_value(numeric, "number")
 
 
-def _generate_charts(df: pd.DataFrame, charts: List[Chart]) -> List[Dict[str, str]]:
+def _generate_charts(
+    df: pd.DataFrame,
+    charts: List[Chart],
+    *,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> List[Dict[str, str]]:
     """Генерирует графики"""
     chart_list = []
     
     for chart in charts:
         try:
-            html = _create_chart_html(df, chart)
+            html = _create_chart_html(
+                df,
+                chart,
+                column_profiles=column_profiles,
+            )
             chart_list.append({
                 "title": chart.title or f"График: {chart.type}",
                 "type": chart.type,
@@ -414,7 +472,12 @@ def _generate_charts(df: pd.DataFrame, charts: List[Chart]) -> List[Dict[str, st
     return chart_list
 
 
-def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
+def _create_chart_html(
+    df: pd.DataFrame,
+    chart: Chart,
+    *,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> str:
     """Создает HTML графика; аналитические выводы формируются отдельно."""
     
     if chart.type == "bar":
@@ -531,7 +594,12 @@ def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
             value_counts = df[chart.x].value_counts().sort_index()
             fig = px.area(x=value_counts.index, y=value_counts.values, title=chart.title)
 
-    apply_evidence_chart_theme(fig, chart, df)
+    apply_evidence_chart_theme(
+        fig,
+        chart,
+        df,
+        column_profiles=column_profiles,
+    )
 
     # Plotly загружается один раз шаблоном страницы.
     return fig.to_html(
@@ -543,12 +611,22 @@ def _create_chart_html(df: pd.DataFrame, chart: Chart) -> str:
     )
 
 
-def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]]:
+def _generate_tables(
+    df: pd.DataFrame,
+    viz_spec: VizSpec,
+    *,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """Генерирует таблицы"""
     tables = []
     overview_rows = [
         [
-            _format_audit_value(df, column, value)
+            _format_audit_value(
+                df,
+                column,
+                value,
+                column_profiles=column_profiles,
+            )
             for column, value in zip(df.columns, row)
         ]
         for row in df.head(10).itertuples(index=False, name=None)
@@ -562,7 +640,15 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
     })
     
     # Статистика по числовым колонкам
-    numeric_cols = df.select_dtypes(include='number').columns
+    numeric_cols = (
+        [
+            column
+            for column in df.columns
+            if (column_profiles or {}).get(column, {}).get("role") == "measure"
+        ]
+        if column_profiles is not None
+        else list(df.select_dtypes(include='number').columns)
+    )
     if len(numeric_cols) > 0:
         stats_df = df[numeric_cols].describe()
         tables.append({
@@ -576,6 +662,7 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
                         column,
                         value,
                         metric=str(metric),
+                        column_profiles=column_profiles,
                     )
                     for column, value in row.items()
                 ]
@@ -584,12 +671,26 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
         })
     
     # Топ значения по категориальным колонкам
-    categorical_cols = df.select_dtypes(
-        include=["object", "string", "category", "bool"]
-    ).columns
+    categorical_cols = (
+        [
+            column
+            for column in df.columns
+            if (column_profiles or {}).get(column, {}).get("role") == "category"
+        ]
+        if column_profiles is not None
+        else list(
+            df.select_dtypes(
+                include=["object", "string", "category", "bool"]
+            ).columns
+        )
+    )
     useful_categorical_cols = [
         col for col in categorical_cols
-        if _is_useful_category_summary(df, col)
+        if _is_useful_category_summary(
+            df,
+            col,
+            column_profiles=column_profiles,
+        )
     ]
     for col in useful_categorical_cols[:3]:
         value_counts = df[col].value_counts().head(10)
@@ -598,8 +699,19 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
             "headers": [col, "Count"],
             "rows": [
                 [
-                    _format_audit_value(df, col, value),
-                    _format_audit_value(df, None, count, metric="count"),
+                    _format_audit_value(
+                        df,
+                        col,
+                        value,
+                        column_profiles=column_profiles,
+                    ),
+                    _format_audit_value(
+                        df,
+                        None,
+                        count,
+                        metric="count",
+                        column_profiles=column_profiles,
+                    ),
                 ]
                 for value, count in value_counts.items()
             ],
@@ -608,8 +720,18 @@ def _generate_tables(df: pd.DataFrame, viz_spec: VizSpec) -> List[Dict[str, Any]
     return tables
 
 
-def _is_useful_category_summary(df: pd.DataFrame, column: str) -> bool:
+def _is_useful_category_summary(
+    df: pd.DataFrame,
+    column: str,
+    *,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> bool:
     """Exclude date-like and near-unique fields from Top Values tables."""
+    if column_profiles is not None:
+        return column_profiles.get(column, {}).get("role") == "category" and (
+            int(column_profiles.get(column, {}).get("unique_count", 0)) < 20
+            or float(column_profiles.get(column, {}).get("unique_ratio", 0.0)) <= 0.5
+        )
     normalized = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(column))
     terms = {
         part for part in re.split(r"[^a-z0-9]+", normalized.lower()) if part

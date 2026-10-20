@@ -168,6 +168,7 @@ def parse_prompt_to_viz_spec(
     df_columns: List[str],
     *,
     dataframe: Optional[Any] = None,
+    column_profiles: Optional[Mapping[str, Mapping[str, Any]]] = None,
 ) -> VizSpec:
     """
     Парсинг текстового промпта в VizSpec
@@ -176,7 +177,11 @@ def parse_prompt_to_viz_spec(
     # Очищаем промпт
     prompt = prompt.strip().lower()
     
-    column_profiles = _profile_dataframe_columns(dataframe, df_columns)
+    column_profiles = (
+        dict(column_profiles)
+        if column_profiles is not None
+        else _profile_dataframe_columns(dataframe, df_columns)
+    )
     excluded_columns = _prompt_excluded_columns(prompt, df_columns)
 
     # Эвристический парсинг
@@ -333,7 +338,17 @@ def _is_useful_automatic_category(
     return unique_count < 20 or unique_count / non_missing_count <= 0.5
 
 
-def _metric_format_for_column(column: str) -> str:
+def _metric_format_for_column(
+    column: str,
+    column_profiles: Optional[Mapping[str, Mapping[str, Any]]] = None,
+) -> str:
+    unit = (column_profiles or {}).get(column, {}).get("unit")
+    if unit == "currency":
+        return "currency"
+    if unit in {"ratio", "percent"}:
+        return "percent"
+    if unit in {"number", "count"}:
+        return "number"
     terms = _column_terms(column)
     if terms & _CURRENCY_TERMS:
         return "currency"
@@ -396,7 +411,7 @@ def _sanitize_generated_spec(
         ):
             continue
         if column:
-            expected_format = _metric_format_for_column(column)
+            expected_format = _metric_format_for_column(column, profiles)
             if metric.fmt in {None, "number"} and expected_format != "number":
                 metric = metric.model_copy(update={"fmt": expected_format})
         metrics.append(metric)
@@ -580,7 +595,7 @@ def _parse_heuristics(
             metrics.append(Metric(
                 title=f"Total {_humanize_column(column)}",
                 expr=f"sum({column})",
-                fmt=_metric_format_for_column(column),
+                fmt=_metric_format_for_column(column, profiles),
             ))
 
         metrics.append(Metric(title="Record Count", expr="count()", fmt="number"))
@@ -593,7 +608,7 @@ def _parse_heuristics(
             metrics.append(Metric(
                 title=f"Average {_humanize_column(col)}",
                 expr=expression,
-                fmt=_metric_format_for_column(col),
+                fmt=_metric_format_for_column(col, profiles),
             ))
             represented_expressions.add(expression)
             if len(metrics) >= MAX_AUTOMATIC_METRICS:
