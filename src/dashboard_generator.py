@@ -432,6 +432,7 @@ def generate_dashboard_data(df, target_column=None):
             "task_type": ml_result.get("task_type"),
             "model_name": ml_result.get("model_name"),
             "metric": ml_result.get("metric", "Нет метрики"),
+            "predictive_support": ml_result.get("predictive_support", {}),
             "plot": ml_result.get("feature_importance_plot", None),
             "model_comparison": ml_result.get("model_comparison", []),
             "cv_folds": ml_result.get("cv_folds", 0),

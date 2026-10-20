@@ -101,8 +101,8 @@ must not be represented as a confirmed business definition.
 | `vibedash/anomaly_segmentation_engine.py` | Fixed-budget anomaly review ranking, gap-statistic clusterability gating, and subsample-tested exploratory segmentation | Estimated anomaly prevalence, confirmed incidents, or a production clustering service |
 | `vibedash/analysis_jobs.py` | Atomic job states, scoped lifecycle persistence, queue capacity, bounded background dispatch | Distributed task execution |
 | `vibedash/audit_manifest.py` | Versioned dataset, schema, request, specification, and evidence fingerprints | Raw-row persistence or identity management |
-| `src/quality_evaluation.py` | Known-signal and null-signal analytical regression scenarios | Domain certification or causal validation |
-| `src/ml_predictor.py` | Preprocessing, cross-validated model selection, holdout metrics, explainability | Model serving or retraining |
+| `src/quality_evaluation.py` | Known-signal and null-signal regression scenarios across evidence, statistics, anomaly/segmentation, and prediction | Domain certification or causal validation |
+| `src/ml_predictor.py` | Train-only preprocessing, exact target-proxy checks, cross-validated model selection, untouched-holdout metrics, baseline/permutation support, and explainability | Temporal leakage proof, model serving, or retraining |
 | `src/model_reliability.py` | Split stability and supported subgroup diagnostics | Fairness certification |
 | `src/data_drift.py` | Aggregate profiles and baseline-to-current comparisons | Persistent storage |
 | `src/drift_store.py` | SQLite run history, retention, deduplication, alerts | Drift calculation |
@@ -207,14 +207,15 @@ The comparison resource contract is bounded in both request and process memory: 
 The predictive block is an evaluation pipeline rather than an AutoML deployment service.
 
 1. A target is selected explicitly or inferred from suitable columns.
-2. Identifier-like, duplicated-target, constant, unsupported, and high-cardinality leakage risks are removed.
+2. Identifier-like, constant, unsupported, and high-cardinality leakage risks are removed. Exact target copies, exact reversible low-cardinality encodings, and explicitly named exact affine target derivatives are also excluded.
 3. Data is split before preprocessing.
 4. Imputation, scaling, and one-hot encoding are fitted only on training rows.
 5. Candidate model families are compared with cross-validation inside the training partition.
 6. The selected pipeline is evaluated once on the reserved holdout partition.
-7. Results include naive-baseline comparison, model diagnostics, holdout permutation importance, and reliability notes.
+7. A fixed-holdout target-permutation test asks whether the observed improvement over the naive baseline is stronger than chance under the documented threshold.
+8. Results include the structured support decision, model diagnostics, holdout permutation importance, and reliability notes.
 
-This design supports honest exploratory evaluation. It does not establish that a model is ready for production deployment.
+This design supports honest exploratory evaluation. A positive support decision requires both improvement over the naive baseline and a holdout permutation p-value at or below 0.05. It does not establish feature availability at prediction time, causal validity, fairness, robustness under drift, or production readiness; those still require domain and temporal validation.
 
 ## Statistical-evidence boundary
 

@@ -23,7 +23,9 @@
         294
       ],
       "minimum_silhouette_score": 0.4,
-      "minimum_stability_score": 0.8
+      "minimum_stability_score": 0.8,
+      "minimum_predictive_mae_improvement": 0.8,
+      "maximum_predictive_permutation_p_value": 0.05
     },
     "null_noise_guardrail": {
       "seed": 2026,
