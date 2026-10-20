@@ -1,6 +1,6 @@
 """Deterministic anomaly review ranking and guarded exploratory segmentation."""
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -26,11 +26,20 @@ STABILITY_SEEDS = (43, 44, 45, 46, 47)
 class AnomalySegmentationEngine:
     """Find unusual rows and exploratory segments using robust numeric features."""
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        *,
+        column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+    ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         self.df = df
-        self.column_profiles = profile_dataframe_columns(df)
+        self.column_profiles = (
+            dict(column_profiles)
+            if column_profiles is not None
+            else profile_dataframe_columns(df)
+        )
 
     def analyze(self, max_anomalies: int = 10) -> Dict[str, Any]:
         features = self._feature_columns()

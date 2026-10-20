@@ -1,7 +1,7 @@
 """Auditable statistical validation for automatically generated hypotheses."""
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -54,14 +54,24 @@ class StatisticalValidationEngine:
     a confidence interval for the mean difference and Hedges' g.
     """
 
-    def __init__(self, df: pd.DataFrame, alpha: float = DEFAULT_ALPHA):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        alpha: float = DEFAULT_ALPHA,
+        *,
+        column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+    ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         if not 0 < alpha < 1:
             raise ValueError("alpha must be between 0 and 1")
         self.df = df
         self.alpha = float(alpha)
-        self.column_profiles = profile_dataframe_columns(df)
+        self.column_profiles = (
+            dict(column_profiles)
+            if column_profiles is not None
+            else profile_dataframe_columns(df)
+        )
 
     def analyze(self, max_results: int = 6) -> Dict[str, Any]:
         """Return corrected test results, ordered by adjusted p-value."""

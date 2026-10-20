@@ -8,6 +8,7 @@ from unittest.mock import patch
 from werkzeug.security import generate_password_hash
 
 import web_app
+from src.demo_data import create_saas_growth_demo
 from vibedash.analysis_jobs import AnalysisJobStore
 from vibedash.accounts import (
     ACCOUNT_ID_PATTERN,
@@ -1822,7 +1823,7 @@ class AccountRouteIntegrationTests(unittest.TestCase):
         def validation_that_deletes_account(*_args, **_kwargs):
             self.assertTrue(account_store.delete_account(account_id, self.PASSWORD))
             AnalysisJobStore(self.job_path).erase_scope_if_idle(scope_id)
-            return object()
+            return create_saas_growth_demo()
 
         with patch('vibedash.routes._load_vibedash_csv', side_effect=validation_that_deletes_account), \
              patch('vibedash.routes.DatasetReadinessEngine') as readiness:

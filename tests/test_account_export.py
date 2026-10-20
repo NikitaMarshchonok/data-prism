@@ -76,7 +76,7 @@ class AccountExportTests(unittest.TestCase):
         normal = {
             "id": self.job_id,
             "manifest": {
-                "analysis_contract": "vibedash-evidence-v2",
+                "analysis_contract": "vibedash-evidence-v3",
                 "dataset": {"content_sha256": "a" * 64, "source_rows": 5, "column_count": 2},
                 "evidence": {"insight_count": 2, "readiness": {"status": "ready"}},
             },
@@ -91,6 +91,7 @@ class AccountExportTests(unittest.TestCase):
             },
         }
         result = self.build(jobs=[normal, comparison])
+        self.assertEqual(result["jobs"][0]["manifest"]["analysis_contract"], "vibedash-evidence-v3")
         self.assertEqual(result["jobs"][0]["manifest"]["dataset"]["source_rows"], 5)
         self.assertNotIn("filename", result["jobs"][1]["manifest"]["inputs"]["baseline"])
         self.assertEqual(result["jobs"][1]["manifest"]["comparison"]["counts"]["tested_metrics"], 3)

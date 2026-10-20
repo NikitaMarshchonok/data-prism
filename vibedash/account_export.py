@@ -59,6 +59,7 @@ _ERROR_CODES = frozenset({
 })
 _ANALYSIS_CONTRACTS = frozenset({
     "vibedash-evidence-v2",
+    "vibedash-evidence-v3",
     "vibedash-period-comparison-v1",
 })
 _READINESS_CONTRACTS = frozenset({"dataset-readiness-v1"})
@@ -202,7 +203,7 @@ def _normal_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     decision_brief = _mapping(evidence.get("decision_brief"))
     result: dict[str, Any] = {"kind": "normal"}
     _put(result, "manifest_version", _safe_count(manifest.get("manifest_version")))
-    _put(result, "analysis_contract", _enum(manifest.get("analysis_contract"), frozenset({"vibedash-evidence-v2"})))
+    _put(result, "analysis_contract", _enum(manifest.get("analysis_contract"), _ANALYSIS_CONTRACTS))
     generated = _timestamp(manifest.get("generated_at"))
     _put(result, "generated_at", generated)
 

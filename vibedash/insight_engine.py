@@ -5,7 +5,7 @@ LLM can later explain them without becoming the source of truth.
 """
 
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -36,11 +36,20 @@ class EvidenceInsight:
 class EvidenceBasedInsightEngine:
     """Produce conservative findings that can be traced back to the dataset."""
 
-    def __init__(self, df: pd.DataFrame):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        *,
+        column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+    ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         self.df = df
-        self.column_profiles = profile_dataframe_columns(df)
+        self.column_profiles = (
+            dict(column_profiles)
+            if column_profiles is not None
+            else profile_dataframe_columns(df)
+        )
 
     def generate(self, max_insights: int = 6) -> List[Dict[str, Any]]:
         if max_insights < 1:

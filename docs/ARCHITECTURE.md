@@ -56,26 +56,35 @@ unknown chart columns. Date-like and near-unique text fields are also excluded
 from categorical `Top Values` audit tables. The fixed synthetic demo keeps its
 explicit versioned specification and does not depend on these prompt heuristics.
 
-For uploaded data, the same boundary profiles values as well as column names.
+For uploaded data, the same boundary first profiles values as well as column names.
 Parseable date strings become temporal axes; sequential integer fields and
 identifier names are excluded from measures; low-cardinality integer codes
 become categories unless their names carry an explicit measurement meaning.
 Exact column names mentioned in the request are prioritized for metrics,
 trends, and grouped comparisons, while explicit English or Russian exclusions
-are enforced again after optional LLM output. These rules reduce unsafe
-automatic interpretations but do not replace domain definitions or a future
-user-editable schema contract.
+are enforced again after optional LLM output. Before an uploaded single-dataset
+VibeDash job is created, the browser presents that proposal as an editable
+`confirmed-semantic-contract-v1`: role, numeric unit, optional target/time
+selection, and predictive exclusion are explicit. Any edit removes confirmation.
+The server then validates the submitted contract against the actual CSV and
+fails closed on schema drift, incompatible dtype/role pairs, invalid units,
+multiple target/time fields, or target/identifier leakage into predictors.
 
-The deterministic analysis stack shares this data-aware role contract through
-`src/column_semantics.py`. Every profiled field receives exactly one role:
+The deterministic analysis stack shares the initial data-aware role proposal
+through `src/column_semantics.py`. Every profiled field receives exactly one role:
 `measure`, `category`, `temporal`, or `identifier`. Dashboard specification,
 evidence findings, statistical validation, anomaly/segment analysis,
 two-period inference, drift profiling, and predictive feature preparation use
 that assignment instead of treating every numeric dtype as a measured
 quantity. This prevents row numbers and integer category codes from entering
 correlations, mean comparisons, anomaly models, or regression features merely
-because pandas stores them as numbers. The assignment remains heuristic and
-must not be represented as a confirmed business definition.
+because pandas stores them as numbers. In the single-dataset VibeDash flow,
+`src/semantic_contract.py` overlays the user-confirmed role and unit onto fresh
+aggregate profiles before dashboard specification, evidence findings,
+statistical validation, anomaly/segment analysis, charts, and audit tables.
+The two-period comparison, drift interfaces, and standalone predictive API
+still consume the heuristic shared profile; they must not yet be described as
+covered by user-confirmed semantics.
 
 ## Component map
 
@@ -85,6 +94,7 @@ must not be represented as a confirmed business definition.
 | `src/observability.py` | Request correlation, structured application logs, deployment version, response safety headers | External log storage or tracing backend |
 | `src/data_loader.py` | Format validation, bounded loading, normalization | Business interpretation |
 | `src/column_semantics.py` | Shared data-aware analytical roles used by supported deterministic engines | Confirmed domain meaning or user-authored schema overrides |
+| `src/semantic_contract.py` | Bounded proposal, validation, fingerprinting, and profile overrides for confirmed single-dataset VibeDash semantics | Domain truth, ontology management, or semantics for comparison/drift/direct ML flows |
 | `src/statistical_primitives.py` | Validated Pearson intervals, Welch inference, Hedges' g, Benjamini–Hochberg FDR, PSI, and total-variation calculations shared across engines | Eligibility rules, semantic interpretation, or causal claims |
 | `src/demo_data.py` | Deterministic synthetic SaaS data for the product demo | User data or production fixtures |
 | `src/data_analyzer.py` | Descriptive profiling and data-quality checks | Predictive modelling |
@@ -137,11 +147,11 @@ sequenceDiagram
 
 Uploaded source files receive server-generated identifiers. The main workflow stores a normalized CSV working copy for the session; these runtime files are excluded from version control.
 
-The VibeDash landing page also exposes a one-click demonstration path. For user uploads, a JavaScript client first calls the readiness endpoint, which reads the request stream and returns only aggregate checks. No Data Prism preflight working copy is retained. If analysis is allowed, the client creates a session-scoped job, polls its non-sensitive status representation, and opens the stored result after the job reaches `completed`. The bounded dispatcher atomically claims queued work so duplicate polls cannot execute one job twice. The original synchronous endpoint remains a progressive fallback and applies the same readiness gate.
+The VibeDash landing page also exposes a one-click demonstration path. For user uploads, a JavaScript client first calls the readiness endpoint, which reads the request stream and returns aggregate checks plus a schema-only semantic proposal. No Data Prism preflight working copy is retained. If analysis is allowed, the user must confirm the semantic contract before the client can create a session-scoped job. The job route rereads the CSV, revalidates the contract, and only then persists the job payload. The browser polls its non-sensitive status representation and opens the stored result after the job reaches `completed`. The bounded dispatcher atomically claims queued work so duplicate polls cannot execute one job twice. Direct synchronous upload clients are held to the same semantic confirmation boundary; the fixed synthetic demo receives a deterministic server-confirmed contract.
 
 The demo generates a fixed synthetic dataset and uses a versioned dashboard specification, bypassing optional prompt interpretation so it remains reproducible across machines. Both synchronous and background entry points call the same analysis-and-session pipeline.
 
-On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the signed guest-browser or pilot-account scope; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 2 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
+On completion, that shared pipeline creates a deterministic decision brief with at most three priorities, each tied to calculated evidence, an explicit decision risk, and a verification action. It then stores a bounded audit manifest with the dashboard session. The background lifecycle also stores the manifest in the job record. The history route queries recent jobs by the signed guest-browser or pilot-account scope; status, result, history, and manifest endpoints never authorize by a job identifier alone. Version 3 manifests include the analysis contract and deployment version, SHA-256 fingerprints, schema metadata, the confirmed schema-only semantic contract and its fingerprint, coverage and truncation fields, readiness and brief summaries, and evidence counts. They do not include source row values.
 
 A completed background result can create a decision case from one Decision Brief priority. The case stores an immutable, bounded evidence snapshot plus the user-defined owner, decision, success metric, target, and review date. Outcome updates move it between `tracking`, `validated`, `invalidated`, and `cancelled`; terminal states require an observed-result note, while validated and invalidated states additionally require a complete numeric baseline, observed value, shared unit, and observation period. A pure validator canonicalizes bounded finite decimals, checks the period ordering, and recomputes absolute and relative change. The additive SQLite JSON column defaults to an empty object for legacy cases, so older narrative outcomes remain readable without being represented as structured measurements. Both reads and writes require the same signed guest-browser or pilot-account scope, and form writes require a session-bound CSRF token. The case intentionally outlives the shorter analysis-artifact window, so the snapshot remains useful after the source result expires.
 

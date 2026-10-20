@@ -246,6 +246,30 @@ textarea::placeholder { color: #61736d; }
 .readiness-check p { margin: 10px 0 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .readiness-check small { color: #c1d2cc; font-size: 11px; line-height: 1.45; }
 .readiness-privacy { margin: 18px 0 0; color: #71877f; font-size: 10px; }
+.semantic-panel { grid-column: 1 / -1; padding: 24px; border: 1px solid rgba(142,182,247,.3); border-radius: 18px; background: linear-gradient(145deg, rgba(13,28,25,.96), rgba(10,22,30,.92)); }
+.semantic-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.semantic-panel h3 { margin: 5px 0 0; font-size: 20px; }
+.semantic-status { padding: 7px 11px; border: 1px solid rgba(240,189,114,.35); border-radius: 999px; color: var(--warm); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
+.semantic-status.is-confirmed { border-color: rgba(114,224,182,.42); color: var(--accent); }
+.semantic-intro { max-width: 920px; margin: 16px 0 0; color: #aabdb6; font-size: 13px; line-height: 1.6; }
+.semantic-error { margin-top: 16px; padding: 13px 15px; border: 1px solid rgba(244,114,114,.5); border-radius: 11px; background: rgba(95,31,31,.24); color: #ffd4d4; font-size: 13px; line-height: 1.5; }
+.semantic-error:focus { outline: 2px solid #f0a7a7; outline-offset: 2px; }
+.semantic-primary-fields { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 20px; }
+.semantic-primary-fields label { display: grid; gap: 7px; color: var(--text); font-size: 12px; font-weight: 600; }
+.semantic-primary-fields small { color: #839a92; font-size: 10px; font-weight: 400; line-height: 1.45; }
+.semantic-panel select { min-height: 44px; width: 100%; padding: 10px 34px 10px 11px; border: 1px solid var(--border); border-radius: 10px; outline: 0; background: #07130f; color: var(--text); }
+.semantic-panel select:focus { border-color: rgba(114,224,182,.62); box-shadow: 0 0 0 3px rgba(114,224,182,.1); }
+.semantic-panel select:disabled { color: #71877f; opacity: .75; }
+.semantic-table-wrap { margin-top: 20px; overflow-x: auto; border: 1px solid var(--border); border-radius: 13px; }
+.semantic-table { width: 100%; min-width: 720px; border-collapse: collapse; }
+.semantic-table th, .semantic-table td { padding: 11px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+.semantic-table tr:last-child th, .semantic-table tr:last-child td { border-bottom: 0; }
+.semantic-table thead th { color: var(--accent); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.semantic-table tbody th { max-width: 250px; color: #d8e7e2; font-size: 12px; overflow-wrap: anywhere; }
+.semantic-table td { min-width: 150px; }
+.semantic-exclude { display: inline-flex; align-items: center; min-height: 44px; gap: 9px; color: #b8cbc4; font-size: 12px; }
+.semantic-exclude input, .semantic-confirmation input { width: 18px; height: 18px; accent-color: var(--accent); }
+.semantic-confirmation { display: flex; align-items: center; min-height: 44px; gap: 11px; margin-top: 18px; color: var(--text); font-size: 13px; font-weight: 600; }
 .submit-button { grid-column: 1 / -1; justify-self: end; min-width: 270px; }
 .submit-button:disabled { cursor: wait; opacity: 0.7; }
 .loading-indicator { grid-column: 1 / -1; justify-self: end; color: var(--muted); font-size: 12px; }
@@ -305,6 +329,7 @@ footer p { margin: 0; text-align: center; }
     .period-comparison-heading { grid-template-columns: 1fr; gap: 10px; }
     .period-file-grid { grid-template-columns: 1fr; }
     .readiness-checks { grid-template-columns: 1fr; }
+    .semantic-primary-fields { grid-template-columns: 1fr; }
     .capability-grid { grid-template-columns: repeat(2, 1fr); }
 }
 

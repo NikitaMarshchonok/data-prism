@@ -1,4 +1,5 @@
 import os
+import json
 import sqlite3
 import time
 import unittest
@@ -140,6 +141,85 @@ class VibeDashJobRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["readiness"]["analysis_allowed"])
         self.assertEqual(payload["readiness"]["contract"], "dataset-readiness-v1")
+        self.assertEqual(
+            payload["semantic_contract"]["contract"],
+            "confirmed-semantic-contract-v1",
+        )
+        self.assertFalse(payload["semantic_contract"]["confirmed"])
+        self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
+    @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
+    def test_uploaded_dataset_requires_confirmed_semantic_contract(self, submit):
+        csv_rows = "date,revenue,region\n" + "\n".join(
+            f"2026-01-{(index % 28) + 1:02d},{index * 10},{'north' if index % 2 else 'south'}"
+            for index in range(40)
+        )
+        with web_app.app.test_client() as client:
+            response = client.post(
+                "/vibedash/jobs",
+                data={
+                    "prompt": "Analyze this table",
+                    "datafile": (BytesIO(csv_rows.encode()), "clean.csv"),
+                },
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 422)
+        self.assertTrue(payload["semantic_contract_error"])
+        self.assertIn("confirm", payload["error"].lower())
+        submit.assert_not_called()
+        self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
+
+    @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
+    def test_confirmed_contract_is_revalidated_and_queued(self, submit):
+        csv_rows = "date,revenue,region\n" + "\n".join(
+            f"2026-01-{(index % 28) + 1:02d},{index * 10},{'north' if index % 2 else 'south'}"
+            for index in range(40)
+        )
+        with web_app.app.test_client() as client:
+            proposal = client.post(
+                "/vibedash/readiness",
+                data={"datafile": (BytesIO(csv_rows.encode()), "clean.csv")},
+            ).get_json()["semantic_contract"]
+            proposal["confirmed"] = True
+            response = client.post(
+                "/vibedash/jobs",
+                data={
+                    "prompt": "Analyze this table",
+                    "semantic_contract": json.dumps(proposal),
+                    "datafile": (BytesIO(csv_rows.encode()), "clean.csv"),
+                },
+            )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.get_json()["status"], "queued")
+        submit.assert_called_once()
+
+    @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
+    def test_contract_for_different_schema_is_rejected_and_upload_removed(self, submit):
+        csv_rows = "date,revenue,region\n" + "\n".join(
+            f"2026-01-{(index % 28) + 1:02d},{index * 10},north"
+            for index in range(40)
+        )
+        with web_app.app.test_client() as client:
+            proposal = client.post(
+                "/vibedash/readiness",
+                data={"datafile": (BytesIO(csv_rows.encode()), "clean.csv")},
+            ).get_json()["semantic_contract"]
+            proposal["confirmed"] = True
+            proposal["columns"][0]["name"] = "tampered"
+            response = client.post(
+                "/vibedash/jobs",
+                data={
+                    "prompt": "Analyze this table",
+                    "semantic_contract": json.dumps(proposal),
+                    "datafile": (BytesIO(csv_rows.encode()), "clean.csv"),
+                },
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertTrue(response.get_json()["semantic_contract_error"])
+        submit.assert_not_called()
         self.assertEqual(list(Path(web_app.app.config["UPLOAD_FOLDER"]).iterdir()), [])
 
     @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
@@ -307,7 +387,17 @@ class VibeDashJobRouteTests(unittest.TestCase):
         self.assertIn("Analysis history", history.get_data(as_text=True))
         self.assertIn("Dataset SHA-256", history.get_data(as_text=True))
         self.assertEqual(manifest.status_code, 200)
-        self.assertEqual(manifest.get_json()["manifest_version"], 2)
+        manifest_payload = manifest.get_json()
+        self.assertEqual(manifest_payload["manifest_version"], 3)
+        self.assertEqual(
+            manifest_payload["semantics"]["contract"],
+            "confirmed-semantic-contract-v1",
+        )
+        self.assertTrue(manifest_payload["semantics"]["confirmed"])
+        self.assertRegex(
+            manifest_payload["semantics"]["sha256"],
+            r"^[0-9a-f]{64}$",
+        )
         self.assertIn("attachment", manifest.headers["Content-Disposition"])
 
     @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)

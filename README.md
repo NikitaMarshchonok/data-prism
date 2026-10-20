@@ -16,6 +16,7 @@ The project is designed as a decision-support system: every important conclusion
 | --- | --- |
 | Data intake | Validated uploads, safe filenames, normalized working copies, configurable size limits, and row limits |
 | Dataset readiness | Pre-analysis score, blocking quality contracts, privacy/schema warnings, and actionable remediation without retaining preflight rows |
+| Confirmed semantics | Required review of column roles, units, optional target/time fields, and predictive exclusions before uploaded VibeDash data is analyzed |
 | Profiling | Schema summary, missingness, duplicates, constant columns, distributions, correlations, and outlier diagnostics |
 | Evidence engine | Ranked findings with supporting metrics, confidence levels, sample sizes, and recommended next steps |
 | Decision brief | Up to three ranked priorities that connect a finding to evidence, decision risk, and the next verification action |
@@ -34,8 +35,9 @@ The project is designed as a decision-support system: every important conclusion
 ```mermaid
 flowchart LR
     A[Tabular dataset] --> P[Readiness preflight]
-    P -->|Ready| Q[Bounded analysis job]
+    P -->|Ready| S[Confirm roles and units]
     P -->|Blocked| X[Remediation guidance]
+    S --> Q[Bounded analysis job]
     Q --> B[Validated loader]
     B --> C[Quality and profiling]
     C --> D[Evidence and statistical engines]
@@ -74,9 +76,9 @@ python -m src.demo_data --output data/demo/saas_growth_demo.csv
 
 The generator is deterministic by default, contains no personal information, and deliberately includes missing values and operational incidents so reviewers can verify that the analysis panels produce meaningful results.
 
-In a JavaScript-enabled browser, VibeDash first performs a non-retained dataset preflight. Blocking issues such as an unusably small sample, ambiguous columns, overwhelming missingness, or material duplicate-row distortion stop the run before a job or retained application working copy is created. Warnings remain visible but allow the user to continue with explicit limitations.
+In a JavaScript-enabled browser, VibeDash first performs a non-retained dataset preflight. Blocking issues such as an unusably small sample, ambiguous columns, overwhelming missingness, or material duplicate-row distortion stop the run before a job or retained application working copy is created. Warnings remain visible but allow the user to continue with explicit limitations. An allowed upload then exposes the inferred analytical role and unit for every column. The user must review and confirm this schema-only contract; changing any field removes confirmation. The server validates it again against the uploaded CSV before creating a job.
 
-After preflight, VibeDash submits analysis through a durable job lifecycle and displays `queued` or `running` progress until the result is ready. Refreshing the page does not remove the SQLite job record. The original synchronous endpoint remains as a progressive fallback for clients without JavaScript and enforces the same readiness contract.
+After confirmation, VibeDash submits analysis through a durable job lifecycle and displays `queued` or `running` progress until the result is ready. Refreshing the page does not remove the SQLite job record. Direct clients of the synchronous upload endpoint must also provide a valid confirmed semantic contract; the built-in synthetic demo remains available without manual schema review because its generated dataset and specification are fixed. The current confirmed-contract path governs the single-dataset VibeDash workflow. Two-period comparison, drift tools, and the standalone predictive API still use the shared conservative heuristic role profiler and remain separate follow-up integrations.
 
 The landing page also provides **Compare two periods** for an independent, observational before/after comparison. Upload two CSV files, label them baseline and current, and keep the row unit and metric definitions aligned. The report checks schema changes and distribution drift, then reports numeric current-minus-baseline mean deltas. For eligible shared numeric columns it runs Welch independent-samples t-tests, 95% confidence intervals, Hedges' g, and Benjamini–Hochberg false-discovery-rate adjustment. These are screening statistics: the comparison is non-causal and does not show that a period change caused an outcome; seasonality, population mix, confounding, and dependence can explain differences.
 
@@ -86,7 +88,7 @@ The browser workflow submits `POST /vibedash/comparisons/jobs`, polls the scoped
 
 The comparison HTML download is server-named, generated in memory, and is not a second retained artifact. It reuses the comparison template with trusted CSS inlined, no live dependencies, and a restrictive local-document CSP. The standalone page includes print CSS for browser Print/Save as PDF; server-side PDF generation is not part of this flow.
 
-Completed background runs appear under **History** for the same signed guest-browser or pilot-account scope. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, request and specification fingerprints, row/column coverage, truncation state, readiness outcome, decision-brief coverage, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
+Completed background runs appear under **History** for the same signed guest-browser or pilot-account scope. Each result includes a versioned audit manifest with the deployment version, source and schema SHA-256 fingerprints, confirmed schema semantics and their fingerprint, request and specification fingerprints, row/column coverage, truncation state, readiness outcome, decision-brief coverage, and evidence counts. Manifests contain no source row values and follow the same temporary retention policy as the result.
 
 From a completed background result, a user can turn one ranked priority into a decision case before the outcome is known. The case freezes a bounded evidence summary and audit fingerprint together with the owner, decision, success metric, target, and review date. Later, the same guest-browser or pilot-account scope records whether the target was validated, invalidated, or cancelled. Validated and invalidated outcomes require a structured baseline value, observed value, shared unit, and observation period; Data Prism deterministically calculates the absolute and relative change. This creates an auditable evidence-to-outcome loop, but it does not infer causality or prove that the action caused the observed result.
 
@@ -320,6 +322,7 @@ data-prism/
 │   └── quality_gate.json      # Reviewed behavioural acceptance thresholds
 ├── src/
 │   ├── column_semantics.py    # Shared analytical role contract
+│   ├── semantic_contract.py   # Confirmed roles, units, exclusions, and fingerprint
 │   ├── data_loader.py         # Validated tabular ingestion
 │   ├── demo_data.py           # Deterministic, privacy-safe product demo
 │   ├── data_analyzer.py       # Profiling and data-quality checks

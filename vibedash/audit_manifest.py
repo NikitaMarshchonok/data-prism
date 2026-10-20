@@ -8,9 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from src.semantic_contract import semantic_contract_audit_view
 
-MANIFEST_VERSION = 2
-ANALYSIS_CONTRACT = "vibedash-evidence-v2"
+
+MANIFEST_VERSION = 3
+ANALYSIS_CONTRACT = "vibedash-evidence-v3"
 MAX_SCHEMA_PREVIEW_COLUMNS = 50
 
 COMPARISON_MANIFEST_VERSION = 1
@@ -52,6 +54,7 @@ def build_audit_manifest(
     dashboard_data: Mapping[str, Any],
     engine_version: str,
     retention_hours: int,
+    semantic_contract: Mapping[str, Any] | None = None,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Return reproducibility metadata without including source row values."""
@@ -103,6 +106,11 @@ def build_audit_manifest(
             "metric_count": len(normalized_spec.get("metrics") or []),
             "chart_count": len(normalized_spec.get("charts") or []),
         },
+        "semantics": (
+            semantic_contract_audit_view(semantic_contract)
+            if semantic_contract is not None
+            else None
+        ),
         "evidence": {
             "insight_count": len(dashboard_data.get("insights") or []),
             "statistical_test_count": len(

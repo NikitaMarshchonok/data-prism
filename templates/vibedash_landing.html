@@ -159,6 +159,7 @@
 
             <form class="analysis-form" id="analysis-form" method="POST" action="{{ url_for('vibedash.preview') }}" enctype="multipart/form-data">
                 <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
+                <input type="hidden" name="semantic_contract" id="semantic-contract-value" value="">
                 <div class="field-card upload-card">
                     <label for="datafile">
                         <span class="field-number">1</span>
@@ -193,6 +194,43 @@
                     <p class="readiness-summary" id="readiness-summary">The file is being checked before any analysis job is created.</p>
                     <div class="readiness-checks" id="readiness-checks"></div>
                     <p class="readiness-privacy">Preflight creates no retained Data Prism working copy of the uploaded rows.</p>
+                </section>
+
+                <section class="semantic-panel" id="semantic-panel" aria-labelledby="semantic-heading" hidden>
+                    <div class="semantic-panel-header">
+                        <div>
+                            <span class="readiness-kicker">Required semantic review</span>
+                            <h3 id="semantic-heading">Confirm what each column means</h3>
+                        </div>
+                        <span class="semantic-status" id="semantic-status">Not confirmed</span>
+                    </div>
+                    <p class="semantic-intro">Data Prism inferred these roles and units from the schema and observed values. Correct any mistakes before analysis; the confirmed contract controls calculations, charts, and the audit record.</p>
+                    <div class="semantic-error" id="semantic-error" role="alert" tabindex="-1" hidden></div>
+                    <div class="semantic-primary-fields">
+                        <label for="semantic-target-column">
+                            <span>Outcome / target</span>
+                            <select id="semantic-target-column"><option value="">No target selected</option></select>
+                            <small>Optional. Automatically excluded from predictive inputs.</small>
+                        </label>
+                        <label for="semantic-time-column">
+                            <span>Time axis</span>
+                            <select id="semantic-time-column"><option value="">No time column selected</option></select>
+                            <small>Optional. Only columns confirmed as temporal are eligible.</small>
+                        </label>
+                    </div>
+                    <div class="semantic-table-wrap">
+                        <table class="semantic-table">
+                            <thead>
+                                <tr><th>Column</th><th>Analytical role</th><th>Unit</th><th>Exclude from ML</th></tr>
+                            </thead>
+                            <tbody id="semantic-columns"></tbody>
+                        </table>
+                    </div>
+                    <label class="semantic-confirmation" for="semantic-confirmed">
+                        <input type="checkbox" id="semantic-confirmed">
+                        <span>I reviewed these meanings and confirm they match this dataset.</span>
+                    </label>
+                    <p class="readiness-privacy">The retained contract contains schema metadata only—never source row values.</p>
                 </section>
 
                 <label class="pilot-consent form-wide">
@@ -301,6 +339,14 @@
         const readinessScore = document.getElementById('readiness-score');
         const readinessSummary = document.getElementById('readiness-summary');
         const readinessChecks = document.getElementById('readiness-checks');
+        const semanticPanel = document.getElementById('semantic-panel');
+        const semanticStatus = document.getElementById('semantic-status');
+        const semanticError = document.getElementById('semantic-error');
+        const semanticColumns = document.getElementById('semantic-columns');
+        const semanticTarget = document.getElementById('semantic-target-column');
+        const semanticTime = document.getElementById('semantic-time-column');
+        const semanticConfirmed = document.getElementById('semantic-confirmed');
+        const semanticContractValue = document.getElementById('semantic-contract-value');
         const readinessUrl = {{ url_for('vibedash.dataset_readiness')|tojson }};
         const comparisonJobsUrl = {{ url_for('vibedash.create_period_comparison_job')|tojson }};
         const comparisonForm = document.getElementById('period-comparison-form');
@@ -317,6 +363,7 @@
         let comparisonBusy = false;
         let readinessState = 'idle';
         let readinessRequest = null;
+        let semanticProposal = null;
 
         document.querySelectorAll('a[href="#pilot-privacy"]').forEach((link) => {
             link.addEventListener('click', () => {
@@ -360,8 +407,184 @@
             readinessPanel.hidden = true;
             readinessPanel.className = 'readiness-panel';
             readinessChecks.replaceChildren();
-            submitButton.disabled = false;
+            semanticProposal = null;
+            semanticPanel.hidden = true;
+            semanticColumns.replaceChildren();
+            semanticConfirmed.checked = false;
+            semanticContractValue.value = '';
+            hideSemanticError();
+            updateAnalysisSubmitState();
         }
+
+        function updateAnalysisSubmitState() {
+            submitButton.disabled = !(
+                readinessState === 'allowed'
+                && semanticProposal
+                && semanticConfirmed.checked
+            );
+        }
+
+        function hideSemanticError() {
+            semanticError.hidden = true;
+            semanticError.textContent = '';
+        }
+
+        function showSemanticError(message) {
+            semanticError.textContent = message;
+            semanticError.hidden = false;
+            semanticError.focus();
+        }
+
+        function semanticRowState(row) {
+            return {
+                name: row.dataset.columnName,
+                role: row.querySelector('[data-semantic-role]').value,
+                unit: row.querySelector('[data-semantic-unit]').value,
+                exclude_from_predictors: row.querySelector('[data-semantic-exclude]').checked,
+            };
+        }
+
+        function replaceColumnOptions(select, rows, selected, emptyLabel) {
+            const options = [new Option(emptyLabel, '')];
+            rows.forEach((row) => options.push(new Option(row.name, row.name)));
+            select.replaceChildren(...options);
+            select.value = rows.some((row) => row.name === selected) ? selected : '';
+        }
+
+        function syncSemanticDependencies() {
+            const rows = Array.from(semanticColumns.querySelectorAll('tr'));
+            rows.forEach((row) => {
+                const state = semanticRowState(row);
+                const unit = row.querySelector('[data-semantic-unit]');
+                const excluded = row.querySelector('[data-semantic-exclude]');
+                if (state.role !== 'measure') {
+                    unit.value = 'none';
+                    unit.disabled = true;
+                } else {
+                    unit.disabled = false;
+                    if (unit.value === 'none') unit.value = 'number';
+                }
+                if (state.role === 'identifier') excluded.checked = true;
+            });
+
+            const states = rows.map(semanticRowState);
+            const previousTarget = semanticTarget.value;
+            const previousTime = semanticTime.value;
+            replaceColumnOptions(
+                semanticTarget,
+                states.filter((column) => ['measure', 'category'].includes(column.role)),
+                previousTarget,
+                'No target selected',
+            );
+            replaceColumnOptions(
+                semanticTime,
+                states.filter((column) => column.role === 'temporal'),
+                previousTime,
+                'No time column selected',
+            );
+            rows.forEach((row) => {
+                const excluded = row.querySelector('[data-semantic-exclude]');
+                const role = row.querySelector('[data-semantic-role]').value;
+                if (row.dataset.columnName === semanticTarget.value) excluded.checked = true;
+                excluded.disabled = role === 'identifier' || row.dataset.columnName === semanticTarget.value;
+            });
+        }
+
+        function makeSemanticSelect(attribute, values, selected) {
+            const select = document.createElement('select');
+            select.dataset[attribute] = '';
+            values.forEach(([value, label]) => select.append(new Option(label, value)));
+            select.value = selected;
+            return select;
+        }
+
+        function renderSemanticContract(proposal) {
+            semanticProposal = proposal;
+            semanticPanel.hidden = false;
+            semanticColumns.replaceChildren();
+            semanticContractValue.value = '';
+            semanticConfirmed.checked = false;
+            semanticStatus.textContent = 'Not confirmed';
+            semanticStatus.classList.remove('is-confirmed');
+            hideSemanticError();
+
+            proposal.columns.forEach((column) => {
+                const row = document.createElement('tr');
+                row.dataset.columnName = column.name;
+                const nameCell = document.createElement('th');
+                nameCell.scope = 'row';
+                nameCell.textContent = column.name;
+                const roleCell = document.createElement('td');
+                roleCell.append(makeSemanticSelect('semanticRole', [
+                    ['measure', 'Measure'],
+                    ['category', 'Category'],
+                    ['temporal', 'Time'],
+                    ['identifier', 'Identifier'],
+                ], column.role));
+                const unitCell = document.createElement('td');
+                unitCell.append(makeSemanticSelect('semanticUnit', [
+                    ['none', 'No numeric unit'],
+                    ['number', 'Number'],
+                    ['count', 'Count'],
+                    ['currency', 'Currency'],
+                    ['ratio', 'Ratio (stored as decimal)'],
+                    ['percent', 'Percent (stored as whole value)'],
+                ], column.unit));
+                const excludeCell = document.createElement('td');
+                const excludeLabel = document.createElement('label');
+                excludeLabel.className = 'semantic-exclude';
+                const exclude = document.createElement('input');
+                exclude.type = 'checkbox';
+                exclude.dataset.semanticExclude = '';
+                exclude.checked = column.exclude_from_predictors;
+                const excludeText = document.createElement('span');
+                excludeText.textContent = 'Exclude';
+                excludeLabel.append(exclude, excludeText);
+                excludeCell.append(excludeLabel);
+                row.append(nameCell, roleCell, unitCell, excludeCell);
+                semanticColumns.append(row);
+            });
+
+            const proposedTarget = proposal.columns.find((column) => column.is_target)?.name || '';
+            const proposedTime = proposal.columns.find((column) => column.is_time)?.name || '';
+            syncSemanticDependencies();
+            semanticTarget.value = proposedTarget;
+            semanticTime.value = proposedTime;
+            syncSemanticDependencies();
+            updateAnalysisSubmitState();
+        }
+
+        function serializeSemanticContract() {
+            const columns = Array.from(semanticColumns.querySelectorAll('tr')).map((row) => {
+                const state = semanticRowState(row);
+                return {
+                    ...state,
+                    is_target: state.name === semanticTarget.value,
+                    is_time: state.name === semanticTime.value,
+                };
+            });
+            return {
+                contract: semanticProposal.contract,
+                confirmed: true,
+                columns,
+            };
+        }
+
+        semanticPanel.addEventListener('change', (event) => {
+            if (event.target !== semanticConfirmed) {
+                syncSemanticDependencies();
+                semanticConfirmed.checked = false;
+                semanticContractValue.value = '';
+                semanticStatus.textContent = 'Review changed';
+                semanticStatus.classList.remove('is-confirmed');
+                hideSemanticError();
+            } else {
+                semanticStatus.textContent = semanticConfirmed.checked ? 'Confirmed' : 'Not confirmed';
+                semanticStatus.classList.toggle('is-confirmed', semanticConfirmed.checked);
+                hideSemanticError();
+            }
+            updateAnalysisSubmitState();
+        });
 
         function addReadinessCheck(check) {
             const article = document.createElement('article');
@@ -391,7 +614,7 @@
             report.checks
                 .filter((check) => check.status !== 'passed')
                 .forEach(addReadinessCheck);
-            submitButton.disabled = !report.analysis_allowed;
+            updateAnalysisSubmitState();
         }
 
         function renderReadinessError(message) {
@@ -402,7 +625,9 @@
             readinessScore.textContent = '—';
             readinessSummary.textContent = message;
             readinessChecks.replaceChildren();
-            submitButton.disabled = true;
+            semanticProposal = null;
+            semanticPanel.hidden = true;
+            updateAnalysisSubmitState();
         }
 
         async function checkDatasetReadiness(file) {
@@ -433,6 +658,9 @@
                     throw new Error(payload.error || 'The dataset preflight could not be completed.');
                 }
                 renderReadiness(payload.readiness);
+                if (payload.readiness.analysis_allowed) {
+                    renderSemanticContract(payload.semantic_contract);
+                }
             } catch (error) {
                 if (error.name !== 'AbortError') renderReadinessError(error.message);
             } finally {
@@ -476,6 +704,7 @@
             if (!response.ok) {
                 const error = new Error(job.error || 'The analysis could not be started.');
                 error.readiness = job.readiness;
+                error.semanticContract = job.semantic_contract_error === true;
                 throw error;
             }
             statusNode.textContent = 'Analysis queued. Waiting for an available worker…';
@@ -490,16 +719,32 @@
                 await checkDatasetReadiness(selectedFile);
                 if (readinessState !== 'allowed') return;
             }
+            if (!semanticProposal || !semanticConfirmed.checked) {
+                semanticPanel.hidden = false;
+                showSemanticError('Review the column meanings and confirm the semantic contract before analysis.');
+                updateAnalysisSubmitState();
+                return;
+            }
+            semanticContractValue.value = JSON.stringify(serializeSemanticContract());
             const originalSubmitNodes = Array.from(submitButton.childNodes, (node) => node.cloneNode(true));
             submitButton.disabled = true;
             loadingIndicator.hidden = false;
+            loadingIndicator.classList.remove('has-error');
+            loadingIndicator.textContent = 'Calculating evidence and building the dashboard…';
             try {
                 await queueAnalysis(analysisForm, loadingIndicator);
             } catch (error) {
                 if (error.readiness) renderReadiness(error.readiness);
+                if (error.semanticContract) {
+                    semanticConfirmed.checked = false;
+                    semanticContractValue.value = '';
+                    semanticStatus.textContent = 'Review required';
+                    semanticStatus.classList.remove('is-confirmed');
+                    showSemanticError(error.message);
+                }
                 loadingIndicator.textContent = error.message;
                 loadingIndicator.classList.add('has-error');
-                submitButton.disabled = false;
+                updateAnalysisSubmitState();
                 submitButton.replaceChildren(
                     ...originalSubmitNodes.map((node) => node.cloneNode(true)),
                 );

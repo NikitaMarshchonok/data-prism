@@ -11,7 +11,7 @@ import math
 import re
 from html import escape
 from numbers import Number
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -103,8 +103,17 @@ def _numeric_values(frame: pd.DataFrame, column: Optional[str]) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce").dropna()
 
 
-def semantic_value_kind(frame: pd.DataFrame, column: Optional[str]) -> str:
+def semantic_value_kind(
+    frame: pd.DataFrame,
+    column: Optional[str],
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> str:
     """Infer a display format from a column name and its observed values."""
+    unit = (column_profiles or {}).get(column, {}).get("unit")
+    if unit in {"currency", "ratio", "percent"}:
+        return str(unit)
+    if unit in {"number", "count", "none"}:
+        return "number"
     terms = _column_terms(column)
     if terms & _PERCENT_TERMS:
         values = _numeric_values(frame, column)
@@ -116,10 +125,14 @@ def semantic_value_kind(frame: pd.DataFrame, column: Optional[str]) -> str:
     return "number"
 
 
-def _axis_format(frame: pd.DataFrame, column: Optional[str]) -> dict[str, Any]:
+def _axis_format(
+    frame: pd.DataFrame,
+    column: Optional[str],
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> dict[str, Any]:
     if _numeric_values(frame, column).empty:
         return {}
-    kind = semantic_value_kind(frame, column)
+    kind = semantic_value_kind(frame, column, column_profiles)
     if kind == "ratio":
         return {"tickformat": ".1%"}
     if kind == "percent":
@@ -129,8 +142,13 @@ def _axis_format(frame: pd.DataFrame, column: Optional[str]) -> dict[str, Any]:
     return {"tickformat": "~s", "separatethousands": True}
 
 
-def _hover_value(frame: pd.DataFrame, column: Optional[str], axis: str) -> str:
-    kind = semantic_value_kind(frame, column)
+def _hover_value(
+    frame: pd.DataFrame,
+    column: Optional[str],
+    axis: str,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> str:
+    kind = semantic_value_kind(frame, column, column_profiles)
     if kind == "ratio":
         return f"%{{{axis}:.2%}}"
     if kind == "percent":
@@ -140,11 +158,16 @@ def _hover_value(frame: pd.DataFrame, column: Optional[str], axis: str) -> str:
     return f"%{{{axis}:,.2f}}"
 
 
-def _display_value(frame: pd.DataFrame, column: Optional[str], value: Any) -> str:
+def _display_value(
+    frame: pd.DataFrame,
+    column: Optional[str],
+    value: Any,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+) -> str:
     if not isinstance(value, Number) or not math.isfinite(float(value)):
         return str(value)
     numeric = float(value)
-    kind = semantic_value_kind(frame, column)
+    kind = semantic_value_kind(frame, column, column_profiles)
     if kind == "ratio":
         return f"{numeric * 100:.1f}%"
     if kind == "percent":
@@ -162,13 +185,17 @@ def _bar_labels(
     frame: pd.DataFrame,
     column: Optional[str],
     values: Optional[Iterable[Any]],
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
 ) -> Optional[list[str]]:
     if values is None:
         return None
     values = list(values)
     if len(values) > 12:
         return None
-    return [_display_value(frame, column, value) for value in values]
+    return [
+        _display_value(frame, column, value, column_profiles)
+        for value in values
+    ]
 
 
 def _chart_axes(chart: Chart) -> tuple[Optional[str], Optional[str]]:
@@ -184,6 +211,7 @@ def apply_evidence_chart_theme(
     fig: go.Figure,
     chart: Chart,
     frame: pd.DataFrame,
+    column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
 ) -> go.Figure:
     """Apply the product chart contract to a Plotly figure."""
     x_column, y_column = _chart_axes(chart)
@@ -244,9 +272,9 @@ def apply_evidence_chart_theme(
     )
 
     if x_column:
-        fig.update_xaxes(**_axis_format(frame, x_column))
+        fig.update_xaxes(**_axis_format(frame, x_column, column_profiles))
     if y_column:
-        fig.update_yaxes(**_axis_format(frame, y_column))
+        fig.update_yaxes(**_axis_format(frame, y_column, column_profiles))
     elif chart.type in {"bar", "hist", "line", "area"}:
         fig.update_yaxes(tickformat=",.0f")
 
@@ -256,13 +284,13 @@ def apply_evidence_chart_theme(
             trace.update(
                 marker={"color": ACCENT, "line": {"width": 0}},
                 opacity=0.9,
-                text=_bar_labels(frame, y_column, trace.y),
+                text=_bar_labels(frame, y_column, trace.y, column_profiles),
                 textposition="outside",
                 textfont={"color": "#b9cbc5", "size": 10},
                 cliponaxis=False,
                 hovertemplate=(
                     f"{x_label}: %{{x}}<br>{y_label}: "
-                    f"{_hover_value(frame, y_column, 'y')}<extra></extra>"
+                    f"{_hover_value(frame, y_column, 'y', column_profiles)}<extra></extra>"
                 ),
             )
     elif chart.type == "line":
@@ -271,7 +299,7 @@ def apply_evidence_chart_theme(
             marker={"color": "#d8fff0", "size": 5, "line": {"color": ACCENT, "width": 1}},
             hovertemplate=(
                 f"{x_label}: %{{x}}<br>{y_label}: "
-                f"{_hover_value(frame, y_column, 'y')}<extra></extra>"
+                f"{_hover_value(frame, y_column, 'y', column_profiles)}<extra></extra>"
             ),
         )
     elif chart.type == "area":
@@ -280,7 +308,7 @@ def apply_evidence_chart_theme(
             fillcolor="rgba(114,224,182,.18)",
             hovertemplate=(
                 f"{x_label}: %{{x}}<br>{y_label}: "
-                f"{_hover_value(frame, y_column, 'y')}<extra></extra>"
+                f"{_hover_value(frame, y_column, 'y', column_profiles)}<extra></extra>"
             ),
         )
     elif chart.type == "scatter":
@@ -292,8 +320,8 @@ def apply_evidence_chart_theme(
                 "line": {"color": "rgba(216,232,226,.42)", "width": 0.7},
             },
             hovertemplate=(
-                f"{x_label}: {_hover_value(frame, x_column, 'x')}<br>"
-                f"{y_label}: {_hover_value(frame, y_column, 'y')}<extra></extra>"
+                f"{x_label}: {_hover_value(frame, x_column, 'x', column_profiles)}<br>"
+                f"{y_label}: {_hover_value(frame, y_column, 'y', column_profiles)}<extra></extra>"
             ),
         )
     elif chart.type == "hist":
@@ -302,7 +330,7 @@ def apply_evidence_chart_theme(
             marker={"color": BLUE, "line": {"color": "rgba(142,182,247,.35)", "width": 1}},
             opacity=0.88,
             hovertemplate=(
-                f"{x_label}: {_hover_value(frame, x_column, 'x')}<br>"
+                f"{x_label}: {_hover_value(frame, x_column, 'x', column_profiles)}<br>"
                 "Count: %{y:,.0f}<extra></extra>"
             ),
         )
