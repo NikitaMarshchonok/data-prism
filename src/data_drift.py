@@ -6,7 +6,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 import numpy as np
 import pandas as pd
@@ -33,6 +33,7 @@ def create_baseline_profile(
     data: pd.DataFrame,
     *,
     dataset_name: str | None = None,
+    column_profiles: Mapping | None = None,
 ) -> Dict[str, Any]:
     """Build a JSON-serializable aggregate profile without storing raw rows."""
     if not isinstance(data, pd.DataFrame) or data.empty or data.shape[1] == 0:
@@ -40,7 +41,10 @@ def create_baseline_profile(
 
     columns: Dict[str, Dict[str, Any]] = {}
     column_map = _column_map(data)
-    semantic_profiles = profile_dataframe_columns(data)
+    semantic_profiles = (
+        column_profiles if column_profiles is not None
+        else profile_dataframe_columns(data)
+    )
     for feature, column in list(column_map.items())[:MAX_PROFILE_FEATURES]:
         series = data[column]
         feature_type = _feature_type(
@@ -104,6 +108,8 @@ def load_baseline_profile(path: str | os.PathLike[str]) -> Dict[str, Any]:
 def compare_to_baseline(
     current_data: pd.DataFrame,
     baseline_profile: Dict[str, Any],
+    *,
+    column_profiles: Mapping | None = None,
 ) -> Dict[str, Any]:
     """Compare a current batch with a previously persisted baseline profile."""
     if not isinstance(current_data, pd.DataFrame) or current_data.empty or current_data.shape[1] == 0:
@@ -116,7 +122,10 @@ def compare_to_baseline(
     new_columns = sorted(set(current_columns) - set(baseline_columns))
     type_changes: List[Dict[str, str]] = []
     feature_drift: List[Dict[str, Any]] = []
-    semantic_profiles = profile_dataframe_columns(current_data)
+    semantic_profiles = (
+        column_profiles if column_profiles is not None
+        else profile_dataframe_columns(current_data)
+    )
     profile_version = int(baseline_profile["profile_version"])
 
     for feature in sorted(set(baseline_columns) & set(current_columns)):

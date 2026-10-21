@@ -104,6 +104,23 @@ class AccountExportTests(unittest.TestCase):
         self.assertNotIn(b", ", first)
         self.assertNotIn(b": ", first)
 
+    def test_comparison_v2_and_legacy_are_exported_without_schema_content(self):
+        for version in (1, 2):
+            contract = f'vibedash-period-comparison-v{version}'
+            result = self.build(jobs=[{
+                'id': self.job_id,
+                'manifest': {
+                    'analysis_contract': contract,
+                    'manifest_version': version,
+                    'semantics': {'baseline': {'columns': [{'name': 'PRIVATE_SCHEMA'}]}},
+                    'comparison': {'contract': f'period-comparison-v{version}', 'counts': {'tested_metrics': 1}},
+                },
+            }])
+            manifest = result['jobs'][0]['manifest']
+            self.assertEqual(manifest['analysis_contract'], contract)
+            self.assertEqual(manifest['comparison']['contract'], f'period-comparison-v{version}')
+            self.assertNotIn('PRIVATE_SCHEMA', json.dumps(result))
+
     def test_security_activity_is_allowlisted_bounded_and_context_free(self):
         events = [
             {

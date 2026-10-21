@@ -10,7 +10,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import web_app
+import pandas as pd
 from werkzeug.datastructures import FileStorage
+from src.semantic_contract import infer_semantic_contract
 
 from vibedash.analysis_jobs import AnalysisJobCapacityError, AnalysisJobStore
 from vibedash.exporter import load_session_data
@@ -53,25 +55,34 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         return (columns + '\n' + body + '\n').encode()
 
     def post_data(self, client, *, baseline_name='baseline data.csv', current_name='current.csv',
-                  baseline_label='Before', current_label='After', baseline=None, current=None):
+                  baseline_label='Before', current_label='After', baseline=None, current=None,
+                  confirmed=True, contracts=None):
         with client.session_transaction() as browser_session:
             browser_session['vibedash_decision_csrf_token'] = 'a' * 64
+        data = {
+            'baseline_file': (BytesIO(baseline or self.csv_text()), baseline_name),
+            'current_file': (BytesIO(current or self.csv_text()), current_name),
+            'baseline_label': baseline_label,
+            'current_label': current_label,
+            'csrf_token': 'a' * 64,
+        }
+        if confirmed:
+            for period, content in [('baseline', baseline), ('current', current)]:
+                frame = pd.read_csv(BytesIO(content or self.csv_text()))
+                frame.columns = [str(column).strip() for column in frame.columns]
+                contract = contracts[period] if contracts else infer_semantic_contract(frame, confirmed=True)
+                data[f'{period}_semantic_contract'] = json.dumps(contract)
+            data['comparison_semantics_confirmed'] = 'yes'
         return client.post(
             '/vibedash/comparisons/jobs',
-            data={
-                'baseline_file': (BytesIO(baseline or self.csv_text()), baseline_name),
-                'current_file': (BytesIO(current or self.csv_text()), current_name),
-                'baseline_label': baseline_label,
-                'current_label': current_label,
-                'csrf_token': 'a' * 64,
-            },
+            data=data,
         )
 
     @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=True)
     def test_queue_payload_is_bounded_and_readiness_is_returned(self, submit):
         sentinel = b'RAW_SECRET_SENTINEL'
         with web_app.app.test_client() as client:
-            response = self.post_data(client, baseline= self.csv_text() + sentinel)
+            response = self.post_data(client, baseline=self.csv_text().replace(b'north', sentinel))
             payload = response.get_json()
             job = AnalysisJobStore(web_app.app.config['VIBEDASH_JOB_STORE_PATH']).get(payload['job_id'])
 
@@ -79,11 +90,13 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         submit.assert_called_once()
         self.assertEqual(job['payload']['analysis_kind'], 'period_comparison')
         self.assertEqual(set(job['payload']), {'analysis_kind', 'baseline', 'current'})
-        self.assertEqual(set(job['payload']['baseline']), {'stored_filename', 'filename', 'label'})
-        self.assertEqual(set(job['payload']['current']), {'stored_filename', 'filename', 'label'})
+        self.assertEqual(set(job['payload']['baseline']), {'stored_filename', 'filename', 'label', 'semantic_contract'})
+        self.assertEqual(set(job['payload']['current']), {'stored_filename', 'filename', 'label', 'semantic_contract'})
         self.assertNotIn(sentinel.decode(), json.dumps(job['payload']))
         for item in (job['payload']['baseline'], job['payload']['current']):
             self.assertRegex(item['stored_filename'], r'^vibedash-[0-9a-f]{32}\.csv$')
+            self.assertTrue(item['semantic_contract']['confirmed'])
+            self.assertRegex(item['semantic_contract']['sha256'], r'^[0-9a-f]{64}$')
         self.assertIn('baseline', payload['readiness'])
         self.assertIn('current', payload['readiness'])
         self.assertEqual(len(list(Path(web_app.app.config['UPLOAD_FOLDER']).glob('*.csv'))), 2)
@@ -102,6 +115,63 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
                 for row in connection.execute('SELECT status FROM analysis_jobs')
             ]
         self.assertEqual(statuses, ['failed'])
+
+    def test_preflight_returns_schema_only_without_retained_files_or_jobs(self):
+        with web_app.app.test_client() as client:
+            with client.session_transaction() as browser:
+                browser['vibedash_decision_csrf_token'] = 'a' * 64
+            response = client.post('/vibedash/comparisons/readiness', data={
+                'csrf_token': 'a' * 64,
+                'baseline_file': (BytesIO(self.csv_text()), 'before.csv'),
+                'current_file': (BytesIO(self.csv_text().replace(b'north', b'PRIVATE_SENTINEL')), 'after.csv'),
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json['analysis_allowed'])
+        self.assertFalse(response.json['semantic_contracts']['baseline']['confirmed'])
+        self.assertNotIn('PRIVATE_SENTINEL', response.get_data(as_text=True))
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+        store = AnalysisJobStore(web_app.app.config['VIBEDASH_JOB_STORE_PATH'])
+        with sqlite3.connect(store.database_path) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM analysis_jobs').fetchone()[0], 0)
+
+    @patch('vibedash.routes.analysis_job_dispatcher.submit')
+    def test_missing_and_mismatched_contracts_cannot_queue(self, submit):
+        with web_app.app.test_client() as client:
+            response = self.post_data(client, confirmed=False)
+            self.assertEqual(response.status_code, 422)
+            self.assertTrue(response.json['semantic_contract_error'])
+            before = infer_semantic_contract(pd.read_csv(BytesIO(self.csv_text())), confirmed=True)
+            after = json.loads(json.dumps(before))
+            after['columns'][0]['unit'] = 'percent'
+            mismatch = self.post_data(client, contracts={'baseline': before, 'current': after})
+        self.assertEqual(mismatch.status_code, 422)
+        self.assertIn('different roles or units', mismatch.json['error'])
+        submit.assert_not_called()
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+
+    def test_preflight_csrf_readiness_and_resource_bounds(self):
+        with web_app.app.test_client() as client:
+            self.assertEqual(client.post('/vibedash/comparisons/readiness').status_code, 400)
+            with client.session_transaction() as browser:
+                browser['vibedash_decision_csrf_token'] = 'a' * 64
+            def preflight(before=None):
+                return client.post('/vibedash/comparisons/readiness', data={
+                    'csrf_token': 'a' * 64,
+                    'baseline_file': (BytesIO(before or self.csv_text()), 'b.csv'),
+                    'current_file': (BytesIO(self.csv_text()), 'c.csv'),
+                })
+            blocked = preflight(b'value\n1\n1\n1\n1\n1\n1\n1\n1\n')
+            self.assertFalse(blocked.json['analysis_allowed'])
+            self.assertIsNone(blocked.json['semantic_contracts']['baseline'])
+            with patch.object(routes, 'COMPARISON_MAX_TOTAL_ROWS', 40):
+                self.assertEqual(preflight().status_code, 422)
+            with patch.object(routes, 'COMPARISON_MAX_TOTAL_COLUMNS', 3):
+                self.assertEqual(preflight().status_code, 422)
+            with patch.object(routes, 'COMPARISON_MAX_MEMORY_BYTES', 1):
+                self.assertEqual(preflight().status_code, 422)
+            with patch.object(routes, 'COMPARISON_MAX_REQUEST_BYTES', 10):
+                self.assertEqual(preflight().status_code, 413)
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
 
     def test_missing_wrong_extension_and_invalid_labels_are_rejected(self):
         with web_app.app.test_client() as client:
@@ -278,10 +348,11 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
             path = upload / f'vibedash-{token}.csv'
             path.write_bytes(self.csv_text())
             paths.append(path)
+        contract = infer_semantic_contract(pd.read_csv(BytesIO(self.csv_text())), confirmed=True)
         return {
             'analysis_kind': 'period_comparison',
-            'baseline': {'stored_filename': paths[0].name, 'filename': 'baseline.csv', 'label': 'Before'},
-            'current': {'stored_filename': paths[1].name, 'filename': 'current.csv', 'label': 'After'},
+            'baseline': {'stored_filename': paths[0].name, 'filename': 'baseline.csv', 'label': 'Before', 'semantic_contract': contract},
+            'current': {'stored_filename': paths[1].name, 'filename': 'current.csv', 'label': 'After', 'semantic_contract': contract},
         }
 
     def test_worker_success_is_aggregate_only_and_cleans_inputs(self):
@@ -300,7 +371,10 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         self.assertEqual(session_data['analysis_kind'], 'period_comparison')
         self.assertIn('numeric_metrics', session_data['report'])
         self.assertNotIn('RAW_SECRET_SENTINEL', json.dumps(session_data))
-        self.assertEqual(result['manifest']['analysis_contract'], 'vibedash-period-comparison-v1')
+        self.assertEqual(result['manifest']['analysis_contract'], 'vibedash-period-comparison-v2')
+        self.assertEqual(result['manifest']['manifest_version'], 2)
+        self.assertTrue(result['manifest']['semantics']['definitions_aligned'])
+        self.assertEqual(result['manifest']['semantics'], session_data['report']['semantics'])
         self.assertNotIn('stored_filename', json.dumps(result['manifest']))
         self.assertNotIn('display_filename', json.dumps(result['manifest']))
 
@@ -314,6 +388,15 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
                         routes._build_period_comparison_session(
                             payload, run_id='b' * 32, scope_id='b' * 32
                         )
+        self.assertFalse(list((root / 'uploads').glob('*.csv')))
+
+    def test_worker_revalidates_changed_input_and_cleans_both_files(self):
+        root = Path(self.tmp.name)
+        payload = self._worker_payload(root)
+        changed = root / 'uploads' / payload['current']['stored_filename']
+        changed.write_bytes(self.csv_text(columns='changed,segment'))
+        with web_app.app.app_context(), self.assertRaisesRegex(ValueError, 'no longer matches'):
+            routes._build_period_comparison_session(payload, scope_id='a' * 32)
         self.assertFalse(list((root / 'uploads').glob('*.csv')))
 
     def test_worker_missing_first_input_cleans_second_input(self):

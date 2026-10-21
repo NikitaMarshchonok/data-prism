@@ -117,7 +117,7 @@ def parse_semantic_contract_json(value: Any) -> Mapping[str, Any]:
         raise SemanticContractError("The semantic contract is too large.")
     try:
         parsed = json.loads(value)
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, RecursionError) as error:
         raise SemanticContractError("The semantic contract is not valid JSON.") from error
     if not isinstance(parsed, Mapping):
         raise SemanticContractError("The semantic contract must be a JSON object.")
@@ -175,9 +175,9 @@ def validate_semantic_contract(
         is_target = submitted.get("is_target")
         is_time = submitted.get("is_time")
         excluded = submitted.get("exclude_from_predictors")
-        if role not in ALLOWED_ROLES:
+        if not isinstance(role, str) or role not in ALLOWED_ROLES:
             raise SemanticContractError(f"Column '{name}' has an unsupported role.")
-        if unit not in ALLOWED_UNITS:
+        if not isinstance(unit, str) or unit not in ALLOWED_UNITS:
             raise SemanticContractError(f"Column '{name}' has an unsupported unit.")
         if not all(isinstance(flag, bool) for flag in (is_target, is_time, excluded)):
             raise SemanticContractError(f"Column '{name}' has invalid semantic flags.")

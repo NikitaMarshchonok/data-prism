@@ -9,12 +9,14 @@ import numpy as np
 import pandas as pd
 
 from src.column_semantics import column_role, profile_dataframe_columns
+from src.semantic_contract import profiles_from_semantic_contract
 from src.data_drift import compare_to_baseline, create_baseline_profile
 from src.statistical_primitives import (
     benjamini_hochberg as _benjamini_hochberg,
     welch_independent_summary,
 )
 from .readiness_engine import DatasetReadinessEngine
+from .comparison_semantics import comparison_semantics_audit, validate_comparison_semantics
 
 MAX_ROWS = 100_000
 MAX_COLUMNS = 100
@@ -48,6 +50,8 @@ def build_period_comparison(
     baseline_label: str = "Baseline",
     current_label: str = "Current",
     max_metrics: int = 8,
+    baseline_semantic_contract=None,
+    current_semantic_contract=None,
 ) -> Dict[str, Any]:
     """Build a JSON-safe aggregate comparison without retaining rows."""
     _validate_frame(baseline_df, "baseline")
@@ -86,12 +90,26 @@ def build_period_comparison(
             readiness=readiness,
         )
 
+    confirmed = baseline_semantic_contract is not None or current_semantic_contract is not None
+    baseline_profiles = current_profiles = None
+    semantics = None
+    if confirmed:
+        before, after = validate_comparison_semantics(
+            baseline_df, current_df,
+            baseline_semantic_contract, current_semantic_contract,
+        )
+        baseline_profiles = profiles_from_semantic_contract(baseline_df, before, prevalidated=True)
+        current_profiles = profiles_from_semantic_contract(current_df, after, prevalidated=True)
+        semantics = comparison_semantics_audit(before, after)
+
     # The existing drift contract is used in memory only; timestamps are omitted
     # because they would make equivalent inputs produce different JSON.
-    profile = create_baseline_profile(baseline_df, dataset_name=baseline_label)
-    drift = compare_to_baseline(current_df, profile)
+    profile = create_baseline_profile(
+        baseline_df, dataset_name=baseline_label, column_profiles=baseline_profiles,
+    )
+    drift = compare_to_baseline(current_df, profile, column_profiles=current_profiles)
     schema_changes = drift.get("schema_changes", {"missing_columns": [], "new_columns": [], "type_changes": []})
-    eligible_metrics = _metric_candidates(baseline_df, current_df)
+    eligible_metrics = _metric_candidates(baseline_df, current_df, baseline_profiles)
     # The cap bounds the number of Welch tests, but an alphabetically early
     # block of constant/undersized columns must not crowd every analyzable
     # metric out of the candidate set.  Keep testable metrics first, then use
@@ -148,7 +166,7 @@ def build_period_comparison(
     if truncated_count:
         summary += f" {truncated_count} candidate(s) were truncated by the inferential limit."
     result = {
-        "contract": "period-comparison-v1",
+        "contract": "period-comparison-v2" if confirmed else "period-comparison-v1",
         "status": status,
         "summary": summary,
         "input": {
@@ -165,6 +183,12 @@ def build_period_comparison(
             "FDR and drift thresholds are screening rules, not proof of material impact.",
         ],
     }
+    if semantics is not None:
+        result["semantics"] = semantics
+        result["limitations"].append(
+            "Shared column roles and units were confirmed by the user; matching "
+            "currency, row units, populations, and business definitions still depend on that review."
+        )
     # Enforce the public JSON contract at the boundary.
     json.dumps(result, allow_nan=False)
     return result
@@ -214,14 +238,12 @@ def _finite(series: pd.Series) -> np.ndarray:
     )
 
 
-def _metric_candidates(baseline: pd.DataFrame, current: pd.DataFrame) -> List[Dict[str, Any]]:
+def _metric_candidates(baseline: pd.DataFrame, current: pd.DataFrame, confirmed_profiles=None) -> List[Dict[str, Any]]:
     common = sorted(set(baseline.columns) & set(current.columns), key=str)
-    combined = pd.concat(
-        [baseline[common], current[common]],
-        axis=0,
-        ignore_index=True,
-    )
-    semantic_profiles = profile_dataframe_columns(combined)
+    semantic_profiles = confirmed_profiles
+    if semantic_profiles is None:
+        combined = pd.concat([baseline[common], current[common]], axis=0, ignore_index=True)
+        semantic_profiles = profile_dataframe_columns(combined)
     result: List[Dict[str, Any]] = []
     for column in common:
         if column_role(column, semantic_profiles) != "measure":
@@ -246,6 +268,8 @@ def _metric_candidates(baseline: pd.DataFrame, current: pd.DataFrame) -> List[Di
             "confidence_interval": None, "hedges_g": None, "magnitude": None, "significant": False,
         }
         entry["_column_key"] = column
+        if confirmed_profiles is not None:
+            entry["unit"] = confirmed_profiles[column]["unit"]
         if bm is not None and bm > 0 and diff is not None:
             entry["percent_change"] = _round(100.0 * diff / bm)
             entry["percent_change_reason"] = "Reported relative to a strictly positive baseline mean."

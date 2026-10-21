@@ -213,8 +213,12 @@ def build_period_comparison_manifest(
     # rows and the engine contract excludes category values.
     result_hash = _canonical_sha256(result)
     manifest = {
-        "manifest_version": COMPARISON_MANIFEST_VERSION,
-        "analysis_contract": COMPARISON_ANALYSIS_CONTRACT,
+        "manifest_version": 2 if result.get("contract") == "period-comparison-v2" else COMPARISON_MANIFEST_VERSION,
+        "analysis_contract": (
+            "vibedash-period-comparison-v2"
+            if result.get("contract") == "period-comparison-v2"
+            else COMPARISON_ANALYSIS_CONTRACT
+        ),
         "engine_version": str(engine_version)[:128],
         "generated_at": generated.isoformat(timespec="milliseconds"),
         "run": {"id": run_id},
@@ -243,6 +247,8 @@ def build_period_comparison_manifest(
         },
         "retention": {"temporary": True, "hours": int(retention_hours)},
     }
+    if result.get("semantics") is not None:
+        manifest["semantics"] = result["semantics"]
     # Keep this boundary strict so a future engine change cannot persist NaN,
     # infinity, or an unserializable object in the audit record.
     json.dumps(manifest, ensure_ascii=False, sort_keys=True, allow_nan=False)
