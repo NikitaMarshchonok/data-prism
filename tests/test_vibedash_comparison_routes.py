@@ -173,6 +173,26 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
                 self.assertEqual(preflight().status_code, 413)
         self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
 
+    @patch('vibedash.routes.analysis_job_dispatcher.submit')
+    def test_deep_json_contract_is_rejected_and_both_uploads_are_cleaned(self, submit):
+        with web_app.app.test_client() as client:
+            with client.session_transaction() as browser:
+                browser['vibedash_decision_csrf_token'] = 'a' * 64
+            response = client.post('/vibedash/comparisons/jobs', data={
+                'csrf_token': 'a' * 64,
+                'baseline_file': (BytesIO(self.csv_text()), 'before.csv'),
+                'current_file': (BytesIO(self.csv_text()), 'after.csv'),
+                'baseline_label': 'Before', 'current_label': 'After',
+                'comparison_semantics_confirmed': 'yes',
+                'baseline_semantic_contract': '{"x":' + '[' * 2000 + '0' + ']' * 2000 + '}',
+                'current_semantic_contract': '{}',
+            })
+        self.assertEqual(response.status_code, 422)
+        self.assertTrue(response.json['semantic_contract_error'])
+        self.assertIn('nested too deeply', response.json['error'])
+        submit.assert_not_called()
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+
     def test_missing_wrong_extension_and_invalid_labels_are_rejected(self):
         with web_app.app.test_client() as client:
             cases = [
