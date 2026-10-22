@@ -1,9 +1,12 @@
 import unittest
+import json
+import pandas as pd
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import web_app
+from src.semantic_contract import infer_semantic_contract
 
 
 class MonitoringApiTests(unittest.TestCase):
@@ -131,10 +134,83 @@ class MonitoringApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.get_json()["error"]["code"], "baseline_not_found")
 
+    def test_proposal_is_schema_only_unconfirmed_and_requires_authentication(self):
+        with web_app.app.test_client() as client:
+            denied = client.post("/api/v1/drift/semantics")
+            response = client.post("/api/v1/drift/semantics", headers=self._headers(), data={
+                "datafile": (BytesIO(_csv_values(range(100))), "baseline.csv"),
+            })
+            contract = response.get_json()["semantic_contract"]
+            rejected = client.post("/api/v1/drift/baselines", headers=self._headers(), data={
+                "datafile": (BytesIO(_csv_values(range(100))), "baseline.csv"),
+                "semantic_contract": json.dumps(contract),
+            })
+            contract["confirmed"] = True
+            accepted = client.post("/api/v1/drift/baselines", headers=self._headers(), data={
+                "datafile": (BytesIO(_csv_values(range(100))), "baseline.csv"),
+                "semantic_contract": json.dumps(contract),
+            })
+        self.assertEqual(denied.status_code, 401)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.get_json()["semantic_contract"]["confirmed"])
+        self.assertEqual(set(contract["columns"][0]), {
+            "name", "role", "unit", "is_target", "is_time", "exclude_from_predictors",
+        })
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(accepted.status_code, 201)
+        self.assertEqual(accepted.get_json()["profile_version"], 3)
+        self.assertEqual(len(accepted.get_json()["semantic_sha256"]), 64)
+        self.assertEqual(list(self.upload_folder.iterdir()), [])
+
+    def test_missing_malformed_or_deep_contract_fails_without_retaining_upload(self):
+        with web_app.app.test_client() as client:
+            for value in (None, "[]", "{" , "[" * 2000 + "]" * 2000):
+                data = {"datafile": (BytesIO(_csv_values(range(100))), "baseline.csv")}
+                if value is not None:
+                    data["semantic_contract"] = value
+                with self.subTest(value=value):
+                    response = client.post("/api/v1/drift/baselines", headers=self._headers(), data=data)
+                    self.assertEqual(response.status_code, 400)
+                    self.assertEqual(list(self.upload_folder.iterdir()), [])
+        self.assertEqual(list(self.baseline_folder.rglob("*.json")), [])
+
+    def test_current_unit_conflict_rejected_before_history_write(self):
+        contract = infer_semantic_contract(pd.DataFrame({"value": range(1000, 1100)}), confirmed=True)
+        contract["columns"][0]["unit"] = "currency"
+        with web_app.app.test_client() as client:
+            baseline_id = self._create_baseline(client).get_json()["baseline_id"]
+            response = client.post("/api/v1/drift/checks", headers=self._headers(), data={
+                "baseline_id": baseline_id,
+                "datafile": (BytesIO(_csv_values(range(1000, 1100))), "current.csv"),
+                "semantic_contract": json.dumps(contract),
+            })
+            runs = client.get("/api/v1/drift/runs", headers=self._headers()).get_json()["runs"]
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(runs, [])
+        self.assertEqual(list(self.upload_folder.iterdir()), [])
+
+    def test_optional_current_confirmation_has_distinct_auto_deduplication_context(self):
+        contract = infer_semantic_contract(pd.DataFrame({"value": range(1000, 1100)}), confirmed=True)
+        with web_app.app.test_client() as client:
+            baseline_id = self._create_baseline(client).get_json()["baseline_id"]
+            inherited = self._create_check(client, baseline_id).get_json()
+            confirmed = client.post("/api/v1/drift/checks", headers=self._headers(), data={
+                "baseline_id": baseline_id,
+                "datafile": (BytesIO(_csv_values(range(1000, 1100))), "current.csv"),
+                "semantic_contract": json.dumps(contract),
+            })
+        self.assertEqual(inherited["report"]["semantics"]["current"], "inherited_from_baseline")
+        self.assertEqual(confirmed.status_code, 201)
+        self.assertEqual(confirmed.get_json()["report"]["semantics"]["current"], "confirmed_for_batch")
+        self.assertNotEqual(inherited["run"]["run_id"], confirmed.get_json()["run"]["run_id"])
+
     def _create_baseline(self, client):
         return client.post(
             "/api/v1/drift/baselines",
-            data={"datafile": (BytesIO(_csv_values(range(100))), "baseline.csv")},
+            data={"datafile": (BytesIO(_csv_values(range(100))), "baseline.csv"),
+                  "semantic_contract": json.dumps(infer_semantic_contract(
+                      pd.DataFrame({"value": range(100)}), confirmed=True,
+                  ))},
             headers=self._headers(),
             content_type="multipart/form-data",
         )

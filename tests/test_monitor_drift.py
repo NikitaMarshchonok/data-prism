@@ -1,6 +1,7 @@
 import io
 import json
 import unittest
+import pandas as pd
 from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,11 +12,13 @@ from monitor_drift import (
     EXIT_OK,
     EXIT_THRESHOLD_REACHED,
     create_baseline,
+    propose_semantics,
     _load_stable_dataset,
     load_job_config,
     main,
     run_monitoring_job,
 )
+from src.semantic_contract import infer_semantic_contract
 
 
 class MonitorDriftCliTests(unittest.TestCase):
@@ -28,12 +31,16 @@ class MonitorDriftCliTests(unittest.TestCase):
         self.history_database = self.root / "history.sqlite3"
         self.config_path = self.root / "monitoring.json"
         _write_csv(self.baseline_data, range(100))
+        self.contract_path = self.root / "semantics.json"
+        self.contract_path.write_text(json.dumps(infer_semantic_contract(
+            pd.DataFrame({"value": range(100)}), confirmed=True,
+        )), encoding="utf-8")
 
     def tearDown(self):
         self.temporary_directory.cleanup()
 
     def test_create_baseline_and_run_stable_job(self):
-        baseline_result = create_baseline(self.baseline_data, self.baseline_profile)
+        baseline_result = self._create_baseline()
         _write_csv(self.current_data, range(100))
         self._write_config(fail_on="critical")
 
@@ -50,7 +57,7 @@ class MonitorDriftCliTests(unittest.TestCase):
             create_baseline(self.baseline_data, self.baseline_data)
 
     def test_warning_threshold_returns_machine_readable_exit_code(self):
-        create_baseline(self.baseline_data, self.baseline_profile)
+        self._create_baseline()
         _write_csv(self.current_data, range(1000, 1100))
         self._write_config(fail_on="warning")
 
@@ -67,7 +74,7 @@ class MonitorDriftCliTests(unittest.TestCase):
         self.assertEqual(duplicate_exit, EXIT_THRESHOLD_REACHED)
 
     def test_fail_on_never_records_critical_run_without_failing_job(self):
-        create_baseline(self.baseline_data, self.baseline_profile)
+        self._create_baseline()
         _write_csv(self.current_data, range(1000, 1100))
         self._write_config(fail_on="never")
 
@@ -88,6 +95,8 @@ class MonitorDriftCliTests(unittest.TestCase):
                     str(self.baseline_data),
                     "--output",
                     str(self.baseline_profile),
+                    "--semantic-contract",
+                    str(self.contract_path),
                 ]
             )
 
@@ -113,7 +122,7 @@ class MonitorDriftCliTests(unittest.TestCase):
         self.assertEqual(payload["error"]["type"], "ValueError")
 
     def test_config_rejects_unknown_fields_and_resolves_relative_paths(self):
-        create_baseline(self.baseline_data, self.baseline_profile)
+        self._create_baseline()
         _write_csv(self.current_data, range(100))
         self._write_config(extra={"typo_field": True})
 
@@ -126,7 +135,7 @@ class MonitorDriftCliTests(unittest.TestCase):
         self.assertEqual(loaded["history_database"], self.history_database.resolve())
 
     def test_history_database_cannot_overwrite_job_inputs(self):
-        create_baseline(self.baseline_data, self.baseline_profile)
+        self._create_baseline()
         _write_csv(self.current_data, range(100))
         self._write_config(extra={"history_database": self.current_data.name})
 
@@ -137,6 +146,76 @@ class MonitorDriftCliTests(unittest.TestCase):
     def test_dataset_change_during_read_is_rejected(self, _checksum):
         with self.assertRaisesRegex(RuntimeError, "changed while"):
             _load_stable_dataset(self.baseline_data)
+
+    def _create_baseline(self):
+        return create_baseline(self.baseline_data, self.baseline_profile,
+                               semantic_contract_path=self.contract_path)
+
+    def test_proposal_is_unconfirmed_and_cannot_overwrite_files(self):
+        path = self.root / "proposal.json"
+        payload = propose_semantics(self.baseline_data, path)
+        contract = json.loads(path.read_text())
+        self.assertFalse(payload["confirmed"])
+        self.assertFalse(contract["confirmed"])
+        with self.assertRaisesRegex(ValueError, "confirm"):
+            create_baseline(self.baseline_data, self.baseline_profile, semantic_contract_path=path)
+        for protected in (path, self.baseline_data):
+            with self.assertRaisesRegex(ValueError, "new file"):
+                propose_semantics(self.baseline_data, protected)
+
+    def test_contract_required_and_protected_from_baseline_output(self):
+        with self.assertRaisesRegex(ValueError, "reviewed"):
+            create_baseline(self.baseline_data, self.baseline_profile)
+        with self.assertRaisesRegex(ValueError, "overwrite the semantic"):
+            create_baseline(self.baseline_data, self.contract_path, semantic_contract_path=self.contract_path)
+
+    def test_auto_deduplication_includes_baseline_revision(self):
+        self._create_baseline()
+        _write_csv(self.current_data, range(1000, 1100))
+        self._write_config()
+        first, _ = run_monitoring_job(self.config_path)
+        duplicate, _ = run_monitoring_job(self.config_path)
+        _write_csv(self.baseline_data, range(1000, 1100))
+        self._create_baseline()
+        changed, _ = run_monitoring_job(self.config_path)
+        self.assertEqual(first["status"], "critical")
+        self.assertFalse(duplicate["run"]["created"])
+        self.assertTrue(changed["run"]["created"])
+        self.assertNotEqual(first["run"]["run_id"], changed["run"]["run_id"])
+        self.assertEqual(changed["status"], "stable")
+
+    def test_current_contract_provenance_and_input_protection(self):
+        self._create_baseline()
+        _write_csv(self.current_data, range(100))
+        self._write_config(extra={"current_semantic_contract": self.contract_path.name})
+        payload, _ = run_monitoring_job(self.config_path)
+        self.assertEqual(payload["report"]["semantics"]["current"], "confirmed_for_batch")
+        self._write_config(extra={"current_semantic_contract": self.contract_path.name,
+                                  "history_database": self.contract_path.name})
+        with self.assertRaisesRegex(ValueError, "overwrite"):
+            load_job_config(self.config_path)
+
+    def test_current_semantics_conflict_returns_json_error_without_history(self):
+        self._create_baseline()
+        _write_csv(self.current_data, range(100))
+        contract = json.loads(self.contract_path.read_text())
+        contract["columns"][0]["unit"] = "currency"
+        self.contract_path.write_text(json.dumps(contract), encoding="utf-8")
+        self._write_config(extra={"current_semantic_contract": self.contract_path.name})
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = main(["run", "--config", str(self.config_path)])
+        self.assertEqual(code, EXIT_ERROR)
+        self.assertIn("differ from the baseline", json.loads(output.getvalue())["error"]["message"])
+        self.assertFalse(self.history_database.exists())
+
+    def test_proposal_main_emits_one_json_document(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            code = main(["propose-semantics", "--data", str(self.baseline_data),
+                         "--output", str(self.root / "proposal.json")])
+        self.assertEqual(code, EXIT_OK)
+        self.assertFalse(json.loads(output.getvalue())["confirmed"])
 
     def _write_config(self, *, fail_on="critical", extra=None):
         config = {

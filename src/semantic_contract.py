@@ -148,15 +148,10 @@ def parse_semantic_contract_json(value: Any) -> Mapping[str, Any]:
     return parsed
 
 
-def validate_semantic_contract(
-    dataframe: pd.DataFrame,
-    contract: Mapping[str, Any],
-    *,
-    require_confirmation: bool = True,
+def _normalize_contract_metadata(
+    contract: Mapping[str, Any], *, require_confirmation: bool = True,
 ) -> dict[str, Any]:
-    """Validate and normalize one contract against the actual dataframe."""
-    if not isinstance(dataframe, pd.DataFrame):
-        raise TypeError("dataframe must be a pandas DataFrame")
+    """Validate schema-only rules without manufacturing reference rows."""
     if not isinstance(contract, Mapping):
         raise SemanticContractError("The semantic contract must be an object.")
     if contract.get("contract") != SEMANTIC_CONTRACT_VERSION:
@@ -166,34 +161,24 @@ def validate_semantic_contract(
             "Review and confirm the dataset semantics before analysis."
         )
 
-    dataset_columns = [str(column) for column in dataframe.columns]
-    if len(dataset_columns) > MAX_CONTRACT_COLUMNS:
-        raise SemanticContractError(
-            f"Semantic confirmation supports at most {MAX_CONTRACT_COLUMNS} columns."
-        )
-    if len(set(dataset_columns)) != len(dataset_columns):
-        raise SemanticContractError("Dataset column names must be unique.")
-
     submitted_columns = contract.get("columns")
     if not isinstance(submitted_columns, list):
         raise SemanticContractError("The semantic contract columns are missing.")
-    submitted_names = [
-        item.get("name") if isinstance(item, Mapping) else None
-        for item in submitted_columns
-    ]
-    if submitted_names != dataset_columns:
+    if len(submitted_columns) > MAX_CONTRACT_COLUMNS:
         raise SemanticContractError(
-            "The semantic contract no longer matches the uploaded dataset."
+            f"Semantic confirmation supports at most {MAX_CONTRACT_COLUMNS} columns."
         )
-
-    inferred = profile_dataframe_columns(dataframe)
+    names = set()
     normalized_columns = []
     target_count = 0
     time_count = 0
-    for original_column, submitted in zip(dataframe.columns, submitted_columns):
+    for submitted in submitted_columns:
         if not isinstance(submitted, Mapping):
             raise SemanticContractError("Each column semantic must be an object.")
-        name = str(original_column)
+        name = submitted.get("name")
+        if not isinstance(name, str) or name in names:
+            raise SemanticContractError("Semantic column names must be unique strings.")
+        names.add(name)
         role = submitted.get("role")
         unit = submitted.get("unit")
         is_target = submitted.get("is_target")
@@ -206,26 +191,12 @@ def validate_semantic_contract(
         if not all(isinstance(flag, bool) for flag in (is_target, is_time, excluded)):
             raise SemanticContractError(f"Column '{name}' has invalid semantic flags.")
 
-        profile = inferred[original_column]
-        is_numeric = bool(profile.get("is_numeric"))
-        if role == "measure" and not is_numeric:
-            raise SemanticContractError(
-                f"Column '{name}' cannot be a measure because it is not numeric."
-            )
-        if unit != "none" and (role != "measure" or not is_numeric):
+        if unit != "none" and role != "measure":
             raise SemanticContractError(
                 f"Column '{name}' can only have a numeric unit when it is a measure."
             )
         if role == "measure" and unit == "none":
             raise SemanticContractError(f"Measure '{name}' requires a unit.")
-        if unit == "count" and not profile.get("is_integer_like"):
-            raise SemanticContractError(
-                f"Column '{name}' cannot use the count unit because values are not integers."
-            )
-        if role == "temporal" and profile.get("role") != "temporal":
-            raise SemanticContractError(
-                f"Column '{name}' is not compatible with the temporal role."
-            )
         if is_target and role not in {"measure", "category"}:
             raise SemanticContractError(
                 f"Column '{name}' cannot be the target with role '{role}'."
@@ -242,16 +213,6 @@ def validate_semantic_contract(
             raise SemanticContractError(
                 f"Column '{name}' must be excluded from predictive features."
             )
-        if (
-            role == "category"
-            and float(profile.get("unique_ratio", 0.0)) >= 0.95
-            and int(profile.get("non_missing_count", 0)) >= 20
-            and not excluded
-        ):
-            raise SemanticContractError(
-                f"Near-unique category '{name}' must be excluded from predictive features."
-            )
-
         target_count += int(is_target)
         time_count += int(is_time)
         normalized_columns.append({
@@ -274,6 +235,57 @@ def validate_semantic_contract(
         "columns": normalized_columns,
     }
     normalized["sha256"] = _canonical_sha256(normalized)
+    return normalized
+
+
+def validate_stored_semantic_contract(contract: Mapping[str, Any]) -> dict[str, Any]:
+    """Check retained schema metadata and its fingerprint without source rows."""
+    normalized = _normalize_contract_metadata(contract)
+    if contract.get("sha256") != normalized["sha256"]:
+        raise SemanticContractError("The retained semantic fingerprint is inconsistent.")
+    return normalized
+
+
+def validate_semantic_contract(
+    dataframe: pd.DataFrame,
+    contract: Mapping[str, Any],
+    *,
+    require_confirmation: bool = True,
+) -> dict[str, Any]:
+    """Validate both schema metadata and compatibility with the actual rows."""
+    if not isinstance(dataframe, pd.DataFrame):
+        raise TypeError("dataframe must be a pandas DataFrame")
+    normalized = _normalize_contract_metadata(
+        contract, require_confirmation=require_confirmation,
+    )
+    dataset_names = [str(column) for column in dataframe.columns]
+    if len(set(dataset_names)) != len(dataset_names):
+        raise SemanticContractError("Dataset column names must be unique.")
+    if [item["name"] for item in normalized["columns"]] != dataset_names:
+        raise SemanticContractError("The semantic contract no longer matches the uploaded dataset.")
+    inferred = profile_dataframe_columns(dataframe)
+    for column, item in zip(dataframe.columns, normalized["columns"]):
+        name, role, unit = item["name"], item["role"], item["unit"]
+        profile = inferred[column]
+        if role == "measure" and not profile.get("is_numeric"):
+            raise SemanticContractError(
+                f"Column '{name}' cannot be a measure because it is not numeric."
+            )
+        if unit == "count" and not profile.get("is_integer_like"):
+            raise SemanticContractError(
+                f"Column '{name}' cannot use the count unit because values are not integers."
+            )
+        if role == "temporal" and profile.get("role") != "temporal":
+            raise SemanticContractError(f"Column '{name}' is not compatible with the temporal role.")
+        if (
+            role == "category"
+            and float(profile.get("unique_ratio", 0.0)) >= 0.95
+            and int(profile.get("non_missing_count", 0)) >= 20
+            and not item["exclude_from_predictors"]
+        ):
+            raise SemanticContractError(
+                f"Near-unique category '{name}' must be excluded from predictive features."
+            )
     return normalized
 
 
