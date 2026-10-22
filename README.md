@@ -247,12 +247,25 @@ python web_app.py
 
 The monitoring API is disabled until `DATA_PRISM_API_KEY` contains at least 32 characters.
 
-Create an aggregate baseline without retaining raw rows:
+Request an **unconfirmed schema proposal** first (no baseline or raw upload is retained):
+
+```bash
+curl -X POST http://localhost:5001/api/v1/drift/semantics \
+  -H "X-API-Key: $DATA_PRISM_API_KEY" \
+  -F "datafile=@reference.csv"
+```
+
+Save the response's `semantic_contract` object as `reference-semantics.json`.
+Review each column's role (`measure`, `category`, `identifier`, `temporal`) and
+unit (`number`, `count`, `currency`, `ratio`, `percent`, or `none` for non-measures),
+then set `confirmed` to `true`. Do not confirm inferred meanings without review.
+Create an aggregate baseline using that reviewed object:
 
 ```bash
 curl -X POST http://localhost:5001/api/v1/drift/baselines \
   -H "X-API-Key: $DATA_PRISM_API_KEY" \
-  -F "datafile=@reference.csv"
+  -F "datafile=@reference.csv" \
+  -F "semantic_contract=<reference-semantics.json"
 ```
 
 Run an idempotent drift check using the returned `baseline_id`:
@@ -275,15 +288,37 @@ curl http://localhost:5001/api/v1/drift/alerts \
   -H "X-API-Key: $DATA_PRISM_API_KEY"
 ```
 
-Bearer authentication is also supported. Identical checks are deduplicated using an `Idempotency-Key` or the uploaded content hash.
+Bearer authentication is also supported. Identical checks are deduplicated using
+an `Idempotency-Key` or the uploaded content plus semantic context hash (both
+scoped to the baseline ID). Use a new explicit key for a changed batch or meaning.
+
+New API baselines require confirmation and retain profile v3 with the normalized
+contract and semantic fingerprint. Checks inherit the fixed baseline definitions;
+the report labels this `inherited_from_baseline`, **not** fresh confirmation of
+the new batch. Optionally submit `-F "semantic_contract=<current-semantics.json"`
+to confirm the current batch explicitly. Shared roles and units must match;
+incompatible numeric/count values fail before history is written. Missing/new
+columns still produce schema diagnostics. No currency or scale conversion is
+performed: upstream definition/scale changes require operator review and a new
+baseline. The generic `currency` unit does not identify or verify a currency code.
 
 ## Automated drift jobs
 
-Create a reusable aggregate baseline:
+Generate a proposal, review its roles/units/flags, and set `confirmed` to `true`:
+
+```bash
+python monitor_drift.py propose-semantics \
+  --data data/reference.csv \
+  --output reference-semantics.json
+```
+
+The proposal command refuses to overwrite an existing file. Then create a
+reusable aggregate baseline (up to 100 columns; source rows are not stored):
 
 ```bash
 python monitor_drift.py create-baseline \
   --data data/reference.csv \
+  --semantic-contract reference-semantics.json \
   --output data/baselines/reference.json
 ```
 
@@ -300,6 +335,19 @@ The command emits one JSON document. Exit codes are stable:
 - `0`: check completed and the configured threshold was not reached;
 - `1`: configuration, input, or execution error;
 - `2`: the configured warning or critical threshold was reached.
+
+An optional `current_semantic_contract` config field points to a reviewed JSON
+contract for the current batch; paths resolve relative to the job config. Without
+it, checks explicitly report inherited baseline definitions. Automatic batch IDs
+include the current content hash, baseline revision, and semantic context so a
+new baseline does not reuse a stale run. Explicit `--batch-id` retains its
+idempotency semantics; change it when the intended check changes.
+
+Legacy v1/v2 baselines remain readable and reports label them
+`legacy_without_retained_contract` rather than asserting confirmed provenance.
+Recreate them with reviewed semantics to adopt v3; they are never silently
+upgraded. The classic web monitoring workflow still creates inferred v2 profiles.
+These are screening checks, not certification of business definitions or causality.
 
 ## Tests and continuous integration
 

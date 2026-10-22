@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping
@@ -12,14 +13,19 @@ import numpy as np
 import pandas as pd
 
 from src.column_semantics import column_role, profile_dataframe_columns
+from src.semantic_contract import (
+    profiles_from_semantic_contract,
+    validate_semantic_contract,
+    validate_stored_semantic_contract,
+)
 from src.statistical_primitives import (
     population_stability_index as _population_stability_index,
     total_variation_distance,
 )
 
 
-PROFILE_VERSION = 2
-SUPPORTED_PROFILE_VERSIONS = {1, PROFILE_VERSION}
+PROFILE_VERSION = 3
+SUPPORTED_PROFILE_VERSIONS = {1, 2, PROFILE_VERSION}
 MAX_PROFILE_FEATURES = 100
 MAX_CATEGORIES = 20
 NUMERIC_BINS = 10
@@ -34,6 +40,7 @@ def create_baseline_profile(
     *,
     dataset_name: str | None = None,
     column_profiles: Mapping | None = None,
+    semantic_contract: Mapping | None = None,
 ) -> Dict[str, Any]:
     """Build a JSON-serializable aggregate profile without storing raw rows."""
     if not isinstance(data, pd.DataFrame) or data.empty or data.shape[1] == 0:
@@ -41,6 +48,14 @@ def create_baseline_profile(
 
     columns: Dict[str, Dict[str, Any]] = {}
     column_map = _column_map(data)
+    confirmed = None
+    if semantic_contract is not None:
+        if column_profiles is not None:
+            raise ValueError("Use a semantic contract, not a simultaneous profile override.")
+        if len(column_map) > MAX_PROFILE_FEATURES:
+            raise ValueError(f"Confirmed baselines support at most {MAX_PROFILE_FEATURES} columns.")
+        confirmed = validate_semantic_contract(data, semantic_contract)
+        column_profiles = profiles_from_semantic_contract(data, confirmed, prevalidated=True)
     semantic_profiles = (
         column_profiles if column_profiles is not None
         else profile_dataframe_columns(data)
@@ -59,6 +74,8 @@ def create_baseline_profile(
             "missing_rate": round(_missing_rate(series, feature_type), 8),
             "non_null_count": int(series.notna().sum()),
         }
+        if confirmed is not None:
+            profile["unit"] = semantic_profiles[column]["unit"]
         if feature_type == "numeric":
             profile.update(_numeric_profile(series))
         elif feature_type == "categorical":
@@ -69,8 +86,8 @@ def create_baseline_profile(
             profile.update(_temporal_profile(series))
         columns[feature] = profile
 
-    return {
-        "profile_version": PROFILE_VERSION,
+    result = {
+        "profile_version": PROFILE_VERSION if confirmed is not None else 2,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "dataset_name": dataset_name,
         "row_count": int(len(data)),
@@ -80,6 +97,9 @@ def create_baseline_profile(
         "columns": columns,
         "privacy_note": "The profile contains aggregate statistics and category labels, not raw rows.",
     }
+    if confirmed is not None:
+        result["semantic_contract"] = confirmed
+    return result
 
 
 def save_baseline_profile(profile: Dict[str, Any], path: str | os.PathLike[str]) -> None:
@@ -87,13 +107,17 @@ def save_baseline_profile(profile: Dict[str, Any], path: str | os.PathLike[str])
     _validate_profile(profile)
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = output_path.with_suffix(f"{output_path.suffix}.tmp")
+    temporary_path = None
     try:
-        with temporary_path.open("w", encoding="utf-8") as output:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=output_path.parent,
+            prefix=f".{output_path.name}.", suffix=".tmp", delete=False,
+        ) as output:
+            temporary_path = Path(output.name)
             json.dump(profile, output, ensure_ascii=False, indent=2, allow_nan=False)
         os.replace(temporary_path, output_path)
     finally:
-        if temporary_path.exists():
+        if temporary_path is not None and temporary_path.exists():
             temporary_path.unlink()
 
 
@@ -110,6 +134,7 @@ def compare_to_baseline(
     baseline_profile: Dict[str, Any],
     *,
     column_profiles: Mapping | None = None,
+    semantic_contract: Mapping | None = None,
 ) -> Dict[str, Any]:
     """Compare a current batch with a previously persisted baseline profile."""
     if not isinstance(current_data, pd.DataFrame) or current_data.empty or current_data.shape[1] == 0:
@@ -127,6 +152,54 @@ def compare_to_baseline(
         else profile_dataframe_columns(current_data)
     )
     profile_version = int(baseline_profile["profile_version"])
+    # A v2 caller may have supplied reviewed profiles, but the stored profile
+    # alone has no retained contract proving that provenance.
+    semantics = {"baseline": "legacy_without_retained_contract", "current": "inferred"}
+    if profile_version == PROFILE_VERSION:
+        if column_profiles is not None:
+            raise ValueError("Confirmed baseline meanings cannot be overridden by column profiles.")
+        retained = baseline_profile["semantic_contract"]
+        meanings = {item["name"]: item for item in retained["columns"]}
+        semantics = {
+            "baseline": "confirmed",
+            "baseline_sha256": retained["sha256"],
+            "current": "inherited_from_baseline",
+            "limitation": (
+                "Matching metadata does not verify upstream definitions, currency or scale; "
+                "no unit conversion is performed. Inherited units are assumptions."
+            ),
+        }
+        if semantic_contract is not None:
+            current_contract = validate_semantic_contract(current_data, semantic_contract)
+            for item in current_contract["columns"]:
+                baseline_meaning = meanings.get(item["name"])
+                if baseline_meaning is not None and any(
+                    item[key] != baseline_meaning[key] for key in ("role", "unit")
+                ):
+                    raise ValueError(
+                        f"Current semantics differ from the baseline for '{item['name']}'; "
+                        "create a new baseline."
+                    )
+            semantics.update(
+                current="confirmed_for_batch", current_sha256=current_contract["sha256"],
+            )
+        for feature in set(baseline_columns) & set(current_columns):
+            column = current_columns[feature]
+            meaning = meanings[feature]
+            observed = semantic_profiles[column]
+            has_values = current_data[column].notna().any()
+            if has_values and meaning["role"] == "measure" and not observed.get("is_numeric"):
+                raise ValueError(f"Current measure '{feature}' must be numeric.")
+            if has_values and meaning["unit"] == "count" and not observed.get("is_integer_like"):
+                raise ValueError(f"Current count '{feature}' must contain integer values.")
+            semantic_profiles[column] = {**observed, **meaning}
+    elif semantic_contract is not None:
+        raise ValueError(
+            "A current semantic contract requires a confirmed v3 baseline; "
+            "recreate the legacy baseline."
+        )
+    elif column_profiles is not None:
+        semantics["current"] = "supplied_column_profiles"
 
     for feature in sorted(set(baseline_columns) & set(current_columns)):
         baseline = baseline_columns[feature]
@@ -179,6 +252,7 @@ def compare_to_baseline(
         "baseline_dataset_name": baseline_profile.get("dataset_name"),
         "baseline_rows": baseline_profile["row_count"],
         "current_rows": int(len(current_data)),
+        "semantics": semantics,
         "feature_drift": feature_drift,
         "schema_changes": {
             "missing_columns": missing_columns,
@@ -457,11 +531,35 @@ def _missing_severity(delta: float) -> str:
 def _validate_profile(profile: Dict[str, Any]) -> None:
     if not isinstance(profile, dict):
         raise ValueError("Baseline profile must be a dictionary.")
-    if profile.get("profile_version") not in SUPPORTED_PROFILE_VERSIONS:
+    version = profile.get("profile_version")
+    if type(version) is not int or version not in SUPPORTED_PROFILE_VERSIONS:
         raise ValueError("Unsupported baseline profile version.")
     required = {"created_at", "row_count", "column_count", "columns"}
     if not required.issubset(profile) or not isinstance(profile["columns"], dict):
         raise ValueError("Baseline profile is incomplete.")
+    if version == PROFILE_VERSION:
+        contract = validate_stored_semantic_contract(profile.get("semantic_contract"))
+        meanings = {item["name"]: item for item in contract["columns"]}
+        if (
+            not 1 <= len(meanings) <= MAX_PROFILE_FEATURES
+            or set(meanings) != set(profile["columns"])
+            or profile["column_count"] != len(meanings)
+            or profile.get("profiled_column_count") != len(meanings)
+            or profile.get("columns_truncated") is not False
+        ):
+            raise ValueError("Confirmed baseline columns are inconsistent with the semantic contract.")
+        role_types = {
+            "measure": "numeric", "category": "categorical",
+            "identifier": "identifier", "temporal": "temporal",
+        }
+        for name, item in meanings.items():
+            column = profile["columns"][name]
+            if not isinstance(column, dict) or (
+                column.get("semantic_role") != item["role"]
+                or column.get("unit") != item["unit"]
+                or column.get("feature_type") != role_types[item["role"]]
+            ):
+                raise ValueError("Confirmed baseline feature definitions are inconsistent.")
     for feature, column in profile["columns"].items():
         if not isinstance(feature, str) or not isinstance(column, dict):
             raise ValueError("Baseline profile contains an invalid column entry.")

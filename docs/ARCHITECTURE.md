@@ -274,13 +274,45 @@ sequenceDiagram
 
 Monitoring compares numeric distributions with PSI and categorical distributions with frequency-based drift measures. It also detects missingness and schema changes. Batch identities or content hashes prevent duplicate events from producing duplicate runs.
 
-Drift profile version 2 persists the semantic role and applies role-specific
-checks: measures use PSI, categories use total-variation distance, identifiers
-monitor missingness and uniqueness without retaining raw values, and temporal
-fields monitor parseability and missingness rather than ordinary passage of
-time. Version 1 aggregate profiles remain readable and are compared with their
-original dtype-based interpretation; newly created profiles always use version
-2.
+New standalone monitoring API/CLI baselines require a reviewed semantic contract.
+The authenticated `POST /api/v1/drift/semantics` and CLI `propose-semantics` return
+unconfirmed schema-only proposals. Creation validates the contract against the
+loaded data, then persists profile v3 with normalized definitions and their
+SHA-256 fingerprint. Confirmed baselines reject more than 100 columns rather than
+silently truncating definitions. Loading verifies the retained fingerprint and
+consistency between role/unit metadata and feature statistics; this detects
+inconsistency, not malicious edits with a recomputed fingerprint or false human
+confirmation. Atomic writes use unique temporary files, including concurrent
+writers.
+
+Checks pin shared roles to those retained definitions: measures use PSI,
+categories total-variation distance, identifiers missingness/uniqueness without
+raw identifiers, and temporal fields parseability/missingness rather than ordinary
+passage of time. A distribution/cardinality change cannot silently change a
+confirmed role. Non-numeric measures and fractional count batches are rejected;
+fully missing fields remain reportable as missingness drift. Missing/new columns
+remain schema diagnostics. Optional current-batch confirmation is validated
+against the actual frame and must agree on shared roles/units. Reports distinguish
+`confirmed_for_batch` from `inherited_from_baseline`; inherited units do not prove
+unchanged business definitions, scale, or currency. No conversion is performed,
+and the generic currency unit carries no currency code.
+
+Profile v1 remains readable with its original dtype-based interpretation. Inferred
+v2 profiles remain readable, and classic web monitoring still creates v2; neither
+is relabeled as confirmed. In-memory VibeDash comparisons also retain their v2
+drift profile with caller-provided, separately confirmed column profiles. Adopting
+v3 requires a new reviewed baseline, not an automatic migration. Standalone
+predictive and classic web semantics are outside this integration.
+
+API automatic deduplication includes baseline ID, file content, and semantic
+context; CLI automatic deduplication includes file content, the loaded baseline
+revision, and semantic context within the job scope. Explicit idempotency keys
+remain operator-controlled and must change for a changed intended check. Contract
+failures occur before drift history/alerts are written. API preflight, creation,
+and checks remove transient uploads on success or failure. CLI proposal creation
+refuses existing output files, and baseline/history outputs cannot overwrite
+their semantic input. Aggregated category labels are still retained by baselines;
+the privacy claim excludes raw rows, not all potentially sensitive metadata.
 
 ## Persistence
 

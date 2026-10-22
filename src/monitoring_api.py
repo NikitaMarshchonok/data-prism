@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import secrets
 import sqlite3
@@ -15,6 +16,7 @@ from flask import Blueprint, current_app, g, jsonify, request
 from werkzeug.utils import secure_filename
 
 from src.data_drift import (
+    MAX_PROFILE_FEATURES,
     compare_to_baseline,
     create_baseline_profile,
     load_baseline_profile,
@@ -22,6 +24,7 @@ from src.data_drift import (
 )
 from src.data_loader import is_supported_data_file, load_data
 from src.drift_store import DriftStore
+from src.semantic_contract import infer_semantic_contract, parse_semantic_contract_json
 
 
 monitoring_api_bp = Blueprint("monitoring_api", __name__, url_prefix="/api/v1/drift")
@@ -55,11 +58,29 @@ def authenticate_monitoring_api():
     return None
 
 
+@monitoring_api_bp.post("/semantics")
+def propose_api_semantics():
+    """Return a schema-only proposal; this never confirms or saves a baseline."""
+    try:
+        data, truncated, _name, _hash = _load_transient_dataset()
+        if len(data.columns) > MAX_PROFILE_FEATURES:
+            raise ValueError(f"Confirmed baselines support at most {MAX_PROFILE_FEATURES} columns.")
+        proposal = infer_semantic_contract(data)
+    except ValueError as error:
+        return _error_response("invalid_dataset", str(error), 400)
+    except OSError:
+        return _error_response("storage_error", "Could not read the uploaded dataset.", 500)
+    return jsonify({"semantic_contract": proposal, "rows_truncated": truncated})
+
+
 @monitoring_api_bp.post("/baselines")
 def create_api_baseline():
     try:
         data, truncated, dataset_name, _content_hash = _load_transient_dataset()
-        profile = create_baseline_profile(data, dataset_name=dataset_name)
+        contract = parse_semantic_contract_json(request.form.get("semantic_contract"))
+        profile = create_baseline_profile(
+            data, dataset_name=dataset_name, semantic_contract=contract,
+        )
         baseline_id = uuid.uuid4().hex
         save_baseline_profile(profile, _api_baseline_path(baseline_id))
     except ValueError as error:
@@ -75,6 +96,8 @@ def create_api_baseline():
                 "created_at": profile["created_at"],
                 "dataset_name": dataset_name,
                 "row_count": profile["row_count"],
+                "profile_version": profile["profile_version"],
+                "semantic_sha256": profile["semantic_contract"]["sha256"],
                 "column_count": profile["column_count"],
                 "columns_truncated": profile["columns_truncated"],
                 "rows_truncated": truncated,
@@ -97,9 +120,16 @@ def create_api_check():
     try:
         baseline_profile = load_baseline_profile(baseline_path)
         data, truncated, dataset_name, content_hash = _load_transient_dataset()
-        report = compare_to_baseline(data, baseline_profile)
+        contract = (
+            parse_semantic_contract_json(request.form["semantic_contract"])
+            if "semantic_contract" in request.form else None
+        )
+        report = compare_to_baseline(data, baseline_profile, semantic_contract=contract)
         idempotency_key = request.headers.get("Idempotency-Key")
-        batch_id = _batch_id(baseline_id, content_hash, idempotency_key)
+        context_hash = hashlib.sha256(
+            json.dumps(report["semantics"], sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        batch_id = _batch_id(baseline_id, f"{content_hash}:{context_hash}", idempotency_key)
         recorded = _store().record_run(
             report,
             batch_id=batch_id,
@@ -118,7 +148,7 @@ def create_api_check():
                 "report": report,
                 "rows_truncated": truncated,
                 "deduplication": (
-                    "Idempotency-Key" if idempotency_key else "uploaded content SHA-256"
+                    "Idempotency-Key" if idempotency_key else "uploaded content and semantic context SHA-256"
                 ),
             }
         ),
