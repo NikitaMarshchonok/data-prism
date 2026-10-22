@@ -19,6 +19,9 @@ from src.column_semantics import column_terms, profile_dataframe_columns
 SEMANTIC_CONTRACT_VERSION = "confirmed-semantic-contract-v1"
 MAX_CONTRACT_COLUMNS = 200
 MAX_CONTRACT_JSON_BYTES = 100_000
+# A normal contract needs only object -> columns array -> column object.
+# Keep a fixed budget instead of relying on Python's JSON recursion behavior.
+MAX_CONTRACT_JSON_DEPTH = 8
 
 ALLOWED_ROLES = {"measure", "category", "temporal", "identifier"}
 ALLOWED_UNITS = {"none", "number", "count", "currency", "ratio", "percent"}
@@ -115,9 +118,30 @@ def parse_semantic_contract_json(value: Any) -> Mapping[str, Any]:
         )
     if len(value.encode("utf-8")) > MAX_CONTRACT_JSON_BYTES:
         raise SemanticContractError("The semantic contract is too large.")
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "{[":
+            depth += 1
+            if depth > MAX_CONTRACT_JSON_DEPTH:
+                raise SemanticContractError("The semantic contract is nested too deeply.")
+        elif character in "}]":
+            depth -= 1
+            if depth < 0:
+                raise SemanticContractError("The semantic contract is not valid JSON.")
     try:
         parsed = json.loads(value)
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, RecursionError) as error:
         raise SemanticContractError("The semantic contract is not valid JSON.") from error
     if not isinstance(parsed, Mapping):
         raise SemanticContractError("The semantic contract must be a JSON object.")
@@ -175,9 +199,9 @@ def validate_semantic_contract(
         is_target = submitted.get("is_target")
         is_time = submitted.get("is_time")
         excluded = submitted.get("exclude_from_predictors")
-        if role not in ALLOWED_ROLES:
+        if not isinstance(role, str) or role not in ALLOWED_ROLES:
             raise SemanticContractError(f"Column '{name}' has an unsupported role.")
-        if unit not in ALLOWED_UNITS:
+        if not isinstance(unit, str) or unit not in ALLOWED_UNITS:
             raise SemanticContractError(f"Column '{name}' has an unsupported unit.")
         if not all(isinstance(flag, bool) for flag in (is_target, is_time, excluded)):
             raise SemanticContractError(f"Column '{name}' has invalid semantic flags.")

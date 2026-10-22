@@ -19,6 +19,7 @@ def _ui_app():
         "vibedash.dataset_readiness": "/vibedash/readiness",
         "vibedash.create_analysis_job": "/vibedash/jobs",
         "vibedash.create_period_comparison_job": "/vibedash/comparisons/jobs",
+        "vibedash.comparison_readiness": "/vibedash/comparisons/readiness",
         "vibedash.analysis_history": "/vibedash/history",
         "vibedash.decision_cases": "/vibedash/decisions",
         "vibedash.forget_pilot_metrics": "/vibedash/pilot/forget",
@@ -51,7 +52,31 @@ class VibeDashComparisonUITests(unittest.TestCase):
         self.assertIn("same row unit and metric definitions", html)
         self.assertIn("independent observational comparison", html)
         self.assertIn("comparisonBusy", html)
+        self.assertIn('id="comparison-semantic-review"', html)
+        self.assertIn('name="comparison_semantics_confirmed"', html)
+        self.assertIn('/vibedash/comparisons/readiness', html)
         self.assertNotIn("innerHTML", html)
+
+    def test_ratio_delta_is_percentage_points_and_relative_change_is_separate(self):
+        app = _ui_app()
+        for unit, baseline, current, delta in [('ratio', 0.05, 0.06, 0.01), ('percent', 5, 6, 1)]:
+            report = {
+                'numeric_metrics': {'metrics': [{
+                    'column': 'ConversionRate', 'unit': unit,
+                    'baseline': {'mean': baseline, 'median': baseline},
+                    'current': {'mean': current, 'median': current},
+                    'absolute_change': delta, 'percent_change': 20,
+                    'confidence_interval': {'lower': delta / 2, 'upper': delta * 2},
+                }]},
+            }
+            with self.subTest(unit=unit), app.test_request_context('/vibedash/'):
+                html = render_template('vibedash_comparison.html', report=report)
+                self.assertIn('5%', html)
+                self.assertIn('6%', html)
+                self.assertIn('1 pp', html)
+                self.assertIn('[0.5 pp, 2 pp]', html)
+                self.assertIn('20%', html)
+                self.assertNotIn('100 pp', html)
 
     def test_result_escapes_supplied_metadata_and_keeps_aggregate_contract(self):
         app = _ui_app()

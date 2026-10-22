@@ -65,6 +65,7 @@ try:
     )
     from .decision_brief import build_decision_brief
     from .comparison_report import build_comparison_decision_guidance
+    from .comparison_semantics import semantic_conflicts, validate_comparison_semantics
     from .pilot_metrics import (
         build_scope_value_feedback,
         feedback_available,
@@ -106,6 +107,7 @@ try:
         MAX_REQUEST_BYTES as COMPARISON_MAX_REQUEST_BYTES,
         MAX_TOTAL_COLUMNS as COMPARISON_MAX_TOTAL_COLUMNS,
         MAX_TOTAL_ROWS as COMPARISON_MAX_TOTAL_ROWS,
+        PeriodComparisonError,
         build_period_comparison,
     )
     from .account_export import (
@@ -511,6 +513,37 @@ if vibedash_bp:
         return value
 
 
+    def _load_comparison_frames(baseline_source, current_source):
+        """Apply identical bounded reads to preflight, queue, and worker inputs."""
+        baseline_df = _load_vibedash_csv(
+            baseline_source,
+            nrows=min(COMPARISON_MAX_ROWS, COMPARISON_MAX_TOTAL_ROWS) + 1,
+            max_columns=COMPARISON_MAX_COLUMNS,
+        )
+        if len(baseline_df) > min(COMPARISON_MAX_ROWS, COMPARISON_MAX_TOTAL_ROWS):
+            raise PeriodComparisonError('The comparison inputs exceed the row limit.')
+        remaining_rows = COMPARISON_MAX_TOTAL_ROWS - len(baseline_df)
+        remaining_columns = COMPARISON_MAX_TOTAL_COLUMNS - baseline_df.shape[1]
+        if remaining_columns < 1:
+            raise PeriodComparisonError('The comparison inputs exceed the combined column limit.')
+        current_df = _load_vibedash_csv(
+            current_source,
+            nrows=min(COMPARISON_MAX_ROWS, remaining_rows) + 1,
+            max_columns=min(COMPARISON_MAX_COLUMNS, remaining_columns),
+        )
+        if len(current_df) > COMPARISON_MAX_ROWS:
+            raise PeriodComparisonError('The comparison inputs exceed the row limit.')
+        if len(baseline_df) + len(current_df) > COMPARISON_MAX_TOTAL_ROWS:
+            raise PeriodComparisonError('The comparison inputs exceed the combined row limit.')
+        if baseline_df.shape[1] + current_df.shape[1] > COMPARISON_MAX_TOTAL_COLUMNS:
+            raise PeriodComparisonError('The comparison inputs exceed the combined column limit.')
+        if sum(int(frame.memory_usage(index=True, deep=True).sum()) for frame in (baseline_df, current_df)) > COMPARISON_MAX_MEMORY_BYTES:
+            raise PeriodComparisonError('The comparison inputs exceed the combined memory limit.')
+        for frame in (baseline_df, current_df):
+            frame.columns = [str(column).strip() for column in frame.columns]
+        return baseline_df, current_df
+
+
     def _comparison_filename(value, field):
         if not isinstance(value, str):
             raise ValueError(f'{field} is invalid.')
@@ -624,42 +657,19 @@ if vibedash_bp:
             if baseline_label.casefold() == current_label.casefold():
                 raise ValueError('The comparison labels must be distinct.')
 
-            # nrows=100001 is intentional: one extra row is enough to reject a
-            # file over the hard 100,000-row contract without loading it all.
-            baseline_df = _load_vibedash_csv(
-                baseline_path,
-                nrows=min(COMPARISON_MAX_ROWS, COMPARISON_MAX_TOTAL_ROWS) + 1,
-                max_columns=COMPARISON_MAX_COLUMNS,
+            baseline_df, current_df = _load_comparison_frames(baseline_path, current_path)
+            before, after = validate_comparison_semantics(
+                baseline_df, current_df,
+                baseline.get('semantic_contract'), current.get('semantic_contract'),
             )
-            if len(baseline_df) > COMPARISON_MAX_ROWS or len(baseline_df) > COMPARISON_MAX_TOTAL_ROWS:
-                raise ValueError('The comparison inputs exceed the row limit.')
-            remaining_rows = COMPARISON_MAX_TOTAL_ROWS - len(baseline_df)
-            remaining_columns = COMPARISON_MAX_TOTAL_COLUMNS - baseline_df.shape[1]
-            if remaining_columns < 1:
-                raise ValueError('The comparison inputs exceed the combined column limit.')
-            current_df = _load_vibedash_csv(
-                current_path,
-                nrows=min(COMPARISON_MAX_ROWS, remaining_rows) + 1,
-                max_columns=min(COMPARISON_MAX_COLUMNS, remaining_columns),
-            )
-            if len(baseline_df) > COMPARISON_MAX_ROWS or len(current_df) > COMPARISON_MAX_ROWS:
-                raise ValueError('The comparison inputs exceed the row limit.')
-            if len(baseline_df) + len(current_df) > COMPARISON_MAX_TOTAL_ROWS:
-                raise ValueError('The comparison inputs exceed the combined row limit.')
-            if baseline_df.shape[1] + current_df.shape[1] > COMPARISON_MAX_TOTAL_COLUMNS:
-                raise ValueError('The comparison inputs exceed the combined column limit.')
-            combined_memory = sum(
-                int(frame.memory_usage(index=True, deep=True).sum())
-                for frame in (baseline_df, current_df)
-            )
-            if combined_memory > COMPARISON_MAX_MEMORY_BYTES:
-                raise ValueError('The comparison inputs exceed the combined memory limit.')
 
             report = build_period_comparison(
                 baseline_df,
                 current_df,
                 baseline_label=baseline_label,
                 current_label=current_label,
+                baseline_semantic_contract=before,
+                current_semantic_contract=after,
             )
             baseline_filename = _comparison_filename(
                 baseline.get('filename'), 'baseline_filename'
@@ -2187,6 +2197,39 @@ if vibedash_bp:
         }), 202
 
 
+    @vibedash_bp.post('/comparisons/readiness')
+    def comparison_readiness():
+        """Read two request streams without creating retained working copies."""
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Invalid form token.'}), 400
+        if request.content_length is not None and request.content_length > COMPARISON_MAX_REQUEST_BYTES:
+            return jsonify({'error': 'The comparison request exceeds the upload limit.'}), 413
+        uploads = [request.files.get(name) for name in ('baseline_file', 'current_file')]
+        if any(upload is None or not upload.filename for upload in uploads):
+            return jsonify({'error': 'Two CSV files are required.'}), 400
+        if any(Path(secure_filename(upload.filename)).suffix.lower() != '.csv' for upload in uploads):
+            return jsonify({'error': 'VibeDash currently accepts CSV files only.'}), 400
+        try:
+            before_df, after_df = _load_comparison_frames(uploads[0].stream, uploads[1].stream)
+            readiness = {
+                'baseline': DatasetReadinessEngine(before_df).assess(),
+                'current': DatasetReadinessEngine(after_df).assess(),
+            }
+            allowed = all(item['analysis_allowed'] for item in readiness.values())
+            before = infer_semantic_contract(before_df) if allowed else None
+            after = infer_semantic_contract(after_df) if allowed else None
+            return jsonify({
+                'analysis_allowed': allowed,
+                'readiness': readiness,
+                'semantic_contracts': {'baseline': before, 'current': after},
+                'conflicts': semantic_conflicts(before, after) if allowed else [],
+            })
+        except (SemanticContractError, PeriodComparisonError) as error:
+            return jsonify({'error': str(error)}), 422
+        except (pd.errors.ParserError, UnicodeDecodeError, ValueError):
+            return jsonify({'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'}), 422
+
+
     @vibedash_bp.post('/comparisons/jobs')
     def create_period_comparison_job():
         """Queue one bounded comparison between two uploaded CSV periods."""
@@ -2250,34 +2293,7 @@ if vibedash_bp:
             _save_comparison_upload(current_upload, paths[1])
             if sum(path.stat().st_size for path in paths) > COMPARISON_MAX_REQUEST_BYTES:
                 return jsonify({'error': 'The comparison inputs exceed the upload limit.'}), 413
-            baseline_df = _load_vibedash_csv(
-                paths[0],
-                nrows=min(COMPARISON_MAX_ROWS, COMPARISON_MAX_TOTAL_ROWS) + 1,
-                max_columns=COMPARISON_MAX_COLUMNS,
-            )
-            if len(baseline_df) > COMPARISON_MAX_ROWS or len(baseline_df) > COMPARISON_MAX_TOTAL_ROWS:
-                return jsonify({'error': 'The comparison inputs exceed the row limit.'}), 422
-            remaining_rows = COMPARISON_MAX_TOTAL_ROWS - len(baseline_df)
-            remaining_columns = COMPARISON_MAX_TOTAL_COLUMNS - baseline_df.shape[1]
-            if remaining_columns < 1:
-                return jsonify({'error': 'The comparison inputs exceed the combined column limit.'}), 422
-            current_df = _load_vibedash_csv(
-                paths[1],
-                nrows=min(COMPARISON_MAX_ROWS, remaining_rows) + 1,
-                max_columns=min(COMPARISON_MAX_COLUMNS, remaining_columns),
-            )
-            if len(baseline_df) > COMPARISON_MAX_ROWS or len(current_df) > COMPARISON_MAX_ROWS:
-                return jsonify({'error': 'The comparison inputs exceed the row limit.'}), 422
-            if len(baseline_df) + len(current_df) > COMPARISON_MAX_TOTAL_ROWS:
-                return jsonify({'error': 'The comparison inputs exceed the combined row limit.'}), 422
-            if baseline_df.shape[1] + current_df.shape[1] > COMPARISON_MAX_TOTAL_COLUMNS:
-                return jsonify({'error': 'The comparison inputs exceed the combined column limit.'}), 422
-            combined_memory = sum(
-                int(frame.memory_usage(index=True, deep=True).sum())
-                for frame in (baseline_df, current_df)
-            )
-            if combined_memory > COMPARISON_MAX_MEMORY_BYTES:
-                return jsonify({'error': 'The comparison inputs exceed the combined memory limit.'}), 422
+            baseline_df, current_df = _load_comparison_frames(paths[0], paths[1])
             baseline_readiness = DatasetReadinessEngine(baseline_df).assess()
             current_readiness = DatasetReadinessEngine(current_df).assess()
             readiness = {
@@ -2290,6 +2306,14 @@ if vibedash_bp:
                     'readiness': readiness,
                 }), 422
 
+            if request.form.get('comparison_semantics_confirmed') != 'yes':
+                raise SemanticContractError('Review both files and confirm matching row units, metric definitions, and currency before comparison.')
+            before, after = validate_comparison_semantics(
+                baseline_df, current_df,
+                parse_semantic_contract_json(request.form.get('baseline_semantic_contract')),
+                parse_semantic_contract_json(request.form.get('current_semantic_contract')),
+            )
+
             store = _analysis_job_store()
             job = store.create(
                 request_scope,
@@ -2299,11 +2323,13 @@ if vibedash_bp:
                         'stored_filename': stored_filenames[0],
                         'filename': filenames[0],
                         'label': baseline_label,
+                        'semantic_contract': before,
                     },
                     'current': {
                         'stored_filename': stored_filenames[1],
                         'filename': filenames[1],
                         'label': current_label,
+                        'semantic_contract': after,
                     },
                 },
                 max_active_per_scope=current_app.config[
@@ -2320,6 +2346,10 @@ if vibedash_bp:
             return jsonify({
                 'error': 'This analysis scope is no longer available.'
             }), 409
+        except SemanticContractError as error:
+            return jsonify({'error': str(error), 'semantic_contract_error': True}), 422
+        except PeriodComparisonError as error:
+            return jsonify({'error': str(error)}), 422
         except (pd.errors.ParserError, UnicodeDecodeError, ValueError):
             current_app.logger.info(
                 'VibeDash comparison input rejected',

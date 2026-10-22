@@ -61,6 +61,7 @@ _ANALYSIS_CONTRACTS = frozenset({
     "vibedash-evidence-v2",
     "vibedash-evidence-v3",
     "vibedash-period-comparison-v1",
+    "vibedash-period-comparison-v2",
 })
 _READINESS_CONTRACTS = frozenset({"dataset-readiness-v1"})
 _DECISION_BRIEF_CONTRACTS = frozenset({"decision-brief-v1"})
@@ -68,7 +69,7 @@ _DECISION_CASE_CONTRACTS = frozenset({"decision-case-source-v1"})
 _READINESS_STATUSES = frozenset({"blocked", "ready_with_warnings", "ready"})
 _DECISION_BRIEF_STATUSES = frozenset({"blocked", "review_required", "insufficient_evidence"})
 _COMPARISON_STATUSES = frozenset({"stable", "review_required"})
-_COMPARISON_CONTRACTS = frozenset({"period-comparison-v1"})
+_COMPARISON_CONTRACTS = frozenset({"period-comparison-v1", "period-comparison-v2"})
 _SECURITY_EVENT_TYPES = frozenset({
     "account_created",
     "signed_in",
@@ -256,7 +257,7 @@ def _normal_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
 def _comparison_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {"kind": "comparison"}
     _put(result, "manifest_version", _safe_count(manifest.get("manifest_version")))
-    _put(result, "analysis_contract", _enum(manifest.get("analysis_contract"), frozenset({"vibedash-period-comparison-v1"})))
+    _put(result, "analysis_contract", _enum(manifest.get("analysis_contract"), frozenset({"vibedash-period-comparison-v1", "vibedash-period-comparison-v2"})))
     generated = _timestamp(manifest.get("generated_at"))
     _put(result, "generated_at", generated)
 
@@ -307,7 +308,7 @@ def _safe_manifest(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
     contract = value.get("analysis_contract")
-    if contract == "vibedash-period-comparison-v1" or "inputs" in value or "comparison" in value:
+    if contract in ("vibedash-period-comparison-v1", "vibedash-period-comparison-v2") or "inputs" in value or "comparison" in value:
         return _comparison_manifest(value)
     return _normal_manifest(value)
 

@@ -53,6 +53,12 @@
     {% set raw_limitations = comparison.get('limitations') %}
     {% set limitations = raw_limitations if raw_limitations is sequence and raw_limitations is not string and raw_limitations is not mapping else [] %}
     {% macro value_or_dash(value) %}{% if value is none %}—{% else %}{{ value }}{% endif %}{% endmacro %}
+    {% macro semantic_value(value, unit, delta=false) %}
+        {%- if value is not number -%}{{ value_or_dash(value) }}
+        {%- elif unit == 'ratio' -%}{{ '%.4g'|format(value * 100) }}{% if delta %} pp{% else %}%{% endif %}
+        {%- elif unit == 'percent' -%}{{ '%.4g'|format(value) }}{% if delta %} pp{% else %}%{% endif %}
+        {%- else -%}{{ value }}{%- endif -%}
+    {% endmacro %}
 
     {% if not export_mode|default(false) %}<nav class="topbar" aria-label="Period comparison navigation">
         <a class="brand" href="{{ url_for('vibedash.index') }}" aria-label="Data Prism home">
@@ -84,6 +90,7 @@
                 <h2 id="summary-heading">Evidence snapshot</h2>
             </div>
             <p>{{ comparison.get('summary') or 'No summary is available for this comparison.' }}</p>
+            {% if comparison.get('semantics') is mapping %}<p>Column roles and stored units were confirmed for both periods. Shared definitions were aligned; source values were not rescaled.</p>{% endif %}
         </section>
 
         <section aria-labelledby="inputs-heading">
@@ -131,7 +138,7 @@
             <div class="table-wrap">
                 <table class="metrics-table">
                     <caption>Numeric comparison; all deltas use current minus baseline.</caption>
-                    <thead><tr><th scope="col">Metric</th><th scope="col">Baseline mean<br><span>median</span></th><th scope="col">Current mean<br><span>median</span></th><th scope="col">Delta<br><span>percent</span></th><th scope="col">95% CI for delta</th><th scope="col">Adjusted p</th><th scope="col">Hedges g<br><span>magnitude</span></th><th scope="col">Status</th></tr></thead>
+                    <thead><tr><th scope="col">Metric</th><th scope="col">Baseline mean<br><span>median</span></th><th scope="col">Current mean<br><span>median</span></th><th scope="col">Delta<br><span>relative change %</span></th><th scope="col">95% CI for delta</th><th scope="col">Adjusted p</th><th scope="col">Hedges g<br><span>magnitude</span></th><th scope="col">Status</th></tr></thead>
                     <tbody>
                     {% for metric in metrics %}
                         {% set metric_data = metric if metric is mapping else {} %}
@@ -142,11 +149,11 @@
                         {% set current_stats = raw_current_stats if raw_current_stats is mapping else {} %}
                         {% set interval = raw_interval if raw_interval is mapping else {} %}
                         <tr>
-                            <th scope="row">{{ metric_data.get('column') or 'Unnamed metric' }}</th>
-                            <td>{{ value_or_dash(baseline_stats.get('mean')) }}<br><span>{{ value_or_dash(baseline_stats.get('median')) }}</span></td>
-                            <td>{{ value_or_dash(current_stats.get('mean')) }}<br><span>{{ value_or_dash(current_stats.get('median')) }}</span></td>
-                            <td>{{ value_or_dash(metric_data.get('absolute_change')) }}<br><span>{% if metric_data.get('percent_change') is not none %}{{ metric_data.get('percent_change') }}%{% else %}—{% endif %}</span>{% if metric_data.get('percent_change_reason') %}<small>{{ metric_data.get('percent_change_reason') }}</small>{% endif %}</td>
-                            <td>{% if interval %}[{{ value_or_dash(interval.get('lower')) }}, {{ value_or_dash(interval.get('upper')) }}]{% else %}—{% endif %}</td>
+                            <th scope="row">{{ metric_data.get('column') or 'Unnamed metric' }}{% if metric_data.get('unit') %}<br><small>{{ metric_data.get('unit') }}</small>{% endif %}</th>
+                            <td>{{ semantic_value(baseline_stats.get('mean'), metric_data.get('unit')) }}<br><span>{{ semantic_value(baseline_stats.get('median'), metric_data.get('unit')) }}</span></td>
+                            <td>{{ semantic_value(current_stats.get('mean'), metric_data.get('unit')) }}<br><span>{{ semantic_value(current_stats.get('median'), metric_data.get('unit')) }}</span></td>
+                            <td>{{ semantic_value(metric_data.get('absolute_change'), metric_data.get('unit'), true) }}<br><span>{% if metric_data.get('percent_change') is not none %}{{ metric_data.get('percent_change') }}%{% else %}—{% endif %}</span>{% if metric_data.get('percent_change_reason') %}<small>{{ metric_data.get('percent_change_reason') }}</small>{% endif %}</td>
+                            <td>{% if interval %}[{{ semantic_value(interval.get('lower'), metric_data.get('unit'), true) }}, {{ semantic_value(interval.get('upper'), metric_data.get('unit'), true) }}]{% else %}—{% endif %}</td>
                             <td>{{ value_or_dash(metric_data.get('adjusted_p_value')) }}</td>
                             <td>{{ value_or_dash(metric_data.get('hedges_g')) }}<br><span>{{ metric_data.get('magnitude') or '—' }}</span></td>
                             <td><span class="metric-status metric-status-{{ metric_data.get('status', 'unknown') }}">{{ metric_data.get('status') or '—' }}</span></td>
@@ -155,6 +162,7 @@
                     </tbody>
                 </table>
             </div>
+            <p class="empty-copy">For ratio/percent metrics, absolute deltas and confidence intervals are in percentage points (pp); relative change uses the baseline mean. Currency values retain the confirmed shared currency without assuming a symbol.</p>
             {% else %}
             <div class="empty-state"><h3>No eligible numeric metrics</h3><p>There are no shared numeric columns with enough evidence to display. Schema and drift sections may still contain useful diagnostics.</p></div>
             {% endif %}

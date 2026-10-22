@@ -4,6 +4,7 @@ import unittest
 import pandas as pd
 
 from src.semantic_contract import (
+    MAX_CONTRACT_JSON_DEPTH,
     SEMANTIC_CONTRACT_VERSION,
     SemanticContractError,
     infer_semantic_contract,
@@ -103,6 +104,26 @@ class SemanticContractTests(unittest.TestCase):
             parse_semantic_contract_json("")
         with self.assertRaises(SemanticContractError):
             parse_semantic_contract_json("[]")
+
+    def test_json_depth_budget_has_a_portable_boundary_for_arrays_and_objects(self):
+        for opener, closer in [("[", "]"), ('{"item":', "}")]:
+            allowed = '{"x":' + opener * (MAX_CONTRACT_JSON_DEPTH - 1) + '0' + closer * (MAX_CONTRACT_JSON_DEPTH - 1) + '}'
+            with self.subTest(container=opener):
+                self.assertEqual(parse_semantic_contract_json(allowed), json.loads(allowed))
+                for depth in (MAX_CONTRACT_JSON_DEPTH, 2000):
+                    rejected = '{"x":' + opener * depth + '0' + closer * depth + '}'
+                    with self.subTest(depth=depth), self.assertRaisesRegex(SemanticContractError, "nested too deeply"):
+                        parse_semantic_contract_json(rejected)
+
+    def test_json_depth_ignores_brackets_quotes_and_backslashes_in_strings(self):
+        column = 'Field "quoted" \\ ' + '[{}]' * 30
+        dataframe = pd.DataFrame({column: [1.25, 2.5, 3.75]})
+        contract = infer_semantic_contract(dataframe, confirmed=True)
+        encoded = json.dumps(contract, ensure_ascii=True)
+        parsed = parse_semantic_contract_json(encoded)
+        self.assertEqual(parsed, contract)
+        self.assertEqual(validate_semantic_contract(dataframe, parsed), contract)
+        self.assertEqual(parse_semantic_contract_json('{"escaped": "\\u005b\\u005d"}'), {"escaped": "[]"})
 
 
 if __name__ == "__main__":

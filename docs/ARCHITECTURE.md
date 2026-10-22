@@ -82,9 +82,11 @@ because pandas stores them as numbers. In the single-dataset VibeDash flow,
 `src/semantic_contract.py` overlays the user-confirmed role and unit onto fresh
 aggregate profiles before dashboard specification, evidence findings,
 statistical validation, anomaly/segment analysis, charts, and audit tables.
-The two-period comparison, drift interfaces, and standalone predictive API
-still consume the heuristic shared profile; they must not yet be described as
-covered by user-confirmed semantics.
+Two-period VibeDash comparison validates a confirmed contract for each input,
+requires matching roles and units on shared fields, and supplies these profiles
+to both Welch inference and the in-memory drift calculation. Standalone drift
+interfaces and the standalone predictive API still consume the heuristic shared
+profile and are follow-up integrations.
 
 ## Component map
 
@@ -94,7 +96,8 @@ covered by user-confirmed semantics.
 | `src/observability.py` | Request correlation, structured application logs, deployment version, response safety headers | External log storage or tracing backend |
 | `src/data_loader.py` | Format validation, bounded loading, normalization | Business interpretation |
 | `src/column_semantics.py` | Shared data-aware analytical roles used by supported deterministic engines | Confirmed domain meaning or user-authored schema overrides |
-| `src/semantic_contract.py` | Bounded proposal, validation, fingerprinting, and profile overrides for confirmed single-dataset VibeDash semantics | Domain truth, ontology management, or semantics for comparison/drift/direct ML flows |
+| `src/semantic_contract.py` | Bounded proposal, validation, fingerprinting, and confirmed profile overrides | Domain truth, ontology management, or standalone drift/direct ML confirmation |
+| `vibedash/comparison_semantics.py` | Matching roles and units across two confirmed schemas and schema-only audit metadata | Scale conversion, currency conversion, or proof that row/population definitions match |
 | `src/statistical_primitives.py` | Validated Pearson intervals, Welch inference, Hedges' g, Benjamini–Hochberg FDR, PSI, and total-variation calculations shared across engines | Eligibility rules, semantic interpretation, or causal claims |
 | `src/demo_data.py` | Deterministic synthetic SaaS data for the product demo | User data or production fixtures |
 | `src/data_analyzer.py` | Descriptive profiling and data-quality checks | Predictive modelling |
@@ -206,7 +209,9 @@ ephemerality may remove any of this state earlier after a restart or redeploy.
 
 ### Two-period comparison boundary
 
-The VibeDash landing page's **Compare two periods** form accepts two CSV snapshots: a baseline and a current period. The route queues a guest-browser or pilot-account-scoped asynchronous job, and the worker loads both frames, runs readiness checks, and builds an aggregate-only `period-comparison-v1` result. The result combines schema changes and distribution drift with numeric current-minus-baseline mean deltas. Shared numeric metrics that have sufficient finite observations are tested with Welch's independent-samples t-test; each tested metric includes a 95% confidence interval and Hedges' g, and raw p-values are adjusted with Benjamini–Hochberg FDR. The comparison is observational and non-causal: it does not attribute a difference to an intervention, and seasonality, population-mix changes, confounding, or row dependence can account for observed changes.
+The VibeDash landing page's **Compare two periods** form accepts two CSV snapshots: a baseline and a current period. CSRF-protected preflight reads both streams through the same bounded loader used by the queue and worker, normalizes column-name whitespace, checks readiness, and returns schema-only role/unit proposals. No application working copy is retained by preflight. The browser discards proposals and confirmation when either file changes and ignores late preflight responses. The user confirms matching row units, definitions, scales, and currency. The job route validates both contracts against the actual uploaded frames and rejects role/unit conflicts on shared columns. The worker repeats this validation and produces `period-comparison-v2`, with a comparison manifest v2 containing both semantic fingerprints. Historical v1 reports and account exports remain readable; older queued jobs without confirmation fail closed and clean up their inputs rather than silently adopting inferred definitions.
+
+The result combines schema changes and distribution drift with numeric current-minus-baseline mean deltas. Both drift profiles and candidate selection use the confirmed roles; missing/new columns still produce schema diagnostics. Shared measures that have sufficient finite observations are tested with Welch's independent-samples t-test; each tested metric includes a 95% confidence interval and Hedges' g, and raw p-values are adjusted with Benjamini–Hochberg FDR. Numeric values are not rescaled. Ratio/percent means display as percentages, deltas/intervals as percentage points, and relative changes remain separate. Currency remains in the user's confirmed common currency with no inferred symbol. The comparison is observational and non-causal: seasonality, population-mix changes, confounding, or row dependence can account for observed changes. Agreement on metadata does not prove matching business definitions.
 
 The comparison resource contract is bounded in both request and process memory: each file is limited to 100,000 rows and 100 columns; the pair is limited to 100,000 combined rows and 100 combined columns, 100 MiB of uploaded bytes, and 256 MiB of combined in-memory frames. Inferential work is capped at 32 candidate metrics, with up to 8 displayed and a minimum of 8 finite observations in each period for a test. These limits apply to the comparison as a whole where stated, so two individually valid files cannot exceed the combined budget.
 
