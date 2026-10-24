@@ -716,8 +716,21 @@ def _parse_heuristics(
     comments.append("Дашборд создан автоматически на основе вашего запроса")
     if numeric_cols:
         comments.append(f"Проанализировано {len(numeric_cols)} числовых колонок")
-    if categorical_cols:
-        comments.append(f"Найдено {len(categorical_cols)} категориальных колонок")
+    # categorical_cols also holds temporal fields for chart construction.
+    # Report schema roles separately, not that internal working list.
+    role_counts = {
+        role: sum(
+            col not in excluded and _column_role(col, profiles) == role
+            for col in df_columns
+        )
+        for role in ("category", "temporal", "identifier")
+    }
+    if role_counts["category"]:
+        comments.append(f"Найдено {role_counts['category']} категориальных колонок")
+    if role_counts["temporal"]:
+        comments.append(f"Временные поля: {role_counts['temporal']}")
+    if role_counts["identifier"]:
+        comments.append(f"Идентификаторы (не числовые меры): {role_counts['identifier']}")
     
     return VizSpec(
         title=title,

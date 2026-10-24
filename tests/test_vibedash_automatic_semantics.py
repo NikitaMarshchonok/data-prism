@@ -9,6 +9,7 @@ from vibedash.generator_bridge import (
     _generate_tables,
 )
 from vibedash.spec import Chart, Filter, Metric, VizSpec, parse_prompt_to_viz_spec
+from src.semantic_contract import infer_semantic_contract, profiles_from_semantic_contract
 
 
 PILOT_COLUMNS = [
@@ -27,6 +28,47 @@ PILOT_COLUMNS = [
 
 
 class VibeDashAutomaticSemanticsTests(unittest.TestCase):
+    @patch("vibedash.spec._improve_with_ollama", return_value=None)
+    def test_summary_separates_confirmed_categories_dates_and_identifiers(self, _ollama):
+        frame = self._bike_sharing_frame()
+        contract = infer_semantic_contract(frame, confirmed=True)
+        # The synthetic fixture's casual counts happen to be sequential; the
+        # reviewed business role must win over that identifier heuristic.
+        for item in contract["columns"]:
+            if item["name"] in {"casual", "registered", "cnt"}:
+                item.update(role="measure", unit="count")
+        profiles = profiles_from_semantic_contract(frame, contract)
+        spec = parse_prompt_to_viz_spec(
+            "Analyze cnt over dteday by season", list(frame.columns),
+            dataframe=frame, column_profiles=profiles,
+        )
+        counts = {
+            role: sum(profile["role"] == role for profile in profiles.values())
+            for role in ("category", "temporal", "identifier")
+        }
+        self.assertIn(f"Найдено {counts['category']} категориальных колонок", spec.comments)
+        self.assertIn("Временные поля: 1", spec.comments)
+        self.assertIn("Идентификаторы (не числовые меры): 1", spec.comments)
+        self.assertEqual(counts["category"], 7)
+        self.assertEqual(counts["temporal"], 1)
+        self.assertEqual(counts["identifier"], 1)
+        self.assertTrue(any(chart.type == "line" and chart.x == "dteday" for chart in spec.charts))
+
+    @patch("vibedash.spec._improve_with_ollama", return_value=None)
+    def test_summary_counts_constant_categories_not_only_chart_candidates(self, _ollama):
+        frame = pd.DataFrame({
+            "Date": pd.date_range("2026-01-01", periods=40).astype(str),
+            "Region": ["one-region"] * 40,
+            "Revenue": range(40),
+        })
+        profiles = profiles_from_semantic_contract(frame, infer_semantic_contract(frame, confirmed=True))
+        spec = parse_prompt_to_viz_spec(
+            "Show revenue over time", list(frame.columns), dataframe=frame, column_profiles=profiles,
+        )
+        self.assertIn("Найдено 1 категориальных колонок", spec.comments)
+        self.assertIn("Временные поля: 1", spec.comments)
+        self.assertFalse(any(chart.group == "Region" for chart in spec.charts))
+
     @staticmethod
     def _bike_sharing_frame():
         rows = 60
