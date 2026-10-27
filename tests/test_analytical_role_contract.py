@@ -77,14 +77,15 @@ class AnalyticalRoleContractTests(unittest.TestCase):
             "weekday", "workingday", "weathersit",
         }
 
-        statistics = StatisticalValidationEngine(data).analyze(max_results=100)
-        correlations = [
-            test for test in statistics["tests"] if test["family"] == "correlation"
-        ]
-        self.assertTrue(correlations)
-        self.assertTrue(
-            all(not (set(test["columns"]) & forbidden) for test in correlations)
-        )
+        engine = StatisticalValidationEngine(data)
+        # Eligibility now withholds IID inference for this dated fixture.
+        # Verify measure selection independently of the inference decision.
+        self.assertTrue(engine._numeric_columns())
+        self.assertFalse(set(engine._numeric_columns()) & forbidden)
+        self.assertIn("cnt", engine._numeric_columns())
+        statistics = engine.analyze(max_results=100)
+        self.assertEqual(statistics["inference_status"], "withheld")
+        self.assertEqual(statistics["tests"], [])
 
         patterns = AnomalySegmentationEngine(data).analyze()
         self.assertEqual(patterns["status"], "ok")

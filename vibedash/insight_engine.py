@@ -69,7 +69,18 @@ class EvidenceBasedInsightEngine:
             if finding is not None:
                 findings.append(finding)
 
-        return [finding.to_dict() for finding in findings[:max_insights]]
+        serialized = [finding.to_dict() for finding in findings[:max_insights]]
+        if any(
+            self.column_profiles.get(column, {}).get("role") == "temporal"
+            for column in self.df.columns
+        ):
+            for finding in serialized:
+                if finding["category"] in {"relationship", "trend"}:
+                    finding["confidence"] = "exploratory"
+                    finding["evidence"].append(
+                        "Descriptive observation only: temporal dependence and sampling design have not been validated."
+                    )
+        return serialized
 
     def _empty_dataset(self) -> EvidenceInsight:
         return EvidenceInsight(

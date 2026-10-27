@@ -175,12 +175,16 @@ def _evaluate_saas_known_signals(thresholds: Mapping[str, Any]) -> Dict[str, Any
             "The designed revenue/customer relationship retains practical strength.",
         ),
         _check(
-            "minimum-confirmed-hypotheses",
-            int(statistics["significant_test_count"])
-            >= int(thresholds["minimum_significant_tests"]),
-            int(statistics["significant_test_count"]),
-            {"minimum": int(thresholds["minimum_significant_tests"])},
-            "The statistical scan retains the expected known-signal sensitivity after FDR correction.",
+            "temporal-inference-withheld",
+            statistics.get("status") == "inference_withheld"
+            and statistics.get("inference_status") == "withheld"
+            and statistics["tests"] == []
+            and statistics["significant_test_count"] is None
+            and correlation is not None
+            and correlation["confidence"] == "exploratory",
+            {"status": statistics["status"], "significant_test_count": statistics["significant_test_count"]},
+            {"status": "inference_withheld", "significant_test_count": None},
+            "The dated SaaS sample retains descriptive signals without manufacturing IID significance; independent-sample sensitivity is checked by the known-group-effect scenario.",
         ),
         _check(
             "designed-incidents-ranked",

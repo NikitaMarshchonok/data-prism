@@ -20,10 +20,22 @@ def build_decision_brief(
 
     priorities: List[Dict[str, Any]] = []
     statistics = dashboard_data.get("statistical_validation") or {}
+    inference_withheld = statistics.get("inference_status") == "withheld"
+    if inference_withheld:
+        priorities.append({
+            "category": "assumption-review",
+            "title": "Review the temporal sampling design before statistical inference",
+            "finding": str(statistics.get("summary") or "Statistical inference was withheld."),
+            "evidence": [str(note) for note in statistics.get("methodology_notes") or []],
+            "risk": "Ordinary p-values and confidence intervals may be misleading when observations are dependent.",
+            "action": "Establish the sampling unit and temporal dependence, then choose and validate an appropriate inferential method.",
+            "confidence": "exploratory",
+            "source": "statistical_validation",
+        })
     significant = [
         test
         for test in statistics.get("tests") or []
-        if isinstance(test, Mapping) and test.get("significant")
+        if not inference_withheld and isinstance(test, Mapping) and test.get("significant")
     ]
     significant.sort(key=lambda test: _sortable_number(test.get("adjusted_p_value")))
     if significant:
@@ -127,7 +139,11 @@ def build_decision_brief(
                 "evidence": [str(item) for item in (insight.get("evidence") or [])[:3]],
                 "risk": "The finding is observational and may be affected by confounding or selection bias.",
                 "action": str(insight.get("recommendation") or "Validate the finding."),
-                "confidence": str(insight.get("confidence") or "unknown"),
+                "confidence": (
+                    "exploratory"
+                    if inference_withheld and insight.get("category") in {"relationship", "trend", "statistical-validation"}
+                    else str(insight.get("confidence") or "unknown")
+                ),
                 "source": "evidence_engine",
             }
         )

@@ -40,6 +40,7 @@ class QualityEvaluationTests(unittest.TestCase):
         self.assertTrue(checks["known-correlation-pair"]["passed"])
         self.assertTrue(checks["designed-incidents-ranked"]["passed"])
         self.assertTrue(checks["known-group-effect-detected"]["passed"])
+        self.assertTrue(checks["temporal-inference-withheld"]["passed"])
         self.assertTrue(checks["false-discovery-guardrail"]["passed"])
         self.assertEqual(checks["false-discovery-guardrail"]["observed"], 0)
         self.assertTrue(checks["no-invented-segmentation"]["passed"])

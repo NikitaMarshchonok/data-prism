@@ -32,6 +32,13 @@ observed value, expected threshold, and description for every check.
 | `null_noise_guardrail` | Five independent numeric variables and an independent categorical target with no designed relationship or segment structure | Strong claims, FDR discoveries, defensible-looking segments, or predictive support manufactured from seeded random noise; anomaly candidates promoted beyond exploratory review |
 | `known_group_effect` | Balanced control/treatment groups with a fixed outcome shift | Failure to detect a large group effect or report uncertainty correctly |
 
+The dated `saas_known_signals` scenario now checks `temporal-inference-withheld`
+instead of requiring a minimum number of IID statistical discoveries. This is
+an eligibility-policy correction, not a lower p-value/power threshold: the
+independent-sample `known_group_effect` sensitivity check and the null-noise FDR
+check remain in place, together with frozen mathematical oracles. Descriptive
+correlation strength and incident/segmentation/prediction checks are unchanged.
+
 The datasets are generated in memory from fixed seeds and contain no personal
 or uploaded data. The report intentionally has no timestamp, host identifier,
 or random run identifier, making it reproducible and safe to share.

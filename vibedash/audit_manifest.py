@@ -116,10 +116,19 @@ def build_audit_manifest(
             "statistical_test_count": len(
                 statistical_validation.get("tests") or []
             ),
-            "significant_test_count": sum(
-                bool(test.get("significant"))
-                for test in statistical_validation.get("tests") or []
-                if isinstance(test, Mapping)
+            "statistical_inference_status": (
+                "withheld"
+                if statistical_validation.get("inference_status") == "withheld"
+                else "conditional" if statistical_validation.get("tests") else "not_assessed"
+            ),
+            "significant_test_count": (
+                None
+                if statistical_validation.get("inference_status") == "withheld"
+                else sum(
+                    bool(test.get("significant"))
+                    for test in statistical_validation.get("tests") or []
+                    if isinstance(test, Mapping)
+                )
             ),
             "anomaly_candidate_count": len(
                 anomaly_detection.get("top_anomalies") or []

@@ -211,10 +211,19 @@
         </section>
         {% endif %}
 
-        {% if dashboard_data.statistical_validation and dashboard_data.statistical_validation.tests %}
+        {% if dashboard_data.statistical_validation and dashboard_data.statistical_validation.inference_status == 'withheld' %}
+        <section class="dashboard-section" aria-labelledby="statistics-heading">
+            <div class="section-heading"><div><span>06</span><h2 id="statistics-heading">Statistical inference withheld</h2></div></div>
+            <div class="readiness-issue issue-warning" role="note">
+                <h3>Sampling-design review required</h3>
+                <p>{{ dashboard_data.statistical_validation.summary }}</p>
+                <ul>{% for note in dashboard_data.statistical_validation.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>
+            </div>
+        </section>
+        {% elif dashboard_data.statistical_validation and dashboard_data.statistical_validation.tests %}
         <section class="dashboard-section" aria-labelledby="statistics-heading">
             <div class="section-heading"><div><span>06</span><h2 id="statistics-heading">Statistical validation</h2></div><p>{{ dashboard_data.statistical_validation.summary }}</p></div>
-            <div class="method-note">{{ dashboard_data.statistical_validation.correction }} · confidence intervals and effect sizes are reported with p-values.</div>
+            <div class="method-note">{{ dashboard_data.statistical_validation.correction }} · confidence intervals and effect sizes are reported with p-values. These tests assume independent observations; the sampling design has not been verified automatically.</div>
             <div class="validation-list">
                 {% for test in dashboard_data.statistical_validation.tests %}
                 <article class="validation-card {% if test.significant %}is-significant{% endif %}">

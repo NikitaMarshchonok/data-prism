@@ -78,6 +78,39 @@ class StatisticalValidationEngine:
         if max_results < 1:
             return self._empty_report("No results requested.")
 
+        temporal_columns = [
+            str(column) for column in self.df.columns
+            if self.column_profiles.get(column, {}).get("role") == "temporal"
+        ]
+        if temporal_columns and not self.df.empty:
+            # A date is a risk indicator, not proof of serial dependence (or
+            # independence). Do not run IID tests and hide the caveat later.
+            return {
+                "status": "inference_withheld",
+                "inference_status": "withheld",
+                "reason": "temporal_design_unverified",
+                "temporal_columns": temporal_columns,
+                "alpha": self.alpha,
+                "correction": None,
+                "candidate_test_count": 0,
+                "displayed_test_count": 0,
+                "significant_test_count": None,
+                "summary": (
+                    "Inferential validation withheld: temporal fields are present, "
+                    "but independence of observations and the time-series design "
+                    "have not been established. Ordinary Pearson/Welch p-values "
+                    "and confidence intervals are not reported. Descriptive "
+                    "calculations remain available; significance is not assessed."
+                ),
+                "tests": [],
+                "methodology_notes": [
+                    "A temporal field does not itself prove autocorrelation; this is a conservative eligibility rule.",
+                    "Neither a low lag-1 autocorrelation nor shuffling rows establishes independence.",
+                    "Review the sampling unit, repeated entities, serial dependence and seasonality before choosing an inferential method.",
+                    "FDR correction cannot repair invalid individual p-values.",
+                ],
+            }
+
         candidates = self._correlation_candidates() + self._group_candidates()
         if not candidates:
             return self._empty_report(
@@ -112,6 +145,7 @@ class StatisticalValidationEngine:
             ),
             "tests": [item.to_dict() for item in displayed],
             "methodology_notes": [
+                "The sampling design and independence of observations have not been verified automatically; these tests are conditional on their assumptions.",
                 "P-values are adjusted across every eligible hypothesis, not only displayed results.",
                 (
                     f"The automatic scan is bounded to the first {MAX_NUMERIC_COLUMNS} eligible numeric "
@@ -129,7 +163,9 @@ class StatisticalValidationEngine:
         max_results: int = 3,
     ) -> List[Dict[str, Any]]:
         """Convert the leading statistical tests to the existing insight contract."""
-        report = report or self.analyze(max_results=max_results)
+        report = report if report is not None else self.analyze(max_results=max_results)
+        if report.get("inference_status") == "withheld":
+            return []
         insights = []
         for test in report.get("tests", [])[:max_results]:
             adjusted_p = float(test["adjusted_p_value"])

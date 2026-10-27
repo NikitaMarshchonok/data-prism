@@ -254,6 +254,26 @@ sampling process, independence assumptions, business semantics, or causality.
 
 LLM summaries are optional and supplementary. They do not calculate the core metrics and are not required for deterministic analysis.
 
+### Temporal inference eligibility
+
+For single-dataset dashboards and statistical chat, the presence of a temporal
+column (using the current semantic profiles, including confirmed overrides)
+withholds ordinary IID Pearson/Welch inference before tests are executed.
+The report uses `status=inference_withheld`, `inference_status=withheld`, no
+p-values or confidence intervals, and `significant_test_count=null` (not zero
+significant results). A date is a conservative risk indicator, not proof of
+autocorrelation. No automatic lag-1 test or row shuffle can bypass this rule.
+KPIs, tables, charts and descriptive relationships/time changes remain available;
+relationship/trend support is labelled exploratory. The decision brief promotes
+sampling-design review, not a validated statistical signal. Both report templates
+and standalone HTML exports display the withholding reason.
+
+This does not implement time-series inference, establish independence for
+datasets without dates, or change the separate two-period/drift/predictive
+engines. Those inference designs need their own review. Methodological basis:
+[NIST consequences of non-randomness](https://itl.nist.gov/div898/handbook/eda/section2/eda251.htm)
+and [SciPy Pearson assumptions](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.pearsonr.html).
+
 ## Drift-monitoring flow
 
 ```mermaid
