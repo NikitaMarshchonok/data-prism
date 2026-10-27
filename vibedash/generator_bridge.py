@@ -14,6 +14,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from src.column_semantics import profile_dataframe_columns
+from src.analysis_context import build_analysis_context
 from src.semantic_contract import (
     profiles_from_semantic_contract,
     validate_semantic_contract,
@@ -168,6 +169,7 @@ def generate_dashboard_data(
     *,
     semantic_contract: Optional[Mapping[str, Any]] = None,
     semantic_contract_prevalidated: bool = False,
+    prompt: str = "",
 ) -> Dict[str, Any]:
     """
     Генерирует данные дашборда на основе VizSpec
@@ -213,6 +215,8 @@ def generate_dashboard_data(
         else profile_dataframe_columns(filtered_df)
     )
 
+    analysis_context = build_analysis_context(prompt, filtered_df.columns, column_profiles)
+
     # Генерируем KPIs
     kpis = _generate_kpis(filtered_df, viz_spec.metrics)
     
@@ -237,10 +241,12 @@ def generate_dashboard_data(
     insights = EvidenceBasedInsightEngine(
         filtered_df,
         column_profiles=column_profiles,
+        analysis_context=analysis_context,
     ).generate()
     statistical_validation = StatisticalValidationEngine(
         filtered_df,
         column_profiles=column_profiles,
+        analysis_context=analysis_context,
     ).analyze()
     pattern_analysis = AnomalySegmentationEngine(
         filtered_df,
@@ -258,6 +264,7 @@ def generate_dashboard_data(
         "pattern_analysis": pattern_analysis,
         "readiness": readiness,
         "df_shape": filtered_df.shape,
+        "analysis_context": analysis_context,
     }
     result["decision_brief"] = build_decision_brief(result, readiness)
     return result

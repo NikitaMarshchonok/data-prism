@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from src.column_semantics import columns_for_role, profile_dataframe_columns
+from src.analysis_context import is_relevant
 
 
 @dataclass(frozen=True)
@@ -41,10 +42,12 @@ class EvidenceBasedInsightEngine:
         df: pd.DataFrame,
         *,
         column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+        analysis_context: Optional[Mapping[str, Any]] = None,
     ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         self.df = df
+        self.analysis_context = dict(analysis_context or {})
         self.column_profiles = (
             dict(column_profiles)
             if column_profiles is not None
@@ -186,10 +189,12 @@ class EvidenceBasedInsightEngine:
         )
 
     def _strongest_correlation(self) -> Optional[EvidenceInsight]:
-        columns = self._numeric_columns(exclude_identifiers=True)[:30]
+        columns = self._discovery_columns(limit=30)
         strongest = None
         for left_index, left in enumerate(columns):
             for right in columns[left_index + 1 :]:
+                if not is_relevant({"columns": [str(left), str(right)]}, self.analysis_context):
+                    continue
                 paired = self.df[[left, right]].replace([np.inf, -np.inf], np.nan).dropna()
                 if len(paired) < 3 or paired[left].nunique() < 2 or paired[right].nunique() < 2:
                     continue
@@ -241,7 +246,7 @@ class EvidenceBasedInsightEngine:
 
         parsed_time = pd.to_datetime(self.df[time_column], errors="coerce")
         strongest = None
-        for column in self._numeric_columns(exclude_identifiers=True)[:20]:
+        for column in self._discovery_columns(limit=20, focused_only=True):
             series = pd.to_numeric(self.df[column], errors="coerce")
             frame = pd.DataFrame({"time": parsed_time, "value": series}).dropna().sort_values("time")
             if len(frame) < 8:
@@ -301,7 +306,7 @@ class EvidenceBasedInsightEngine:
 
     def _largest_outlier_group(self) -> Optional[EvidenceInsight]:
         strongest = None
-        for column in self._numeric_columns(exclude_identifiers=True)[:30]:
+        for column in self._discovery_columns(limit=30, focused_only=True):
             values = pd.to_numeric(self.df[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
             if len(values) < 8:
                 continue
@@ -348,7 +353,13 @@ class EvidenceBasedInsightEngine:
 
     def _largest_category_concentration(self) -> Optional[EvidenceInsight]:
         strongest = None
-        for column in self._categorical_columns()[:30]:
+        groups = set(self.analysis_context.get("group_columns") or [])
+        focus = set(self.analysis_context.get("focus_columns") or [])
+        excluded = set(self.analysis_context.get("excluded_columns") or [])
+        columns = [column for column in self._categorical_columns()
+                   if str(column) not in excluded
+                   and (not focus or str(column) in groups or str(column) in focus)]
+        for column in columns[:30]:
             values = self.df[column].dropna()
             unique_count = int(values.nunique())
             if len(values) < 10 or unique_count < 2 or unique_count > 100:
@@ -419,6 +430,14 @@ class EvidenceBasedInsightEngine:
             and not pd.api.types.is_complex_dtype(self.df[column])
         ]
 
+    def _discovery_columns(self, *, limit: int, focused_only: bool = False) -> List[Any]:
+        focus = set(self.analysis_context.get("focus_columns") or [])
+        excluded = set(self.analysis_context.get("excluded_columns") or [])
+        columns = [column for column in self._numeric_columns()
+                   if str(column) not in excluded
+                   and (not focused_only or not focus or str(column) in focus)]
+        return sorted(columns, key=lambda column: str(column) not in focus)[:limit]
+
     def _categorical_columns(self) -> List[Any]:
         return columns_for_role(
             self.df,
@@ -434,6 +453,10 @@ class EvidenceBasedInsightEngine:
             profiles=self.column_profiles,
             require_variation=True,
         )
+        excluded = set(self.analysis_context.get("excluded_columns") or [])
+        requested = set(self.analysis_context.get("time_columns") or [])
+        columns = [column for column in columns if str(column) not in excluded]
+        columns.sort(key=lambda column: str(column) not in requested)
         return columns[0] if columns else None
 
     @staticmethod

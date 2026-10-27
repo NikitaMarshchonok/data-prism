@@ -71,6 +71,7 @@ class VibeDashDemoRouteTests(unittest.TestCase):
         self.assertIn("Dataset readiness", response.get_data(as_text=True))
         self.assertIn("Decision brief", response.get_data(as_text=True))
         generated_data = generate_dashboard.call_args.args[0]
+        self.assertEqual(generate_dashboard.call_args.kwargs["prompt"], "Show evidence-backed SaaS performance.")
         self.assertEqual(generated_data.shape, (360, 11))
         parse_prompt.assert_not_called()
         generated_spec = generate_dashboard.call_args.args[1]

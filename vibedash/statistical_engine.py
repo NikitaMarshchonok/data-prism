@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.column_semantics import columns_for_role, profile_dataframe_columns
+from src.analysis_context import is_relevant
 from src.statistical_primitives import (
     benjamini_hochberg as _benjamini_hochberg,
     pearson_summary,
@@ -60,12 +61,14 @@ class StatisticalValidationEngine:
         alpha: float = DEFAULT_ALPHA,
         *,
         column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+        analysis_context: Optional[Mapping[str, Any]] = None,
     ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         if not 0 < alpha < 1:
             raise ValueError("alpha must be between 0 and 1")
         self.df = df
+        self.analysis_context = dict(analysis_context or {})
         self.alpha = float(alpha)
         self.column_profiles = (
             dict(column_profiles)
@@ -125,6 +128,7 @@ class StatisticalValidationEngine:
 
         candidates.sort(
             key=lambda item: (
+                not is_relevant({"columns": item.columns}, self.analysis_context),
                 item.adjusted_p_value if item.adjusted_p_value is not None else 1.0,
                 -abs(float(item.effect_size["value"])),
                 item.test_id,
@@ -167,7 +171,8 @@ class StatisticalValidationEngine:
         if report.get("inference_status") == "withheld":
             return []
         insights = []
-        for test in report.get("tests", [])[:max_results]:
+        relevant_tests = [test for test in report.get("tests", []) if is_relevant(test, self.analysis_context)]
+        for test in relevant_tests[:max_results]:
             adjusted_p = float(test["adjusted_p_value"])
             effect = test["effect_size"]
             interval = test["confidence_interval"]
@@ -393,7 +398,7 @@ class StatisticalValidationEngine:
             profiles=self.column_profiles,
             require_variation=True,
         )
-        return [
+        eligible = [
             column
             for column in columns
             if pd.api.types.is_numeric_dtype(self.df[column])
@@ -401,13 +406,25 @@ class StatisticalValidationEngine:
             and not pd.api.types.is_complex_dtype(self.df[column])
             and self.df[column].replace([np.inf, -np.inf], np.nan).nunique(dropna=True) >= 2
         ]
+        excluded = set(self.analysis_context.get("excluded_columns") or [])
+        focus = set(self.analysis_context.get("focus_columns") or [])
+        return sorted(
+            [column for column in eligible if str(column) not in excluded],
+            key=lambda column: str(column) not in focus,
+        )
 
     def _categorical_columns(self) -> List[Any]:
-        return columns_for_role(
+        columns = columns_for_role(
             self.df,
             "category",
             profiles=self.column_profiles,
             require_variation=True,
+        )
+        excluded = set(self.analysis_context.get("excluded_columns") or [])
+        requested = set(self.analysis_context.get("group_columns") or [])
+        return sorted(
+            [column for column in columns if str(column) not in excluded],
+            key=lambda column: str(column) not in requested,
         )
 
     def _empty_report(self, message: str) -> Dict[str, Any]:

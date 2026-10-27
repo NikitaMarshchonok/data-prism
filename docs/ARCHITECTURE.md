@@ -234,6 +234,35 @@ This design supports honest exploratory evaluation. A positive support decision 
 
 ## Statistical-evidence boundary
 
+### Question-aware evidence selection
+
+Single-dataset VibeDash passes the original question into a schema-only
+`analysis-focus-v1` context. Exact column names and conservative name aliases
+(case, camel-case spaces and underscores) are shared with specification parsing.
+Explicitly mentioned measures take priority; otherwise explicitly mentioned
+categories or a confirmed target provide focus. Without these signals, the
+engine retains its general exploratory scan. It does not infer business intent
+from an LLM-generated specification. Existing explicit column-exclusion rules
+also apply to descriptive and statistical discovery, not only to charts.
+
+Strongest-correlation discovery requires a requested column in the pair;
+trend and IQR discovery use requested measures, and concentration uses requested
+categories. A weak or unsupported focused relationship is not replaced with an
+unrelated stronger pair. Overview/readiness checks still cover the whole dataset.
+Statistical candidates prioritize requested columns before the existing scan
+caps; FDR is computed over the entire eligible bounded candidate family before
+display ranking. Relevance sorting does not recalculate or improve p-values.
+Changing which fields enter a capped scan can change the candidate family and
+its correction; the reported candidate counts and existing scan notes remain.
+
+The decision brief uses structured column provenance, not words in titles, to
+select matching findings. It deduplicates a selected statistical relationship
+and the same descriptive pair. Global sampling/readiness warnings remain visible;
+dataset-wide anomaly review is labelled as such and follows focused findings.
+This is exact-reference relevance, not general natural-language task understanding,
+proof of domain usefulness, or detection of derived/part-whole relationships.
+The standalone chat and legacy dashboard are not integrated with this context.
+
 The statistical engine separates discovery from presentation:
 
 - group differences use Welch-style comparisons where appropriate;

@@ -834,6 +834,7 @@ if vibedash_bp:
         dashboard_data = bridge_generate_dashboard_data(
             df,
             viz_spec,
+            prompt=prompt,
             semantic_contract=semantic_contract,
             semantic_contract_prevalidated=True,
         )

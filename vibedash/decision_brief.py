@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping
+from src.analysis_context import finding_columns, is_relevant
 
 
 DECISION_BRIEF_CONTRACT = "decision-brief-v1"
@@ -20,6 +21,8 @@ def build_decision_brief(
 
     priorities: List[Dict[str, Any]] = []
     statistics = dashboard_data.get("statistical_validation") or {}
+    context = dashboard_data.get("analysis_context") or {}
+    focused = bool(context.get("focus_columns"))
     inference_withheld = statistics.get("inference_status") == "withheld"
     if inference_withheld:
         priorities.append({
@@ -35,9 +38,11 @@ def build_decision_brief(
     significant = [
         test
         for test in statistics.get("tests") or []
-        if not inference_withheld and isinstance(test, Mapping) and test.get("significant")
+        if not inference_withheld and isinstance(test, Mapping)
+        and test.get("significant") and is_relevant(test, context)
     ]
     significant.sort(key=lambda test: _sortable_number(test.get("adjusted_p_value")))
+    selected_signal_columns = finding_columns(significant[0]) if significant else set()
     if significant:
         test = significant[0]
         effect = test.get("effect_size") or {}
@@ -71,7 +76,10 @@ def build_decision_brief(
         priorities.append(
             {
                 "category": "anomaly-review",
-                "title": "Review the highest-ranked unusual observations",
+                "title": (
+                    "Review dataset-wide unusual observations (not task-specific)"
+                    if focused else "Review the highest-ranked unusual observations"
+                ),
                 "finding": str(anomaly.get("summary") or "Anomaly candidates were detected."),
                 "evidence": [
                     f"Flagged rows: {int(anomaly.get('flagged_count') or 0)} of {int(anomaly.get('evaluated_rows') or 0)}",
@@ -121,12 +129,15 @@ def build_decision_brief(
 
     existing_categories = {priority["category"] for priority in priorities}
     for insight in dashboard_data.get("insights") or []:
-        if len(priorities) >= max_priorities:
-            break
         if not isinstance(insight, Mapping) or insight.get("insight_id") in {
             "dataset-overview",
             "data-quality",
         }:
+            continue
+        if insight.get("category") != "limitation" and not is_relevant(insight, context):
+            continue
+        if (insight.get("category") == "relationship" and selected_signal_columns
+                and finding_columns(insight) == selected_signal_columns):
             continue
         category = f"evidence-{insight.get('category', 'finding')}"
         if category in existing_categories:
@@ -149,6 +160,13 @@ def build_decision_brief(
         )
         existing_categories.add(category)
 
+    if focused:
+        # Global safety warnings remain visible. Task findings precede the
+        # dataset-wide anomaly ranking, which has no task-specific fit.
+        priorities.sort(key=lambda item: (
+            0 if item["category"] in {"assumption-review", "data-readiness", "evidence-limitation"}
+            else 2 if item["category"] == "anomaly-review" else 1
+        ))
     priorities = priorities[:max_priorities]
     for index, priority in enumerate(priorities, start=1):
         priority["priority"] = index
