@@ -226,6 +226,10 @@ def _normal_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
         result["specification"] = specification_aggregate
 
     evidence_aggregate: dict[str, Any] = {}
+    _put(evidence_aggregate, "statistical_inference_status", _enum(
+        evidence.get("statistical_inference_status"),
+        frozenset({"withheld", "conditional", "not_assessed"}),
+    ))
     for key in (
         "insight_count",
         "statistical_test_count",

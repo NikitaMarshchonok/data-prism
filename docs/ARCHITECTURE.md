@@ -234,6 +234,35 @@ This design supports honest exploratory evaluation. A positive support decision 
 
 ## Statistical-evidence boundary
 
+### Question-aware evidence selection
+
+Single-dataset VibeDash passes the original question into a schema-only
+`analysis-focus-v1` context. Exact column names and conservative name aliases
+(case, camel-case spaces and underscores) are shared with specification parsing.
+Explicitly mentioned measures take priority; otherwise explicitly mentioned
+categories or a confirmed target provide focus. Without these signals, the
+engine retains its general exploratory scan. It does not infer business intent
+from an LLM-generated specification. Existing explicit column-exclusion rules
+also apply to descriptive and statistical discovery, not only to charts.
+
+Strongest-correlation discovery requires a requested column in the pair;
+trend and IQR discovery use requested measures, and concentration uses requested
+categories. A weak or unsupported focused relationship is not replaced with an
+unrelated stronger pair. Overview/readiness checks still cover the whole dataset.
+Statistical candidates prioritize requested columns before the existing scan
+caps; FDR is computed over the entire eligible bounded candidate family before
+display ranking. Relevance sorting does not recalculate or improve p-values.
+Changing which fields enter a capped scan can change the candidate family and
+its correction; the reported candidate counts and existing scan notes remain.
+
+The decision brief uses structured column provenance, not words in titles, to
+select matching findings. It deduplicates a selected statistical relationship
+and the same descriptive pair. Global sampling/readiness warnings remain visible;
+dataset-wide anomaly review is labelled as such and follows focused findings.
+This is exact-reference relevance, not general natural-language task understanding,
+proof of domain usefulness, or detection of derived/part-whole relationships.
+The standalone chat and legacy dashboard are not integrated with this context.
+
 The statistical engine separates discovery from presentation:
 
 - group differences use Welch-style comparisons where appropriate;
@@ -253,6 +282,26 @@ checks validate implementation behaviour; they do not certify a dataset's
 sampling process, independence assumptions, business semantics, or causality.
 
 LLM summaries are optional and supplementary. They do not calculate the core metrics and are not required for deterministic analysis.
+
+### Temporal inference eligibility
+
+For single-dataset dashboards and statistical chat, the presence of a temporal
+column (using the current semantic profiles, including confirmed overrides)
+withholds ordinary IID Pearson/Welch inference before tests are executed.
+The report uses `status=inference_withheld`, `inference_status=withheld`, no
+p-values or confidence intervals, and `significant_test_count=null` (not zero
+significant results). A date is a conservative risk indicator, not proof of
+autocorrelation. No automatic lag-1 test or row shuffle can bypass this rule.
+KPIs, tables, charts and descriptive relationships/time changes remain available;
+relationship/trend support is labelled exploratory. The decision brief promotes
+sampling-design review, not a validated statistical signal. Both report templates
+and standalone HTML exports display the withholding reason.
+
+This does not implement time-series inference, establish independence for
+datasets without dates, or change the separate two-period/drift/predictive
+engines. Those inference designs need their own review. Methodological basis:
+[NIST consequences of non-randomness](https://itl.nist.gov/div898/handbook/eda/section2/eda251.htm)
+and [SciPy Pearson assumptions](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.pearsonr.html).
 
 ## Drift-monitoring flow
 

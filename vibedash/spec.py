@@ -9,6 +9,12 @@ import re
 
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
+from src.analysis_context import (
+    column_aliases as _column_aliases,
+    prompt_contains_alias as _prompt_contains_alias,
+    prompt_mentioned_columns as _prompt_mentioned_columns,
+    prompt_excluded_columns as _prompt_excluded_columns,
+)
 
 from src.column_semantics import (
     column_role as _shared_column_role,
@@ -238,58 +244,6 @@ def _humanize_column(column: str) -> str:
         _ABBREVIATIONS.get(word.lower(), word.capitalize())
         for word in normalized.split()
     )
-
-
-def _column_aliases(column: str) -> set[str]:
-    """Return conservative prompt aliases for an exact dataset column."""
-    original = str(column).strip().lower()
-    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(column)).lower()
-    spaced = re.sub(r"[^a-z0-9а-яё]+", " ", spaced).strip()
-    aliases = {original, spaced, spaced.replace(" ", "_")}
-    return {alias for alias in aliases if alias}
-
-
-def _prompt_contains_alias(prompt: str, alias: str) -> bool:
-    return bool(
-        re.search(
-            rf"(?<![a-z0-9а-яё]){re.escape(alias)}(?![a-z0-9а-яё])",
-            prompt,
-            flags=re.IGNORECASE,
-        )
-    )
-
-
-def _prompt_mentioned_columns(prompt: str, df_columns: List[str]) -> List[str]:
-    """Find explicitly named columns without fuzzy guesses or invented fields."""
-    return [
-        column
-        for column in df_columns
-        if any(
-            _prompt_contains_alias(prompt, alias)
-            for alias in _column_aliases(column)
-        )
-    ]
-
-
-def _prompt_excluded_columns(prompt: str, df_columns: List[str]) -> set[str]:
-    """Honor explicit English and Russian requests to ignore a column."""
-    exclusion_prefix = (
-        r"(?:не\s+(?:используй|использовать|учитывай|учитывать)|"
-        r"исключи|исключить|игнорируй|игнорировать|"
-        r"do\s+not\s+use|don't\s+use|exclude|ignore|without)"
-    )
-    excluded = set()
-    for column in df_columns:
-        for alias in _column_aliases(column):
-            if re.search(
-                rf"{exclusion_prefix}[^.!?\n]{{0,40}}"
-                rf"(?<![a-z0-9а-яё]){re.escape(alias)}(?![a-z0-9а-яё])",
-                prompt,
-                flags=re.IGNORECASE,
-            ):
-                excluded.add(column)
-                break
-    return excluded
 
 
 def _is_temporal_column(column: str) -> bool:

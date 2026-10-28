@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.column_semantics import columns_for_role, profile_dataframe_columns
+from src.analysis_context import is_relevant
 from src.statistical_primitives import (
     benjamini_hochberg as _benjamini_hochberg,
     pearson_summary,
@@ -60,12 +61,14 @@ class StatisticalValidationEngine:
         alpha: float = DEFAULT_ALPHA,
         *,
         column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
+        analysis_context: Optional[Mapping[str, Any]] = None,
     ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
         if not 0 < alpha < 1:
             raise ValueError("alpha must be between 0 and 1")
         self.df = df
+        self.analysis_context = dict(analysis_context or {})
         self.alpha = float(alpha)
         self.column_profiles = (
             dict(column_profiles)
@@ -77,6 +80,39 @@ class StatisticalValidationEngine:
         """Return corrected test results, ordered by adjusted p-value."""
         if max_results < 1:
             return self._empty_report("No results requested.")
+
+        temporal_columns = [
+            str(column) for column in self.df.columns
+            if self.column_profiles.get(column, {}).get("role") == "temporal"
+        ]
+        if temporal_columns and not self.df.empty:
+            # A date is a risk indicator, not proof of serial dependence (or
+            # independence). Do not run IID tests and hide the caveat later.
+            return {
+                "status": "inference_withheld",
+                "inference_status": "withheld",
+                "reason": "temporal_design_unverified",
+                "temporal_columns": temporal_columns,
+                "alpha": self.alpha,
+                "correction": None,
+                "candidate_test_count": 0,
+                "displayed_test_count": 0,
+                "significant_test_count": None,
+                "summary": (
+                    "Inferential validation withheld: temporal fields are present, "
+                    "but independence of observations and the time-series design "
+                    "have not been established. Ordinary Pearson/Welch p-values "
+                    "and confidence intervals are not reported. Descriptive "
+                    "calculations remain available; significance is not assessed."
+                ),
+                "tests": [],
+                "methodology_notes": [
+                    "A temporal field does not itself prove autocorrelation; this is a conservative eligibility rule.",
+                    "Neither a low lag-1 autocorrelation nor shuffling rows establishes independence.",
+                    "Review the sampling unit, repeated entities, serial dependence and seasonality before choosing an inferential method.",
+                    "FDR correction cannot repair invalid individual p-values.",
+                ],
+            }
 
         candidates = self._correlation_candidates() + self._group_candidates()
         if not candidates:
@@ -92,6 +128,7 @@ class StatisticalValidationEngine:
 
         candidates.sort(
             key=lambda item: (
+                not is_relevant({"columns": item.columns}, self.analysis_context),
                 item.adjusted_p_value if item.adjusted_p_value is not None else 1.0,
                 -abs(float(item.effect_size["value"])),
                 item.test_id,
@@ -112,6 +149,7 @@ class StatisticalValidationEngine:
             ),
             "tests": [item.to_dict() for item in displayed],
             "methodology_notes": [
+                "The sampling design and independence of observations have not been verified automatically; these tests are conditional on their assumptions.",
                 "P-values are adjusted across every eligible hypothesis, not only displayed results.",
                 (
                     f"The automatic scan is bounded to the first {MAX_NUMERIC_COLUMNS} eligible numeric "
@@ -129,9 +167,12 @@ class StatisticalValidationEngine:
         max_results: int = 3,
     ) -> List[Dict[str, Any]]:
         """Convert the leading statistical tests to the existing insight contract."""
-        report = report or self.analyze(max_results=max_results)
+        report = report if report is not None else self.analyze(max_results=max_results)
+        if report.get("inference_status") == "withheld":
+            return []
         insights = []
-        for test in report.get("tests", [])[:max_results]:
+        relevant_tests = [test for test in report.get("tests", []) if is_relevant(test, self.analysis_context)]
+        for test in relevant_tests[:max_results]:
             adjusted_p = float(test["adjusted_p_value"])
             effect = test["effect_size"]
             interval = test["confidence_interval"]
@@ -357,7 +398,7 @@ class StatisticalValidationEngine:
             profiles=self.column_profiles,
             require_variation=True,
         )
-        return [
+        eligible = [
             column
             for column in columns
             if pd.api.types.is_numeric_dtype(self.df[column])
@@ -365,13 +406,25 @@ class StatisticalValidationEngine:
             and not pd.api.types.is_complex_dtype(self.df[column])
             and self.df[column].replace([np.inf, -np.inf], np.nan).nunique(dropna=True) >= 2
         ]
+        excluded = set(self.analysis_context.get("excluded_columns") or [])
+        focus = set(self.analysis_context.get("focus_columns") or [])
+        return sorted(
+            [column for column in eligible if str(column) not in excluded],
+            key=lambda column: str(column) not in focus,
+        )
 
     def _categorical_columns(self) -> List[Any]:
-        return columns_for_role(
+        columns = columns_for_role(
             self.df,
             "category",
             profiles=self.column_profiles,
             require_variation=True,
+        )
+        excluded = set(self.analysis_context.get("excluded_columns") or [])
+        requested = set(self.analysis_context.get("group_columns") or [])
+        return sorted(
+            [column for column in columns if str(column) not in excluded],
+            key=lambda column: str(column) not in requested,
         )
 
     def _empty_report(self, message: str) -> Dict[str, Any]:

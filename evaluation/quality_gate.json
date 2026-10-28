@@ -16,7 +16,6 @@
         "MonthlyRevenue"
       ],
       "minimum_absolute_correlation": 0.85,
-      "minimum_significant_tests": 8,
       "required_incident_rows": [
         57,
         181,
