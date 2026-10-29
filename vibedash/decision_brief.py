@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Mapping
 from src.analysis_context import finding_columns, is_relevant
+from src.structural_dependencies import additive_pair_dependency
 
 
 DECISION_BRIEF_CONTRACT = "decision-brief-v1"
@@ -40,6 +41,8 @@ def build_decision_brief(
         for test in statistics.get("tests") or []
         if not inference_withheld and isinstance(test, Mapping)
         and test.get("significant") and is_relevant(test, context)
+        and not test.get("structural_dependency")
+        and not additive_pair_dependency(test.get("columns") or [], dashboard_data.get("structural_dependencies") or [])
     ]
     significant.sort(key=lambda test: _sortable_number(test.get("adjusted_p_value")))
     selected_signal_columns = finding_columns(significant[0]) if significant else set()
@@ -148,7 +151,11 @@ def build_decision_brief(
                 "title": str(insight.get("title") or "Evidence-backed finding"),
                 "finding": str(insight.get("statement") or ""),
                 "evidence": [str(item) for item in (insight.get("evidence") or [])[:3]],
-                "risk": "The finding is observational and may be affected by confounding or selection bias.",
+                "risk": (
+                    "An observed arithmetic equality does not establish business definitions, future validity, or predictor availability."
+                    if insight.get("category") == "structural-dependency"
+                    else "The finding is observational and may be affected by confounding or selection bias."
+                ),
                 "action": str(insight.get("recommendation") or "Validate the finding."),
                 "confidence": (
                     "exploratory"
@@ -164,7 +171,7 @@ def build_decision_brief(
         # Global safety warnings remain visible. Task findings precede the
         # dataset-wide anomaly ranking, which has no task-specific fit.
         priorities.sort(key=lambda item: (
-            0 if item["category"] in {"assumption-review", "data-readiness", "evidence-limitation"}
+            0 if item["category"] in {"assumption-review", "data-readiness", "evidence-limitation", "evidence-structural-dependency"}
             else 2 if item["category"] == "anomaly-review" else 1
         ))
     priorities = priorities[:max_priorities]

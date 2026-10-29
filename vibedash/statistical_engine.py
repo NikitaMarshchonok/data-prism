@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.column_semantics import columns_for_role, profile_dataframe_columns
 from src.analysis_context import is_relevant
+from src.structural_dependencies import additive_pair_dependency, detect_additive_dependencies
 from src.statistical_primitives import (
     benjamini_hochberg as _benjamini_hochberg,
     pearson_summary,
@@ -42,6 +43,7 @@ class StatisticalTestResult:
     estimates: Dict[str, Any]
     limitations: List[str]
     interpretation: str = ""
+    structural_dependency: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -62,6 +64,7 @@ class StatisticalValidationEngine:
         *,
         column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
         analysis_context: Optional[Mapping[str, Any]] = None,
+        structural_dependencies: Optional[List[Mapping[str, Any]]] = None,
     ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
@@ -74,6 +77,10 @@ class StatisticalValidationEngine:
             dict(column_profiles)
             if column_profiles is not None
             else profile_dataframe_columns(df)
+        )
+        self.structural_dependencies = (
+            structural_dependencies if structural_dependencies is not None
+            else detect_additive_dependencies(df, self.column_profiles, self.analysis_context)
         )
 
     def analyze(self, max_results: int = 6) -> Dict[str, Any]:
@@ -124,11 +131,22 @@ class StatisticalValidationEngine:
         for result, adjusted_p_value in zip(candidates, adjusted):
             result.adjusted_p_value = adjusted_p_value
             result.significant = adjusted_p_value <= self.alpha
+            dependency = (
+                additive_pair_dependency(result.columns, self.structural_dependencies)
+                if result.family == "correlation" else None
+            )
+            if dependency:
+                result.structural_dependency = dict(dependency)
+                result.limitations.insert(0, (
+                    f"Observed arithmetic relationship: {dependency['equation']}. "
+                    "The total/component correlation is not an independent discovery."
+                ))
             result.interpretation = self._interpret(result)
 
         candidates.sort(
             key=lambda item: (
                 not is_relevant({"columns": item.columns}, self.analysis_context),
+                bool(item.structural_dependency),
                 item.adjusted_p_value if item.adjusted_p_value is not None else 1.0,
                 -abs(float(item.effect_size["value"])),
                 item.test_id,
@@ -158,6 +176,7 @@ class StatisticalValidationEngine:
                 "Identifiers and temporal fields are excluded; numeric category codes are tested as categories, not measures.",
                 "Confidence intervals quantify uncertainty; effect sizes quantify practical magnitude.",
                 "Statistical association alone does not establish causality or business importance.",
+                "Detected exact integer total/component relationships remain in the FDR family, but are labelled and are not promoted as independent discoveries. The bounded arithmetic scan is not an exhaustive leakage or dependency check.",
             ],
         }
 
@@ -171,7 +190,10 @@ class StatisticalValidationEngine:
         if report.get("inference_status") == "withheld":
             return []
         insights = []
-        relevant_tests = [test for test in report.get("tests", []) if is_relevant(test, self.analysis_context)]
+        relevant_tests = [test for test in report.get("tests", [])
+                          if is_relevant(test, self.analysis_context)
+                          and not test.get("structural_dependency")
+                          and not additive_pair_dependency(test.get("columns") or [], self.structural_dependencies)]
         for test in relevant_tests[:max_results]:
             adjusted_p = float(test["adjusted_p_value"])
             effect = test["effect_size"]
@@ -362,6 +384,13 @@ class StatisticalValidationEngine:
         )
 
     def _interpret(self, result: StatisticalTestResult) -> str:
+        if result.structural_dependency:
+            return (
+                f"Observed arithmetic relationship: {result.structural_dependency['equation']}. "
+                "This total/component correlation is not an independent discovery or evidence "
+                "of an external driver. Test statistics are retained for audit, not promoted "
+                "as a separate explanatory finding."
+            )
         adjusted = _format_probability(result.adjusted_p_value or 0.0)
         effect = result.effect_size
         interval = result.confidence_interval

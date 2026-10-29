@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.column_semantics import columns_for_role, profile_dataframe_columns
 from src.analysis_context import is_relevant
+from src.structural_dependencies import additive_pair_dependency, detect_additive_dependencies
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class EvidenceBasedInsightEngine:
         *,
         column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
         analysis_context: Optional[Mapping[str, Any]] = None,
+        structural_dependencies: Optional[List[Mapping[str, Any]]] = None,
     ):
         if not isinstance(df, pd.DataFrame):
             raise TypeError("df must be a pandas DataFrame")
@@ -52,6 +54,10 @@ class EvidenceBasedInsightEngine:
             dict(column_profiles)
             if column_profiles is not None
             else profile_dataframe_columns(df)
+        )
+        self.structural_dependencies = (
+            structural_dependencies if structural_dependencies is not None
+            else detect_additive_dependencies(df, self.column_profiles, self.analysis_context)
         )
 
     def generate(self, max_insights: int = 6) -> List[Dict[str, Any]]:
@@ -63,6 +69,7 @@ class EvidenceBasedInsightEngine:
         findings: List[EvidenceInsight] = [self._dataset_overview(), self._data_quality()]
         for builder in (
             self._small_sample_warning,
+            self._additive_relationship,
             self._strongest_correlation,
             self._strongest_trend,
             self._largest_outlier_group,
@@ -188,11 +195,49 @@ class EvidenceBasedInsightEngine:
             },
         )
 
+    def _additive_relationship(self) -> Optional[EvidenceInsight]:
+        dependency = next((item for item in self.structural_dependencies
+                           if is_relevant(item, self.analysis_context)), None)
+        if dependency is None:
+            return None
+        rows = int(dependency["evaluated_rows"])
+        return EvidenceInsight(
+            insight_id="observed-additive-relationship",
+            category="structural-dependency",
+            title="Observed arithmetic relationship, not an independent driver",
+            statement=(
+                f"{dependency['equation']} holds exactly in all {rows:,} analyzed rows. "
+                "Correlations between this total and its components are not independent discoveries."
+            ),
+            evidence=[
+                f"Equation: {dependency['equation']}",
+                f"Complete finite rows checked: {rows:,} of {len(self.df):,}",
+                "Exact safe-integer addition; no rounding, imputation, or fitted coefficients.",
+            ],
+            recommendation=(
+                "Confirm the business definition and units. Before modelling, establish whether "
+                "each component is available at prediction time; do not automatically select or "
+                "remove predictors from this equality alone. This does not prove a future identity."
+            ),
+            confidence="exploratory",
+            severity="warning",
+            sample_size=rows,
+            metrics={
+                "column": dependency["total_column"],
+                "component_columns": list(dependency["component_columns"]),
+                "equation": dependency["equation"],
+                "evaluated_rows": rows,
+                "coverage": dependency["coverage"],
+            },
+        )
+
     def _strongest_correlation(self) -> Optional[EvidenceInsight]:
         columns = self._discovery_columns(limit=30)
         strongest = None
         for left_index, left in enumerate(columns):
             for right in columns[left_index + 1 :]:
+                if additive_pair_dependency([str(left), str(right)], self.structural_dependencies):
+                    continue
                 if not is_relevant({"columns": [str(left), str(right)]}, self.analysis_context):
                     continue
                 paired = self.df[[left, right]].replace([np.inf, -np.inf], np.nan).dropna()

@@ -15,6 +15,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from src.column_semantics import profile_dataframe_columns
 from src.analysis_context import build_analysis_context
+from src.structural_dependencies import detect_additive_dependencies
 from src.semantic_contract import (
     profiles_from_semantic_contract,
     validate_semantic_contract,
@@ -216,6 +217,7 @@ def generate_dashboard_data(
     )
 
     analysis_context = build_analysis_context(prompt, filtered_df.columns, column_profiles)
+    structural_dependencies = detect_additive_dependencies(filtered_df, column_profiles, analysis_context)
 
     # Генерируем KPIs
     kpis = _generate_kpis(filtered_df, viz_spec.metrics)
@@ -242,11 +244,13 @@ def generate_dashboard_data(
         filtered_df,
         column_profiles=column_profiles,
         analysis_context=analysis_context,
+        structural_dependencies=structural_dependencies,
     ).generate()
     statistical_validation = StatisticalValidationEngine(
         filtered_df,
         column_profiles=column_profiles,
         analysis_context=analysis_context,
+        structural_dependencies=structural_dependencies,
     ).analyze()
     pattern_analysis = AnomalySegmentationEngine(
         filtered_df,
@@ -265,6 +269,7 @@ def generate_dashboard_data(
         "readiness": readiness,
         "df_shape": filtered_df.shape,
         "analysis_context": analysis_context,
+        "structural_dependencies": structural_dependencies,
     }
     result["decision_brief"] = build_decision_brief(result, readiness)
     return result

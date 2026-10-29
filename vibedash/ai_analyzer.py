@@ -10,6 +10,8 @@ import re
 import os
 import json
 import numpy as np
+from src.column_semantics import profile_dataframe_columns
+from src.structural_dependencies import additive_pair_dependency, detect_additive_dependencies
 
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
@@ -103,12 +105,17 @@ class DataScienceAI:
         
         # Создаем корреляционную матрицу
         corr_matrix = self.df[numeric_cols].corr()
+        dependencies = detect_additive_dependencies(self.df, profile_dataframe_columns(self.df))
         
         # Находим сильные корреляции
         strong_correlations = []
         for i in range(len(corr_matrix.columns)):
             for j in range(i+1, len(corr_matrix.columns)):
                 corr_value = corr_matrix.iloc[i, j]
+                if additive_pair_dependency(
+                    [str(corr_matrix.columns[i]), str(corr_matrix.columns[j])], dependencies
+                ):
+                    continue
                 if abs(corr_value) > 0.7:
                     strong_correlations.append({
                         'col1': corr_matrix.columns[i],
@@ -137,11 +144,20 @@ class DataScienceAI:
             for corr in strong_correlations[:5]:
                 answer += f"• {corr['col1']} ↔ {corr['col2']}: {corr['correlation']:.3f}\n"
         else:
-            answer += "ℹ️ Сильных корреляций не найдено (все < 0.7)\n"
+            answer += "ℹ️ Среди остальных проверенных пар сильных корреляций не найдено.\n"
+
+        if dependencies:
+            answer += "\nАрифметические зависимости в проанализированных строках:\n"
+            for dependency in dependencies:
+                answer += f"• {dependency['equation']} — {dependency['evaluated_rows']} строк.\n"
+            answer += (
+                "Связи суммы с её составляющими не являются независимыми открытиями. "
+                "Матрица сохраняет эти коэффициенты для проверки. Перед моделированием "
+                "нужно подтвердить определения и доступность составляющих в момент прогноза.\n"
+            )
         
         insights = [
-            f"Найдено {len(strong_correlations)} сильных корреляций",
-            f"Самые коррелирующие колонки: {', '.join(numeric_cols[:3])}",
+            f"Найдено {len(strong_correlations)} сильных корреляций вне обнаруженных связей суммы с её составляющими",
             "Положительная корреляция означает, что значения растут вместе",
             "Отрицательная корреляция означает обратную зависимость"
         ]
@@ -735,7 +751,11 @@ class DataScienceAI:
             "",
         ]
         for test in report["tests"]:
-            decision = "FDR significant" if test["significant"] else "inconclusive"
+            decision = (
+                "observed arithmetic relationship"
+                if test.get("structural_dependency")
+                else "FDR significant" if test["significant"] else "inconclusive"
+            )
             answer_lines.extend(
                 [
                     f"**{test['title']}** — {decision}",
