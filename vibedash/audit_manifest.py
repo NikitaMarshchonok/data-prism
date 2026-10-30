@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from src.semantic_contract import semantic_contract_audit_view
 
 
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
 ANALYSIS_CONTRACT = "vibedash-evidence-v3"
 MAX_SCHEMA_PREVIEW_COLUMNS = 50
 
@@ -74,6 +74,13 @@ def build_audit_manifest(
     statistical_validation = dashboard_data.get("statistical_validation") or {}
     pattern_analysis = dashboard_data.get("pattern_analysis") or {}
     anomaly_detection = pattern_analysis.get("anomaly_detection") or {}
+    displayed_candidates = len(anomaly_detection.get("top_anomalies") or [])
+    total_candidates = anomaly_detection.get("flagged_count")
+    # Historical/insufficient-data reports may lack a total. A top-N list is
+    # not evidence of the total; keep unknown as null rather than guessing.
+    if (isinstance(total_candidates, bool) or not isinstance(total_candidates, int)
+            or not displayed_candidates <= total_candidates <= len(dataframe)):
+        total_candidates = None
     readiness = dashboard_data.get("readiness") or {}
     decision_brief = dashboard_data.get("decision_brief") or {}
 
@@ -130,9 +137,8 @@ def build_audit_manifest(
                     if isinstance(test, Mapping)
                 )
             ),
-            "anomaly_candidate_count": len(
-                anomaly_detection.get("top_anomalies") or []
-            ),
+            "anomaly_candidate_total_count": total_candidates,
+            "anomaly_candidate_displayed_count": displayed_candidates,
             "readiness": {
                 "contract": readiness.get("contract"),
                 "status": readiness.get("status"),

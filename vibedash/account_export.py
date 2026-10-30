@@ -235,6 +235,8 @@ def _normal_manifest(manifest: Mapping[str, Any]) -> dict[str, Any]:
         "statistical_test_count",
         "significant_test_count",
         "anomaly_candidate_count",
+        "anomaly_candidate_total_count",
+        "anomaly_candidate_displayed_count",
     ):
         _put(evidence_aggregate, key, _safe_count(evidence.get(key)))
 

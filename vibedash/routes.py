@@ -2794,8 +2794,8 @@ if vibedash_bp:
             # Создаем single-file HTML
             single_file_html = make_single_file_html(
                 html_content,
-                css_paths=['static/vibedash_preview.css'],
-                js_paths=[]
+                css_paths=[str(Path(current_app.static_folder) / 'vibedash_preview.css')],
+                js_paths=[str(Path(current_app.static_folder) / 'vibedash_charts.js')],
             )
             
             # Сохраняем файл

@@ -12,8 +12,11 @@ import re
 import time
 from typing import List
 from datetime import datetime
+from functools import lru_cache
+from html.parser import HTMLParser
 
 from plotly.utils import PlotlyJSONEncoder
+from plotly.offline import get_plotlyjs
 
 
 DEFAULT_SESSIONS_DIR = Path("tmp") / "vibedash"
@@ -158,59 +161,83 @@ def cleanup_expired_artifacts(
     return result
 
 
+class _OfflineDocumentValidator(HTMLParser):
+    """Check packaging, not arbitrary HTML sanitization or script safety."""
+
+    def __init__(self):
+        super().__init__()
+        self.documents = self.heads = self.bodies = self.doctypes = 0
+
+    def handle_decl(self, decl):
+        if decl.lower().startswith('doctype'):
+            self.doctypes += 1
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'html': self.documents += 1
+        if tag == 'head': self.heads += 1
+        if tag == 'body': self.bodies += 1
+        if ((tag == 'script' and attrs.get('src'))
+                or (tag == 'link' and attrs.get('href'))
+                or tag in {'iframe', 'object', 'embed', 'base'}
+                or (tag in {'img', 'source', 'video', 'audio'} and attrs.get('src')
+                    and not attrs['src'].startswith('data:'))):
+            raise ValueError('Standalone export contains an external or relative resource.')
+
+
+def _inline_asset(text: str, tag: str) -> str:
+    # Trusted application code still must not terminate its raw-text element.
+    return re.sub(rf'</{tag}', lambda match: '<\\/' + match.group()[2:], text, flags=re.IGNORECASE)
+
+
 def make_single_file_html(html: str, css_paths: List[str] = None, js_paths: List[str] = None) -> str:
+    """Package an export-mode document with local assets, without network I/O.
+
+    Full documents are preserved, not wrapped in a second document. The caller
+    must render without remote/relative asset tags. Missing assets fail closed.
     """
-    Создает самодостаточный HTML файл с встроенными CSS/JS
-    """
-    if css_paths is None:
-        css_paths = []
-    if js_paths is None:
-        js_paths = []
-    
-    # Встраиваем CSS
-    inline_css = ""
-    for css_path in css_paths:
-        if os.path.exists(css_path):
-            with open(css_path, 'r', encoding='utf-8') as f:
-                inline_css += f"<style>\n{f.read()}\n</style>\n"
-    
-    # Встраиваем JS
-    inline_js = ""
-    for js_path in js_paths:
-        if os.path.exists(js_path):
-            with open(js_path, 'r', encoding='utf-8') as f:
-                inline_js += f"<script>\n{f.read()}\n</script>\n"
-    
-    # Встраиваем Plotly.js
-    plotly_js = _get_plotly_js()
-    
-    # Создаем полный HTML
-    full_html = f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VibeDash Export - {datetime.now().strftime('%Y-%m-%d %H:%M')}</title>
-    {inline_css}
-    {plotly_js}
-    {inline_js}
-</head>
-<body>
-    {html}
-</body>
-</html>"""
-    
-    return full_html
+    validator = _OfflineDocumentValidator()
+    validator.feed(html)
+    validator.close()
+    if validator.documents == 0:
+        if validator.heads or validator.bodies or validator.doctypes:
+            raise ValueError('Standalone export document is incomplete.')
+        html = ('<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+                '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+                '<title>Data Prism export</title></head><body>' + html + '</body></html>')
+    elif (validator.documents, validator.heads, validator.bodies, validator.doctypes) != (1, 1, 1, 1):
+        raise ValueError('Standalone export requires exactly one complete HTML document.')
+
+    css = ''.join('<style>\n' + _inline_asset(Path(path).read_text(encoding='utf-8'), 'style')
+                  + '\n</style>\n' for path in (css_paths or []))
+    js = ''.join('<script>\n' + _inline_asset(Path(path).read_text(encoding='utf-8'), 'script')
+                 + '\n</script>\n' for path in (js_paths or []))
+    # The offline runtime is the one bundled with the installed Plotly Python
+    # package, matching the figure serializer, not a separately versioned CDN.
+    assets = (
+        '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; '
+        'script-src \'unsafe-inline\'; style-src \'unsafe-inline\'; img-src data: blob:; '
+        'font-src data:; connect-src \'none\'; base-uri \'none\'; form-action \'none\'; '
+        'object-src \'none\';">\n'
+        + css + _get_plotly_js() + js
+    )
+    # Keep a leading charset declaration in the first 1024 bytes; the bundled
+    # runtime is several megabytes and must not push it past that HTML limit.
+    head = re.search(
+        r'<head(?:\s[^>]*)?>\s*(?:<meta\s+charset\s*=\s*'
+        r'(?:"[^"]*"|\'[^\']*\'|[^\s>]+)\s*/?>)?',
+        html, re.IGNORECASE,
+    )
+    if head is None:
+        raise ValueError('Standalone export head is missing.')
+    return html[:head.end()] + assets + html[head.end():]
 
 
+@lru_cache(maxsize=1)
 def _get_plotly_js() -> str:
-    """
-    Возвращает встроенный Plotly.js
-    Для production лучше использовать CDN или локальную копию
-    """
-    return """
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
-    """
+    """One bundled Plotly runtime per export, cached in the worker process."""
+    return ('<script data-data-prism-runtime="plotly">\n'
+            + _inline_asset(get_plotlyjs(), 'script') + '\n</script>\n')
 
 
 def save_export(html_content: str, session_id: str, exports_dir=None) -> str:
