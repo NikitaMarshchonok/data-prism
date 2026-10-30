@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
 import plotly.graph_objects as go
+from src.column_semantics import profile_dataframe_columns
 
 from .spec import Chart
 
@@ -130,6 +131,14 @@ def _axis_format(
     column: Optional[str],
     column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
 ) -> dict[str, Any]:
+    role = (column_profiles or {}).get(column, {}).get("role")
+    if role in {"category", "identifier"}:
+        # Numeric storage does not make a category code a continuous measure.
+        # Keep trace values/order intact; Plotly supplies discrete tick labels.
+        return {"type": "category", "tickformat": None, "tickprefix": None,
+                "ticksuffix": None, "separatethousands": False}
+    if role == "temporal":
+        return {}
     if _numeric_values(frame, column).empty:
         return {}
     kind = semantic_value_kind(frame, column, column_profiles)
@@ -148,6 +157,8 @@ def _hover_value(
     axis: str,
     column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
 ) -> str:
+    if (column_profiles or {}).get(column, {}).get("role") in {"category", "identifier", "temporal"}:
+        return f"%{{{axis}}}"
     kind = semantic_value_kind(frame, column, column_profiles)
     if kind == "ratio":
         return f"%{{{axis}:.2%}}"
@@ -214,9 +225,17 @@ def apply_evidence_chart_theme(
     column_profiles: Optional[Mapping[Any, Mapping[str, Any]]] = None,
 ) -> go.Figure:
     """Apply the product chart contract to a Plotly figure."""
+    if column_profiles is None:
+        column_profiles = profile_dataframe_columns(frame)
     x_column, y_column = _chart_axes(chart)
+    # count/nunique/size produce counts, not values in the source column's unit
+    # or role (the source may itself be a category, ratio, or currency field).
+    aggregated_count = chart.type == "bar" and bool(chart.group and chart.y) and chart.agg in {"count", "nunique", "size"}
+    y_format_column = None if aggregated_count else y_column
     x_label = humanize_chart_label(x_column)
     y_label = humanize_chart_label(y_column)
+    if aggregated_count:
+        y_label = "Count"
     if chart.type in {"bar", "line", "area"} and not y_column:
         y_label = "Count"
     if chart.type == "hist":
@@ -273,7 +292,9 @@ def apply_evidence_chart_theme(
 
     if x_column:
         fig.update_xaxes(**_axis_format(frame, x_column, column_profiles))
-    if y_column:
+    if aggregated_count:
+        fig.update_yaxes(type="linear", tickformat=",.0f", tickprefix=None, ticksuffix=None)
+    elif y_column:
         fig.update_yaxes(**_axis_format(frame, y_column, column_profiles))
     elif chart.type in {"bar", "hist", "line", "area"}:
         fig.update_yaxes(tickformat=",.0f")
@@ -284,13 +305,13 @@ def apply_evidence_chart_theme(
             trace.update(
                 marker={"color": ACCENT, "line": {"width": 0}},
                 opacity=0.9,
-                text=_bar_labels(frame, y_column, trace.y, column_profiles),
+                text=_bar_labels(frame, y_format_column, trace.y, column_profiles),
                 textposition="outside",
                 textfont={"color": "#b9cbc5", "size": 10},
                 cliponaxis=False,
                 hovertemplate=(
                     f"{x_label}: %{{x}}<br>{y_label}: "
-                    f"{_hover_value(frame, y_column, 'y', column_profiles)}<extra></extra>"
+                    f"{_hover_value(frame, y_format_column, 'y', column_profiles)}<extra></extra>"
                 ),
             )
     elif chart.type == "line":
