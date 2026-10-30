@@ -473,6 +473,34 @@ Scaling to multiple instances requires:
 
 ## Analytical quality boundary
 
+### Observed arithmetic provenance
+
+The evidence and statistical engines share a bounded deterministic check for
+`total = component A + component B`. It verifies exact addition on **every**
+analyzed row, never a sampled-only fit. The first guardrail deliberately covers
+only complete, finite, nonconstant integer measures (at least three distinct
+values per column), with absolute operands at most `2**52`, so addition stays
+exact in float64. It requires 30–100,000 rows, scans at most 20 measure columns
+(task-focus columns first), and retains at most 20 identities. Explicitly
+excluded columns and conflicting unit labels are not used. Fractional,
+incomplete, oversized and other formula relationships are left unassessed;
+finding no identity is **not** evidence of independence or absence of leakage.
+
+A match is reported as an observed arithmetic relationship, with equation and
+full-row coverage, not as a validated business definition or a future identity.
+Its total/component correlations are not promoted as independent discoveries
+in evidence cards or the decision brief. Conditional Pearson calculations and
+the entire eligible FDR family remain unchanged for audit; matched tests carry
+an explicit structural annotation and interpretation. Temporal inference
+withholding still takes precedence. The bridge computes this shared scan once
+on the filtered dataframe. No records or predictors are removed, no model is
+trained, and KPI expressions are unchanged. Business definitions, actual units
+and availability at prediction time still require confirmation before deciding
+whether a component is an admissible model input.
+Correlation and statistical chat responses use the same structural rule. Their
+numeric matrices remain available for audit; total/component pairs are labelled
+separately rather than listed as independent strong-correlation findings.
+
 The repository distinguishes function correctness from analytical behaviour.
 Unit tests exercise algorithms and defensive paths, while
 `evaluate_quality.py` assembles the evidence, statistical, anomaly, and

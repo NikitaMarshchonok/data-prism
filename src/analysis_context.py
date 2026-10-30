@@ -78,6 +78,9 @@ def finding_columns(finding: Mapping[str, Any]) -> set[str]:
     result = {str(column) for column in columns} if isinstance(columns, (list, tuple)) else set()
     metrics = finding.get("metrics") or {}
     if isinstance(metrics, Mapping):
+        components = metrics.get("component_columns") or []
+        if isinstance(components, (list, tuple)):
+            result.update(str(column) for column in components)
         for key in ("column", "column_x", "column_y", "value_column"):
             value = metrics.get(key)
             if isinstance(value, str):
