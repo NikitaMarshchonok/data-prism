@@ -48,6 +48,13 @@ colour, responsive Plotly controls, and accessible contrast. Chart styling does
 not generate findings or causal claims; those remain the responsibility of the
 evidence and statistical engines.
 
+Axis roles come from the confirmed column profiles (or the shared profiler
+when no contract is supplied), not the storage dtype. Category/identifier codes
+use discrete axes and unformatted hover labels, so numeric codes such as season
+`1, 2, 3, 4` do not acquire intermediate ticks or SI prefixes. Values and trace
+ordering are unchanged. Grouped bar `count`, `nunique`, and `size` results use a
+numeric count axis rather than the source column's category or monetary unit.
+
 Automatically generated VibeDash specifications pass through a conservative
 semantic boundary before rendering. The boundary deduplicates and caps KPI
 cards, infers currency and percentage display units from column semantics,
