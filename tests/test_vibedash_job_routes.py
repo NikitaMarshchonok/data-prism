@@ -388,7 +388,7 @@ class VibeDashJobRouteTests(unittest.TestCase):
         self.assertIn("Dataset SHA-256", history.get_data(as_text=True))
         self.assertEqual(manifest.status_code, 200)
         manifest_payload = manifest.get_json()
-        self.assertEqual(manifest_payload["manifest_version"], 3)
+        self.assertEqual(manifest_payload["manifest_version"], 4)
         self.assertEqual(
             manifest_payload["semantics"]["contract"],
             "confirmed-semantic-contract-v1",

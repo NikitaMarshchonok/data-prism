@@ -104,6 +104,25 @@ class AccountExportTests(unittest.TestCase):
         self.assertNotIn(b", ", first)
         self.assertNotIn(b": ", first)
 
+    def test_manifest_v4_distinct_counts_and_v3_legacy_meaning_are_preserved(self):
+        result = self.build(jobs=[
+            {"id": "a" * 32, "manifest": {"manifest_version": 4, "evidence": {
+                "anomaly_candidate_total_count": 22, "anomaly_candidate_displayed_count": 10,
+                "secret_rows": ["PRIVATE"],
+            }}},
+            {"id": "b" * 32, "manifest": {"manifest_version": 3, "evidence": {
+                "anomaly_candidate_count": 10,
+            }}},
+        ])
+        first, legacy = [job["manifest"] for job in result["jobs"]]
+        self.assertEqual(first["manifest_version"], 4)
+        self.assertEqual(first["evidence"]["anomaly_candidate_total_count"], 22)
+        self.assertEqual(first["evidence"]["anomaly_candidate_displayed_count"], 10)
+        self.assertNotIn("anomaly_candidate_count", first["evidence"])
+        self.assertEqual(legacy["evidence"]["anomaly_candidate_count"], 10)
+        self.assertNotIn("anomaly_candidate_total_count", legacy["evidence"])
+        self.assertNotIn("PRIVATE", serialize_account_export(result).decode())
+
     def test_comparison_v2_and_legacy_are_exported_without_schema_content(self):
         for version in (1, 2):
             contract = f'vibedash-period-comparison-v{version}'

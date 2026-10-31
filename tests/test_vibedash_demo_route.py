@@ -133,6 +133,19 @@ class VibeDashDemoRouteTests(unittest.TestCase):
                 b"SaaS Growth Evidence Dashboard",
                 export_response.data,
             )
+            html = export_response.get_data(as_text=True)
+            from tests.test_vibedash_standalone_export import Document
+            document = Document(html)
+            for tag in ('html', 'head', 'body'):
+                self.assertEqual(sum(name == tag for name, _ in document.tags), 1)
+            self.assertEqual(len(document.declarations), 1)
+            self.assertEqual(html.count('data-data-prism-runtime="plotly"'), 1)
+            self.assertFalse(any(tag == 'script' and attrs.get('src')
+                                 for tag, attrs in document.tags))
+            self.assertFalse(any(tag == 'link' and attrs.get('href')
+                                 for tag, attrs in document.tags))
+            self.assertIn("connect-src 'none'", html)
+            self.assertIn('<meta charset="UTF-8">', html[:1024])
             export_response.close()
 
     @patch("vibedash.routes.is_ollama_available", return_value=False)
