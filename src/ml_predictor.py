@@ -42,15 +42,41 @@ PREDICTIVE_SUPPORT_ALPHA = 0.05
 TARGET_PROXY_MIN_COVERAGE = 0.80
 
 
-def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dict[str, Any]:
+def predict_target(df: pd.DataFrame, target_column: Optional[str] = None, *,
+                   forecast_task=None, sampling_design: Optional[str] = None) -> Dict[str, Any]:
     """Train a baseline model without fitting transforms on test data.
 
     The historical keys ``target_col``, ``metric`` and
     ``feature_importance_plot`` remain available for the dashboard. Additional
     structured fields make the evaluation auditable.
     """
+    if forecast_task is not None:
+        from src.forecasting import validate_forecast_task, forecast_series
+        try:
+            task = validate_forecast_task(forecast_task)
+            if sampling_design is not None:
+                raise ValueError("Forecast tasks cannot request a random independent-row design.")
+            if target_column is not None and target_column != task.target_column:
+                raise ValueError("Conflicting target selections; no substitute is selected.")
+        except ValueError as error:
+            return _error_report(str(error), target_column)
+        return forecast_series(df, task)
     if not isinstance(df, pd.DataFrame) or df.empty:
         return _error_report("Не удалось обучить модель: датасет пуст.")
+    if not df.columns.is_unique:
+        return _error_report("Названия колонок должны быть уникальными.")
+    if target_column is not None and (not isinstance(target_column, str) or not target_column.strip()):
+        return _error_report("Укажите непустое имя целевой колонки.")
+    if target_column is not None and target_column not in df.columns:
+        return _error_report("Указанная целевая колонка отсутствует; другая цель не выбирается.", target_column)
+    if sampling_design not in (None, "independent_rows"):
+        return _error_report("Неизвестный дизайн проверки модели.", target_column)
+    profiles = profile_dataframe_columns(df)
+    if (sampling_design is None and any(column_role(column, profiles) == "temporal" for column in df)):
+        return _error_report(
+            "В данных есть время: случайное разделение не подтверждает качество прогноза. "
+            "Задайте forecast_task с целью, временем и горизонтом; для независимых объектов "
+            "нужно явно подтвердить sampling_design='independent_rows'.", target_column)
 
     target_col = _select_target(df, target_column)
     if target_col is None:
@@ -151,6 +177,7 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
         baseline_text,
         predictive_support["summary"],
         "Preprocessing was fitted on training rows only.",
+        "Random-split evaluation assumes independent rows; it does not evaluate future forecasting or repeated entities.",
         "Feature importance uses holdout permutation tests and is descriptive, not causal.",
     ]
     if predictive_support["status"] != "supported_on_holdout":
@@ -162,11 +189,15 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
             "Excluded potential leakage/identifier/no-signal features: "
             + ", ".join(dropped_features[:8])
         )
+    if target_column is None:
+        evaluation_notes.append("Legacy target inference was used; confirm the business target before using this result.")
 
     return {
         "status": "ok",
         "target_col": str(target_col),
         "task_type": task_type,
+        "evaluation_design": "independent_rows_random_holdout",
+        "target_selection": "explicit" if target_column is not None else "inferred_legacy",
         "model_name": type(model).__name__,
         "metric": metric_text,
         "metrics": metrics,
@@ -187,8 +218,8 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None) -> Dic
 
 
 def _select_target(df: pd.DataFrame, requested: Optional[str]) -> Optional[Any]:
-    if requested and requested in df.columns:
-        return requested
+    if requested is not None:
+        return requested if requested in df.columns else None
     profiles = profile_dataframe_columns(df)
     candidates = [
         column

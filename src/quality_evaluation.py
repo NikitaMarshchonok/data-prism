@@ -15,16 +15,19 @@ import pandas as pd
 
 from src.demo_data import create_saas_growth_demo
 from src.ml_predictor import predict_target
+from src.forecasting import ForecastTask, forecast_series
 from vibedash.anomaly_segmentation_engine import AnomalySegmentationEngine
 from vibedash.insight_engine import EvidenceBasedInsightEngine
 from vibedash.statistical_engine import StatisticalValidationEngine
 
 
-QUALITY_CONTRACT_VERSION = 1
+QUALITY_CONTRACT_VERSION = 2
 SUPPORTED_SCENARIOS = (
     "saas_known_signals",
     "null_noise_guardrail",
     "known_group_effect",
+    "independent_predictive_signal",
+    "daily_forecast_contract",
 )
 
 
@@ -81,6 +84,8 @@ def run_quality_evaluation(config: Mapping[str, Any]) -> Dict[str, Any]:
         _evaluate_saas_known_signals(scenario_config["saas_known_signals"]),
         _evaluate_null_noise(scenario_config["null_noise_guardrail"]),
         _evaluate_known_group_effect(scenario_config["known_group_effect"]),
+        _evaluate_independent_prediction(scenario_config["independent_predictive_signal"]),
+        _evaluate_daily_forecast(scenario_config["daily_forecast_contract"]),
     ]
 
     checks = [check for scenario in scenarios for check in scenario["checks"]]
@@ -149,9 +154,6 @@ def _evaluate_saas_known_signals(thresholds: Mapping[str, Any]) -> Dict[str, Any
     }
     required_incidents = {int(value) for value in thresholds["required_incident_rows"]}
     segmentation = patterns.get("segmentation", {})
-    predictive_support = prediction.get("predictive_support", {})
-    predictive_metrics = prediction.get("metrics", {})
-
     checks = [
         _check(
             "required-evidence-findings",
@@ -217,32 +219,11 @@ def _evaluate_saas_known_signals(thresholds: Mapping[str, Any]) -> Dict[str, Any
             "Exploratory segments remain sufficiently separated and stable.",
         ),
         _check(
-            "known-predictive-signal-supported",
-            prediction.get("status") == "ok"
-            and predictive_support.get("status") == "supported_on_holdout"
-            and float(predictive_support.get("permutation_p_value", 1.0))
-            <= float(thresholds["maximum_predictive_permutation_p_value"])
-            and float(predictive_metrics.get("mae_improvement", 0.0))
-            >= float(thresholds["minimum_predictive_mae_improvement"]),
-            {
-                "prediction_status": prediction.get("status"),
-                "support_status": predictive_support.get("status"),
-                "permutation_p_value": predictive_support.get(
-                    "permutation_p_value"
-                ),
-                "mae_improvement": predictive_metrics.get("mae_improvement"),
-            },
-            {
-                "prediction_status": "ok",
-                "support_status": "supported_on_holdout",
-                "maximum_permutation_p_value": float(
-                    thresholds["maximum_predictive_permutation_p_value"]
-                ),
-                "minimum_mae_improvement": float(
-                    thresholds["minimum_predictive_mae_improvement"]
-                ),
-            },
-            "The known customer/revenue signal beats a naive baseline on the untouched holdout with permutation support.",
+            "dated-random-prediction-withheld",
+            prediction.get("status") == "error"
+            and prediction.get("predictive_support", {}).get("status") == "not_evaluated",
+            prediction.get("status"), "error",
+            "Dated SaaS rows cannot silently receive random-split predictive support.",
         ),
         _check(
             "deterministic-evidence-and-statistics",
@@ -261,6 +242,63 @@ def _evaluate_saas_known_signals(thresholds: Mapping[str, Any]) -> Dict[str, Any
         data,
         checks,
     )
+
+
+def _evaluate_independent_prediction(thresholds):
+    # Separate IID detection oracle: do not relabel a dated SaaS series IID
+    # merely to preserve its historical random-split benchmark result.
+    rng = np.random.default_rng(4104)
+    feature = rng.normal(size=360)
+    data = pd.DataFrame({"signal": feature, "noise": rng.normal(size=360),
+                         "outcome": 5 * feature + rng.normal(scale=.2, size=360)})
+    report = predict_target(data, "outcome")
+    support = report.get("predictive_support", {})
+    improvement = report.get("metrics", {}).get("mae_improvement", 0)
+    p_value = support.get("permutation_p_value", 1)
+    return _scenario("independent_predictive_signal", "Independent rows with known regression signal", data, [
+        _check("known-predictive-signal-supported",
+               report.get("status") == "ok" and support.get("status") == "supported_on_holdout"
+               and improvement >= float(thresholds["minimum_predictive_mae_improvement"])
+               and p_value <= float(thresholds["maximum_predictive_permutation_p_value"]),
+               {"support_status": support.get("status"), "mae_improvement": improvement,
+                "permutation_p_value": p_value}, dict(thresholds),
+               "The independent known signal must beat a mean baseline on reserved rows; historical thresholds are unchanged.")])
+
+
+def _evaluate_daily_forecast(thresholds):
+    task = ForecastTask("demand", "date", horizon=7, seasonal_period=7)
+    data = pd.DataFrame({"date": pd.date_range("2020-01-01", periods=168),
+                         "demand": 100 + .7 * np.arange(168)})
+    report = forecast_series(data, task)
+    changed = data.copy()
+    changed.loc[changed.index[-7:], "demand"] += 10000
+    changed_report = forecast_series(changed, task)
+    periodic = data.assign(demand=np.tile([10., 20., 30., 70., 60., 50., 40.], 24))
+    simple = forecast_series(periodic, task)
+    holdout = report.get("holdout", {})
+    improvement = holdout.get("mae_improvement")
+    isolated = (report.get("status") == changed_report.get("status") == "ok"
+                and report["model_comparison"] == changed_report["model_comparison"]
+                and [row["prediction"] for row in holdout["predictions"]]
+                == [row["prediction"] for row in changed_report["holdout"]["predictions"]])
+    checks = [
+        _check("forecast-known-trend", report.get("status") == "ok" and improvement is not None
+               and improvement >= float(thresholds["minimum_trend_mae_improvement"]),
+               improvement, dict(thresholds), "A known trend beats the validation-selected naive baseline on a future horizon."),
+        _check("forecast-holdout-isolation", isolated, isolated, True,
+               "Changing final holdout actuals cannot affect method selection or holdout predictions."),
+        _check("forecast-baseline-retained", simple.get("status") == "ok"
+               and simple.get("model_name") == "seasonal_naive"
+               and simple["holdout"]["metrics"]["mae"] == 0,
+               simple.get("model_name"), "seasonal_naive",
+               "Perfect seasonal repetition retains the exact simple baseline rather than promoting complexity."),
+        _check("forecast-no-iid-significance", report.get("status") == "ok"
+               and report["predictive_support"]["statistical_significance"] == "not_assessed"
+               and report["prediction_intervals"] is None,
+               report.get("predictive_support"), {"statistical_significance": "not_assessed"},
+               "Descriptive temporal improvement is not a permutation significance or calibrated-interval claim."),
+    ]
+    return _scenario("daily_forecast_contract", "Fixed-origin daily forecasting and holdout isolation", data, checks)
 
 
 def _evaluate_null_noise(thresholds: Mapping[str, Any]) -> Dict[str, Any]:

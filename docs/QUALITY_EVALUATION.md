@@ -26,18 +26,30 @@ observed value, expected threshold, and description for every check.
 
 ## Benchmark scenarios
 
+Quality contract/configuration v2 requires the five scenarios below. Historical
+v1 configurations must be migrated rather than silently skipping the new
+temporal checks. Analytical dashboard manifest contracts are unaffected.
+
 | Scenario | Known property | Regression guarded against |
 | --- | --- | --- |
-| `saas_known_signals` | Designed customer/revenue relationship, three operational incidents, quality issues, segment structure, and a predictable revenue target | Lost evidence, lower signal sensitivity, missed incidents, unstable or weak segmentation, or failure to beat the naive predictive baseline on the untouched holdout |
+| `saas_known_signals` | Designed customer/revenue relationship, three operational incidents, quality issues, segment structure, and dated rows | Lost evidence, lower signal sensitivity, missed incidents, unstable segmentation, or silently applying random-split prediction to dated data |
 | `null_noise_guardrail` | Five independent numeric variables and an independent categorical target with no designed relationship or segment structure | Strong claims, FDR discoveries, defensible-looking segments, or predictive support manufactured from seeded random noise; anomaly candidates promoted beyond exploratory review |
 | `known_group_effect` | Balanced control/treatment groups with a fixed outcome shift | Failure to detect a large group effect or report uncertainty correctly |
+| `independent_predictive_signal` | Independent rows with a known numeric regression signal | Failure to beat a mean baseline with the unchanged 0.8 MAE-improvement and 0.05 permutation thresholds |
+| `daily_forecast_contract` | Daily trend and exact weekly repetition, plus a mutation of final holdout actuals | Temporal leakage, failure to retain an exact seasonal baseline, or IID significance claims about forecasting |
 
 The dated `saas_known_signals` scenario now checks `temporal-inference-withheld`
 instead of requiring a minimum number of IID statistical discoveries. This is
 an eligibility-policy correction, not a lower p-value/power threshold: the
 independent-sample `known_group_effect` sensitivity check and the null-noise FDR
 check remain in place, together with frozen mathematical oracles. Descriptive
-correlation strength and incident/segmentation/prediction checks are unchanged.
+correlation strength and incident/segmentation checks are unchanged. The dated
+SaaS predictive check now requires withholding unconfirmed random evaluation;
+positive IID predictive sensitivity is tested on a separate independent-row
+fixture rather than declaring dated rows independent to keep the gate green.
+Its historical acceptance thresholds are unchanged. Daily forecasting adds a
+separate known-trend sensitivity threshold and causal-isolation software tests,
+not an IID significance or causal-effect claim.
 
 The datasets are generated in memory from fixed seeds and contain no personal
 or uploaded data. The report intentionally has no timestamp, host identifier,
@@ -52,7 +64,9 @@ instead of pinning exact floating-point output. The null scenario additionally
 requires the gap statistic to select one cluster and keeps fixed-budget anomaly
 rankings explicitly exploratory. Predictive checks require a material
 improvement over a naive baseline and a holdout target-permutation p-value at
-or below the reviewed threshold; the null scenario must remain unsupported.
+or below the reviewed threshold for the IID predictor; the null scenario must
+remain unsupported. Forecasting uses temporal validation MAE and descriptive
+future-holdout error, never the IID permutation test.
 This avoids fragile snapshots while still failing on material analytical
 regressions.
 

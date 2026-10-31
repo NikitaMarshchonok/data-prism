@@ -24,7 +24,7 @@ class QualityEvaluationTests(unittest.TestCase):
 
     def test_default_gate_passes_every_scenario_and_check(self):
         self.assertEqual(self.report["status"], "passed")
-        self.assertEqual(self.report["totals"]["scenario_count"], 3)
+        self.assertEqual(self.report["totals"]["scenario_count"], 5)
         self.assertEqual(self.report["totals"]["failed_checks"], 0)
         self.assertEqual(self.report["totals"]["pass_rate"], 1.0)
         self.assertTrue(all(item["status"] == "passed" for item in self.report["scenarios"]))
@@ -46,6 +46,9 @@ class QualityEvaluationTests(unittest.TestCase):
         self.assertTrue(checks["no-invented-segmentation"]["passed"])
         self.assertTrue(checks["anomaly-candidates-remain-exploratory"]["passed"])
         self.assertTrue(checks["known-predictive-signal-supported"]["passed"])
+        for check in ("dated-random-prediction-withheld", "forecast-known-trend",
+                      "forecast-holdout-isolation", "forecast-baseline-retained", "forecast-no-iid-significance"):
+            self.assertTrue(checks[check]["passed"], check)
         self.assertEqual(
             checks["known-predictive-signal-supported"]["observed"][
                 "support_status"

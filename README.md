@@ -24,6 +24,7 @@ The project is designed as a decision-support system: every important conclusion
 | Statistical validation | Welch group comparisons, Pearson correlation, effect sizes, 95% confidence intervals, and Benjamini–Hochberg FDR correction |
 | Exploratory ML | Fixed-budget anomaly review ranking and gap-statistic-gated, subsample-stability-tested segmentation |
 | Predictive ML | Leakage-safe preprocessing, cross-validated model selection, untouched-holdout evaluation, naive-baseline comparison, and a holdout permutation support gate |
+| Daily forecasting (Python/CLI) | Explicit single-series task, past-only lag models, temporal backtests, simple baselines, reserved-horizon evaluation and separate future refit; not yet connected to VibeDash task submission |
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
 | Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run and decision history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
@@ -55,6 +56,10 @@ flowchart LR
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, [docs/DATASET_READINESS.md](docs/DATASET_READINESS.md) for the pre-analysis contract, [docs/PILOT_DECISION_WORKFLOW.md](docs/PILOT_DECISION_WORKFLOW.md) for the evidence-to-outcome product experiment, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported deployment and persistence model.
+
+For the first bounded forecasting workflow and its evaluation limits, see
+[docs/FORECAST_EVALUATION.md](docs/FORECAST_EVALUATION.md). Dated data is no longer
+silently treated as independent random rows by the legacy predictive module.
 
 ## Reproducible product demo
 
