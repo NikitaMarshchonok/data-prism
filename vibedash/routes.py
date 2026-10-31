@@ -65,6 +65,10 @@ try:
     )
     from .decision_brief import build_decision_brief
     from .forecast_tasks import ForecastTaskError, forecast_task_from_form, run_confirmed_forecast, forecast_audit_view
+    from .task_capabilities import (
+        TaskAdmissionError, capability_catalog, assess_task_request,
+        resolve_analysis_task, validate_stored_task_routing,
+    )
     from .comparison_report import build_comparison_decision_guidance
     from .comparison_semantics import semantic_conflicts, validate_comparison_semantics
     from .pilot_metrics import (
@@ -771,6 +775,7 @@ if vibedash_bp:
         payload, *, run_id=None, scope_id=_UNSET_SCOPE
     ):
         """Build and persist one dashboard through the shared analysis path."""
+        validate_stored_task_routing(payload)
         stored_filename = payload.get('stored_filename', '')
         if not isinstance(stored_filename, str) or not re.fullmatch(
             r'vibedash-[0-9a-f]{32}\.csv', stored_filename
@@ -906,6 +911,7 @@ if vibedash_bp:
         # Workers have no request session to fall back to.  Validate the
         # durable owner before touching inputs or writing a retained record.
         _session_persist_scope(scope_id)
+        validate_stored_task_routing(job.get('payload') or {})
         if (job.get('payload') or {}).get('analysis_kind') == 'period_comparison':
             return _build_period_comparison_session(
                 job.get('payload', {}),
@@ -1870,6 +1876,18 @@ if vibedash_bp:
         return response
 
 
+    @vibedash_bp.get('/task-capabilities')
+    def task_capabilities():
+        """Public static capabilities, not a claim that a dataset is suitable."""
+        return jsonify(capability_catalog())
+
+
+    @vibedash_bp.get('/task-intake')
+    def task_intake():
+        """Read-only guidance for an explicitly selected task; no upload or fit."""
+        return jsonify(assess_task_request(request.args.get('task_type'), workflow=request.args.get('workflow')))
+
+
     @vibedash_bp.post('/readiness')
     def dataset_readiness():
         """Assess an uploaded CSV without retaining its rows."""
@@ -1911,7 +1929,12 @@ if vibedash_bp:
     @vibedash_bp.route('/preview', methods=['POST'])
     def preview():
         """Предварительный просмотр дашборда"""
-        if request.form.get('analysis_mode', 'evidence') != 'evidence':
+        try:
+            mode, _routing = resolve_analysis_task(request.form)
+        except TaskAdmissionError as error:
+            flash(str(error), 'error')
+            return redirect(url_for('vibedash.index'))
+        if mode != 'evidence':
             flash('Forecasting uses the queued workflow. Enable JavaScript or submit the confirmed task to /vibedash/jobs.', 'error')
             return redirect(url_for('vibedash.index'))
         upload_path = None
@@ -2047,9 +2070,10 @@ if vibedash_bp:
     @vibedash_bp.post('/jobs')
     def create_analysis_job():
         """Queue one bounded VibeDash analysis and return its status URL."""
-        mode = request.form.get('analysis_mode', 'evidence')
-        if mode not in {'evidence', 'forecast'}:
-            return jsonify({'error': 'Unsupported analysis mode.'}), 400
+        try:
+            mode, task_routing = resolve_analysis_task(request.form)
+        except TaskAdmissionError as error:
+            return jsonify({'error': str(error), 'task_intake': error.assessment}), (422 if 'task_type' in request.form else 400)
         if mode == 'forecast' and not _valid_decision_csrf_token(request.form.get('csrf_token')):
             return jsonify({'error': 'Refresh the page before starting a forecast.'}), 400
         pilot_opt_in = request.form.get('pilot_metrics') == 'yes'
@@ -2134,7 +2158,12 @@ if vibedash_bp:
             )
             if mode == 'forecast' and demo_dataset:
                 raise ForecastTaskError('Upload your own confirmed daily series for forecasting; the fixed evidence demo is unchanged.')
-            forecast_task = forecast_task_from_form(dataframe, semantic_contract, request.form)
+            task_form = request.form.copy()
+            task_form['analysis_mode'] = mode
+            forecast_task = forecast_task_from_form(dataframe, semantic_contract, task_form)
+            if (mode == 'forecast' and task_routing['intent_source'] == 'explicit_task_type'
+                    and forecast_task.get('decision_policy') is None):
+                raise ForecastTaskError('An explicit daily forecast task requires reviewed and confirmed decision criteria.')
             if forecast_task and len(dataframe) > current_app.config['MAX_ROWS_PREVIEW']:
                 raise ForecastTaskError('Forecast history cannot be truncated to the dashboard preview limit.')
         except (SemanticContractError, ForecastTaskError) as error:
@@ -2150,6 +2179,7 @@ if vibedash_bp:
             job_payload = {
                 'stored_filename': stored_filename, 'filename': filename,
                 'prompt': prompt, 'demo_dataset': demo_dataset, 'semantic_contract': semantic_contract,
+                'task_routing': task_routing,
             }
             if forecast_task:
                 job_payload.update(analysis_kind='daily_forecast', forecast_task=forecast_task)

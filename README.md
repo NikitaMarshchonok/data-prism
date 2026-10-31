@@ -8,6 +8,14 @@ Data Prism turns CSV, TSV, Excel, JSON, and Parquet files into an interactive an
 
 The project is designed as a decision-support system: every important conclusion should be traceable to a metric, sample size, confidence estimate, baseline, or diagnostic—not just an LLM-generated narrative. A deterministic analytical quality gate measures known-signal detection and false discoveries on synthetic benchmark scenarios before changes are merged.
 
+The product direction is industry-independent: companies bring their own task
+and business context to a common intake with specialized, verified executors.
+This is not a promise to solve every task from any file. Current confirmed
+VibeDash workflows and their limits are exposed by `GET /vibedash/task-capabilities`;
+`GET /vibedash/task-intake?task_type=daily_forecast` provides read-only admission
+guidance, not dataset approval. See the [product plan](docs/DATA_SCIENCE_PRODUCT_PLAN.md)
+for the agreed target, current boundaries and acceptance milestones.
+
 ![Data Prism evidence-first analytics workspace](docs/assets/data-prism-landing.jpg)
 
 ## What the system does
