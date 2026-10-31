@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from tests import test_vibedash_standalone_export as export_fixture
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
+from tests.test_forecast_policy import POLICY_FORM
 from vibedash.forecast_tasks import forecast_task_from_form, run_confirmed_forecast
 
 
@@ -58,6 +59,21 @@ class ForecastResultRenderingTests(unittest.TestCase):
         self.assertIn('&lt;script&gt;untrusted&lt;/script&gt;', html)
         self.assertNotIn('<script>untrusted</script>', html)
         self.assertIn('not accuracy percent', html)
+
+    def test_decision_failure_is_visible_even_when_mae_improved_and_text_is_escaped(self):
+        frame = daily_frame()
+        semantics = confirmed(frame)
+        fields = POLICY_FORM | {'forecast_decision': '<script>untrusted decision</script>',
+                                'forecast_maximum_mae': '0'}
+        report = run_confirmed_forecast(frame, semantics, forecast_task_from_form(frame, semantics, FORM | fields))
+        self.assertEqual(report['predictive_support']['status'], 'observed_holdout_improvement')
+        self.assertEqual(report['business_evaluation']['status'], 'criteria_not_met_on_holdout')
+        html = self.render_forecast(report)
+        self.assertIn('Decision criteria not met or not established', html)
+        self.assertIn('Absolute MAE limit: Not met', html)
+        self.assertIn('&lt;script&gt;untrusted decision&lt;/script&gt;', html)
+        self.assertNotIn('<script>untrusted decision</script>', html)
+        self.assertIn('not financial savings', html)
 
 
 if __name__ == '__main__':

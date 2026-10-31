@@ -16,6 +16,7 @@ import pandas as pd
 from src.demo_data import create_saas_growth_demo
 from src.ml_predictor import predict_target
 from src.forecasting import ForecastTask, forecast_series
+from src.forecast_policy import CONTRACT as FORECAST_POLICY_CONTRACT, weighted_absolute_error
 from vibedash.anomaly_segmentation_engine import AnomalySegmentationEngine
 from vibedash.insight_engine import EvidenceBasedInsightEngine
 from vibedash.statistical_engine import StatisticalValidationEngine
@@ -275,6 +276,12 @@ def _evaluate_daily_forecast(thresholds):
     changed_report = forecast_series(changed, task)
     periodic = data.assign(demand=np.tile([10., 20., 30., 70., 60., 50., 40.], 24))
     simple = forecast_series(periodic, task)
+    policy = {'contract': FORECAST_POLICY_CONTRACT, 'decision': 'Plan capacity in a synthetic test',
+              'underprediction_weight': 5., 'overprediction_weight': 1.,
+              'minimum_improvement': .1, 'maximum_mae': 0.}
+    constrained = forecast_series(data, task, decision_policy=policy)
+    constrained_changed = forecast_series(changed, task, decision_policy=policy)
+    weighted_oracle = weighted_absolute_error([10., 10.], [8., 13.], policy)
     holdout = report.get("holdout", {})
     improvement = holdout.get("mae_improvement")
     isolated = (report.get("status") == changed_report.get("status") == "ok"
@@ -297,6 +304,18 @@ def _evaluate_daily_forecast(thresholds):
                and report["prediction_intervals"] is None,
                report.get("predictive_support"), {"statistical_significance": "not_assessed"},
                "Descriptive temporal improvement is not a permutation significance or calibrated-interval claim."),
+        _check("forecast-asymmetric-loss-oracle", weighted_oracle == 6.5, weighted_oracle, 6.5,
+               "An underprediction of 2 at weight 5 and overprediction of 3 at weight 1 have mean penalty 6.5, not a currency value."),
+        _check("forecast-decision-limit-enforced", constrained.get('status') == 'ok'
+               and constrained['business_evaluation']['status'] == 'criteria_not_met_on_holdout'
+               and constrained['business_evaluation']['checks']['maximum_mae'] is False,
+               constrained.get('business_evaluation'), {'maximum_mae': 0., 'status': 'criteria_not_met_on_holdout'},
+               "A strong relative improvement cannot override a predeclared absolute-error limit."),
+        _check("forecast-policy-holdout-isolation", constrained.get('status') == constrained_changed.get('status') == 'ok'
+               and constrained['model_comparison'] == constrained_changed['model_comparison']
+               and constrained['model_name'] == constrained_changed['model_name'],
+               constrained.get('selection_metric'), 'mean validation weighted absolute error',
+               "Predeclared weighted-error selection cannot use the final holdout to choose the method or baseline."),
     ]
     return _scenario("daily_forecast_contract", "Fixed-origin daily forecasting and holdout isolation", data, checks)
 

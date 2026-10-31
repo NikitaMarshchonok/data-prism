@@ -42,7 +42,8 @@ general proof that an arbitrary feature is safe for forecasting.
 4. Fit each learned transform/model on its prefix only. Predict every horizon
    recursively without inserting any actual target from inside that horizon.
    Seasonal naive repeats the last observed seasonal cycle for longer horizons.
-5. Select the method and reference baseline by mean validation MAE, before
+5. Select the method and reference baseline by mean validation MAE (or the
+   explicitly predeclared weighted absolute error described below), before
    accessing final holdout outcomes. Exact ties favour the earlier/simple
    baseline. A candidate failing a fold is recorded as failed and cannot win.
 6. Evaluate the locked method and reference baseline on the final holdout.
@@ -68,6 +69,13 @@ are available before forecasting the next day. Review and confirm the meanings
 after changing settings. Forecasting is never enabled merely by mentioning a
 prediction in the free-text analysis question.
 
+The browser also asks which decision the forecast supports, relative penalties
+for underprediction and overprediction, the required relative error reduction,
+and an optional maximum MAE. Confirm these criteria before starting. Editing a
+setting or loading a new file clears the confirmations. The decision description
+is context supplied by the user, not an automatically understood or validated
+business objective. Do not enter personal or confidential information.
+
 The server validates the full input before queueing, without fitting a model.
 The worker revalidates the input and its binding to the confirmed target, time,
 units and settings before training. It rejects a history that would be truncated
@@ -81,6 +89,10 @@ Input readiness scores describe input checks, not forecast reliability.
 The optional forecast section of the audit manifest contains settings and
 aggregate metrics, never per-day observations or predictions. The result page
 itself contains those values and remains data-bearing.
+The user's decision description is omitted from the audit manifest, which keeps
+the bound task fingerprint, numeric criteria and aggregate evaluation instead.
+The description is retained in the temporary owned job/session and result page;
+hashing it is not anonymization.
 
 For a target explicitly confirmed as a count, negative observations are rejected
 and negative future point forecasts are flagged and withheld from the displayed
@@ -112,6 +124,46 @@ result = forecast_series(dataframe, task)
 from src.ml_predictor import predict_target
 result = predict_target(dataframe, forecast_task=task)
 ```
+
+### Predeclared decision policy
+
+Python callers can pass `decision_policy=` directly to `forecast_series`. The
+browser submits the same policy under `confirmed-daily-forecast-task-v2`, bound
+to confirmed semantics, availability and settings. Existing v1 jobs and CLI
+calls keep MAE selection and report business criteria as `not_specified`.
+
+```python
+policy = {
+    "contract": "forecast-decision-policy-v1",
+    "decision": "Plan next week's staffing",
+    "underprediction_weight": 5.0,
+    "overprediction_weight": 1.0,
+    "minimum_improvement": 0.10,  # fraction; the web form displays percent
+    "maximum_mae": None,        # target units per day; None is not assessed
+}
+result = forecast_series(dataframe, task, decision_policy=policy)
+```
+
+The weighted loss is the mean of
+`underprediction_weight * max(actual - prediction, 0) + overprediction_weight * max(prediction - actual, 0)`.
+Weights must be finite, positive and at most 1000. They are relative preference
+units, **not currency or realized business costs**. Equal unit weights reduce
+the objective to MAE. Candidate fitting/hyperparameters are unchanged; this is
+cost-aware candidate selection, not quantile optimization or a general inventory
+decision model. Both the selected method and reference baseline minimize this
+same objective over the three earlier validation horizons, never the holdout.
+
+The holdout must show strictly lower weighted loss, the predeclared minimum
+relative improvement, and the maximum MAE if supplied. Criteria are conjunctive.
+Zero baseline loss or a non-representable ratio yields undefined relative gain,
+not a pass. If a confirmed count forecast violates the domain check, a successful
+historical criteria status is blocked. Ordinary MAE findings remain separately
+labelled: a lower MAE can coexist with failure to meet decision criteria.
+
+`criteria_met_on_holdout` is only a descriptive historical result, never model
+approval. Production readiness remains `not_established`; financial value is
+`not_assessed`. To revise criteria after inspecting results, treat that as a new
+analysis requiring fresh future evidence, not a rescue of the old holdout.
 
 The legacy independent-row predictor now rejects an explicitly missing target
 instead of choosing another. Without a forecast task, dated data requires

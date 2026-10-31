@@ -65,8 +65,11 @@ requires the gap statistic to select one cluster and keeps fixed-budget anomaly
 rankings explicitly exploratory. Predictive checks require a material
 improvement over a naive baseline and a holdout target-permutation p-value at
 or below the reviewed threshold for the IID predictor; the null scenario must
-remain unsupported. Forecasting uses temporal validation MAE and descriptive
-future-holdout error, never the IID permutation test.
+remain unsupported. Forecasting uses temporal validation MAE or explicitly
+predeclared asymmetric error weights, with descriptive future-holdout error,
+never the IID permutation test. Additional checks verify a hand-calculated
+asymmetric-loss oracle, rejection of an unmet absolute-error criterion despite
+relative improvement, and holdout isolation under weighted selection.
 This avoids fragile snapshots while still failing on material analytical
 regressions.
 

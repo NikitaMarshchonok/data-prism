@@ -64,6 +64,22 @@
         {% set forecast = dashboard_data.forecast %}
         <section class="dashboard-section forecast-evaluation" aria-labelledby="forecast-heading">
             <div class="section-heading"><div><h2 id="forecast-heading">Daily forecast evaluation</h2></div><p>{{ forecast.task.target_column }} · {{ forecast.task.horizon }} days · past target values only</p></div>
+            {% if forecast.decision_policy %}
+            <div class="readiness-issue issue-warning" role="note">
+                {% if forecast.business_evaluation.status == 'criteria_met_on_holdout' %}
+                <h3>Decision criteria met on this historical holdout only</h3>
+                {% elif forecast.business_evaluation.status == 'domain_constraint_failed' %}
+                <h3>Decision criteria blocked by a domain constraint</h3>
+                {% else %}
+                <h3>Decision criteria not met or not established</h3>
+                {% endif %}
+                <p>Decision: {{ forecast.decision_policy.decision }}</p>
+                <p>Weighted error: {{ '%.3f'|format(forecast.business_evaluation.weighted_absolute_error) }}. Reference baseline: {{ '%.3f'|format(forecast.business_evaluation.baseline_weighted_absolute_error) }}. Relative reduction: {% if forecast.business_evaluation.relative_improvement is not none %}{{ '%+.1f%%'|format(forecast.business_evaluation.relative_improvement * 100) }}{% else %}Not defined{% endif %}.</p>
+                <p>Underprediction weight: {{ forecast.decision_policy.underprediction_weight }}; overprediction weight: {{ forecast.decision_policy.overprediction_weight }}. Required reduction: {{ '%.1f%%'|format(forecast.decision_policy.minimum_improvement * 100) }}. Maximum MAE: {{ forecast.decision_policy.maximum_mae if forecast.decision_policy.maximum_mae is not none else 'Not supplied' }}.</p>
+                <ul><li>Strictly lower weighted error: {{ 'Met' if forecast.business_evaluation.checks.strictly_lower_weighted_error else 'Not met' }}</li><li>Required relative reduction: {{ 'Met' if forecast.business_evaluation.checks.minimum_improvement else 'Not met or undefined' }}</li><li>Absolute MAE limit: {{ ('Met' if forecast.business_evaluation.checks.maximum_mae else 'Not met') if forecast.decision_policy.maximum_mae is not none else 'Not supplied — not assessed' }}</li></ul>
+                <p>Criteria were fixed before evaluation. Error weights are relative penalties, not financial savings. This is not approval for operational use or evidence of future reliability.</p>
+            </div>
+            {% endif %}
             <div class="readiness-issue issue-warning" role="note">
                 {% if forecast.domain_constraints.status == 'failed' %}
                 <h3>Forecast violates the confirmed count domain</h3><p>Negative count predictions were produced. Do not use this forecast operationally.</p>
@@ -76,8 +92,9 @@
                 {% else %}
                 <h3>Forecast support not established</h3><p>No supported evaluation status is available. Do not use this forecast operationally.</p>
                 {% endif %}
-                <p>Model: {{ forecast.model_name }}. Reference baseline: {{ forecast.baseline_name }}. Selected using three earlier validation periods, before the final holdout.</p>
+                <p>Model: {{ forecast.model_name }}. Reference baseline: {{ forecast.baseline_name }}. Selected using three earlier validation periods, before the final holdout. Selection criterion: {{ forecast.selection_metric }}.</p>
                 <p>Holdout: {{ forecast.holdout.start }} to {{ forecast.holdout.end }}. Training ended {{ forecast.holdout.train_end }}. Errors use the target’s stored unit: {{ forecast.confirmed_task.target_unit }}.</p>
+                {% if not forecast.decision_policy %}<p>No decision criteria were supplied. Business suitability has not been assessed.</p>{% endif %}
             </div>
             <div class="kpi-grid">
                 <article class="kpi-card"><div class="kpi-label">Selected method MAE</div><strong>{{ "%.2f"|format(forecast.holdout.metrics.mae) }}</strong><small>Mean absolute error per day, not accuracy percent.</small></article>

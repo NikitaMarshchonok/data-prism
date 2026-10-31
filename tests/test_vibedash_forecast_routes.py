@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import web_app
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
+from tests.test_forecast_policy import POLICY_FORM
 from tests import test_vibedash_job_routes as job_fixture
 from vibedash.analysis_jobs import AnalysisJobStore
 
@@ -66,18 +67,21 @@ class VibeDashForecastRouteTests(unittest.TestCase):
     def test_landing_exposes_explicit_task_and_reconfirms_availability_for_new_input(self):
         with web_app.app.test_client() as client:
             html = client.get('/vibedash/').get_data(as_text=True)
-        for field in ('analysis_mode', 'forecast_horizon', 'forecast_period', 'forecast_available'):
+        for field in ('analysis_mode', 'forecast_horizon', 'forecast_period', 'forecast_available',
+                      'forecast_decision', 'forecast_under_weight', 'forecast_over_weight',
+                      'forecast_minimum_improvement', 'forecast_maximum_mae', 'forecast_policy_confirmed'):
             self.assertIn('name="' + field + '"', html)
         self.assertIn('id="forecast-settings" class="semantic-primary-fields" hidden disabled', html)
         render_semantics = html.split('function renderSemanticContract(proposal)', 1)[1].split(
             'function serializeSemanticContract()', 1)[0]
         self.assertIn('forecastAvailable.checked = false', render_semantics)
+        self.assertIn('forecastPolicyConfirmed.checked = false', render_semantics)
         self.assertIn('semanticConfirmed.checked = false', render_semantics)
 
     def test_forecast_completes_through_owned_background_workflow_and_offline_export(self):
         with patch.dict(os.environ, DATA_PRISM_STATE_DIR=self.temporary_directory.name):
             with web_app.app.test_client() as owner:
-                queued = owner.post('/vibedash/jobs', data=self.request_data(owner))
+                queued = owner.post('/vibedash/jobs', data=self.request_data(owner, **POLICY_FORM))
                 self.assertEqual(queued.status_code, 202)
                 url = queued.get_json()['status_url']
                 for _ in range(150):
@@ -89,11 +93,15 @@ class VibeDashForecastRouteTests(unittest.TestCase):
                 html = page.get_data(as_text=True)
                 self.assertIn('Daily forecast evaluation', html)
                 self.assertIn('Selected method MAE', html)
+                self.assertIn(POLICY_FORM['forecast_decision'], html)
+                self.assertIn('Selection criterion: mean validation weighted absolute error', html)
                 self.assertIn('not approved for operational use', html.lower())
                 manifest = owner.get(status['manifest_url']).get_json()
                 self.assertIn('forecast', manifest)
                 self.assertEqual(manifest['forecast']['confirmed_task']['settings']['horizon'], 7)
                 self.assertNotIn('predictions', json.dumps(manifest))
+                self.assertNotIn(POLICY_FORM['forecast_decision'], json.dumps(manifest))
+                self.assertIn('business_evaluation', manifest['forecast'])
                 with owner.session_transaction() as browser:
                     scope = browser['vibedash_analysis_scope_id']
                 store = AnalysisJobStore(web_app.app.config['VIBEDASH_JOB_STORE_PATH'])
@@ -107,6 +115,16 @@ class VibeDashForecastRouteTests(unittest.TestCase):
                 self.assertEqual(stranger.get(url + '/manifest').status_code, 404)
                 response = stranger.get('/vibedash/export/' + job['session_id'])
                 self.assertEqual(response.status_code, 302)
+
+    @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=True)
+    def test_unconfirmed_business_policy_is_rejected_and_upload_is_removed(self, submit):
+        with web_app.app.test_client() as client:
+            for invalid in ({'forecast_policy_confirmed': ''}, {'forecast_decision': ''},
+                            {'forecast_under_weight': 'inf'}, {'forecast_maximum_mae': '-1'}):
+                response = client.post('/vibedash/jobs', data=self.request_data(client, **(POLICY_FORM | invalid)))
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+        submit.assert_not_called()
 
 
 if __name__ == '__main__': unittest.main()

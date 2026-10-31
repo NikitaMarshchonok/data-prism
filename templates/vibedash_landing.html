@@ -227,6 +227,13 @@
                         <legend>Daily forecast settings</legend>
                         <label for="forecast-horizon"><span>Forecast horizon (days)</span><input id="forecast-horizon" name="forecast_horizon" type="number" min="1" max="90" step="1" value="7" required></label>
                         <label for="forecast-period"><span>Seasonal baseline period (days)</span><input id="forecast-period" name="forecast_period" type="number" min="1" max="90" step="1" value="7" required><small>Seven means the same day last week. This is your assumption, not detected seasonality.</small></label>
+                        <label class="forecast-decision" for="forecast-decision"><span>What decision will this forecast support?</span><input id="forecast-decision" name="forecast_decision" type="text" maxlength="500" required aria-describedby="forecast-policy-guidance"><small>For example: plan next week’s staffing. Do not enter personal or confidential information.</small></label>
+                        <label for="forecast-under-weight"><span>Underprediction penalty per unit</span><input id="forecast-under-weight" name="forecast_under_weight" type="number" min="0.001" max="1000" step="any" value="1" required></label>
+                        <label for="forecast-over-weight"><span>Overprediction penalty per unit</span><input id="forecast-over-weight" name="forecast_over_weight" type="number" min="0.001" max="1000" step="any" value="1" required></label>
+                        <p id="forecast-policy-guidance">These are relative error weights, not currency. Values 5 and 1 penalize each unit of underprediction five times as much as overprediction. Methods and the reference baseline are selected on earlier validation using this weighted error; model fitting itself is unchanged.</p>
+                        <label for="forecast-minimum-improvement"><span>Required weighted-error reduction (%)</span><input id="forecast-minimum-improvement" name="forecast_minimum_improvement" type="number" min="0" max="99.999" step="any" value="10" required><small>Compared with the validation-selected baseline. Strict improvement is always required.</small></label>
+                        <label for="forecast-maximum-mae"><span>Maximum acceptable MAE (optional)</span><input id="forecast-maximum-mae" name="forecast_maximum_mae" type="number" min="0" step="any"><small>In the target’s stored units per day. Empty means no absolute error limit was supplied.</small></label>
+                        <label for="forecast-policy-confirmed"><input id="forecast-policy-confirmed" name="forecast_policy_confirmed" type="checkbox" value="yes" required><span>I set these criteria before evaluation. Meeting them on one historical holdout does not approve operational use.</span></label>
                         <p id="forecast-guidance">Select a numeric measure target and a time column above. Use one complete observation per day, without gaps. Only past target values are used; all other columns are ignored.</p>
                         <label for="forecast-available"><input id="forecast-available" name="forecast_available" type="checkbox" value="yes" required><span>I confirm each completed day’s target is known before forecasting the next day. There is no reporting delay.</span></label>
                     </fieldset>
@@ -374,6 +381,7 @@
         const analysisMode = document.getElementById('analysis-mode');
         const forecastSettings = document.getElementById('forecast-settings');
         const forecastAvailable = document.getElementById('forecast-available');
+        const forecastPolicyConfirmed = document.getElementById('forecast-policy-confirmed');
         const readinessUrl = {{ url_for('vibedash.dataset_readiness')|tojson }};
         const comparisonJobsUrl = {{ url_for('vibedash.create_period_comparison_job')|tojson }};
         const comparisonReadinessUrl = {{ url_for('vibedash.comparison_readiness')|tojson }};
@@ -447,6 +455,7 @@
             semanticColumns.replaceChildren();
             semanticConfirmed.checked = false;
             forecastAvailable.checked = false;
+            forecastPolicyConfirmed.checked = false;
             semanticContractValue.value = '';
             hideSemanticError();
             updateAnalysisSubmitState();
@@ -537,6 +546,7 @@
         function renderSemanticContract(proposal) {
             semanticProposal = proposal;
             forecastAvailable.checked = false;
+            forecastPolicyConfirmed.checked = false;
             semanticPanel.hidden = false;
             semanticColumns.replaceChildren();
             semanticContractValue.value = '';
@@ -612,8 +622,9 @@
             forecastSettings.hidden = !forecasting;
             forecastSettings.disabled = !forecasting;
             submitButton.firstChild.textContent = forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ';
-            if (event.target !== semanticConfirmed && event.target !== forecastAvailable) {
+            if (![semanticConfirmed, forecastAvailable, forecastPolicyConfirmed].includes(event.target)) {
                 forecastAvailable.checked = false;
+                forecastPolicyConfirmed.checked = false;
             }
             if (event.target !== semanticConfirmed) {
                 syncSemanticDependencies();

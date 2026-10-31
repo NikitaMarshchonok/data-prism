@@ -124,6 +124,7 @@ profile and are follow-up integrations.
 | `src/quality_evaluation.py` | Known-signal and null-signal regression scenarios across evidence, statistics, anomaly/segmentation, and prediction | Domain certification or causal validation |
 | `src/ml_predictor.py` | Train-only preprocessing, exact target-proxy checks, cross-validated model selection, untouched-holdout metrics, baseline/permutation support, and explainability | Temporal leakage proof, model serving, or retraining |
 | `src/forecasting.py` | Explicit daily single-series tasks, expanding-window selection, fixed-horizon holdout evaluation and separate future refit | Exogenous feature availability, calibrated intervals, serving or monitoring |
+| `src/forecast_policy.py` | Validate predeclared decision criteria, calculate asymmetric error penalties and evaluate conjunctive holdout requirements | Inferred business intent, realized financial value or deployment approval |
 | `vibedash/forecast_tasks.py` | Bind opt-in daily forecasting to confirmed target/time/units/availability, preflight and worker revalidation, count-domain warning and aggregate audit metadata | Inferred task intent, reporting delays, production model approval |
 | `src/model_reliability.py` | Split stability and supported subgroup diagnostics | Fairness certification |
 | `src/data_drift.py` | Aggregate profiles and baseline-to-current comparisons | Persistent storage |

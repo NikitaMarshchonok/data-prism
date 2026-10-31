@@ -47,7 +47,9 @@ class QualityEvaluationTests(unittest.TestCase):
         self.assertTrue(checks["anomaly-candidates-remain-exploratory"]["passed"])
         self.assertTrue(checks["known-predictive-signal-supported"]["passed"])
         for check in ("dated-random-prediction-withheld", "forecast-known-trend",
-                      "forecast-holdout-isolation", "forecast-baseline-retained", "forecast-no-iid-significance"):
+                      "forecast-holdout-isolation", "forecast-baseline-retained", "forecast-no-iid-significance",
+                      "forecast-asymmetric-loss-oracle", "forecast-decision-limit-enforced",
+                      "forecast-policy-holdout-isolation"):
             self.assertTrue(checks[check]["passed"], check)
         self.assertEqual(
             checks["known-predictive-signal-supported"]["observed"][

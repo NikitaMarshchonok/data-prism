@@ -14,6 +14,10 @@ from sklearn.linear_model import Ridge
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
+from src.forecast_policy import (
+    validate_forecast_policy, weighted_absolute_error, evaluate_forecast_policy,
+)
+
 
 CONTRACT = "daily-forecast-v1"
 CANDIDATES = ("last_value", "seasonal_naive", "lag_ridge", "lag_random_forest")
@@ -144,13 +148,15 @@ def _forecast(history, horizon, period, candidate):
     return predicted
 
 
-def _metrics(actual, prediction):
+def _metrics(actual, prediction, policy=None):
     with np.errstate(over="raise", invalid="raise"):
         error = np.asarray(actual) - np.asarray(prediction)
         metrics = {"mae": float(np.mean(np.abs(error))),
                    "rmse": float(np.sqrt(np.mean(error ** 2)))}
     if not all(np.isfinite(value) for value in metrics.values()):
         raise ValueError("Forecast metrics are not finite.")
+    if policy is not None:
+        metrics['weighted_absolute_error'] = weighted_absolute_error(actual, prediction, policy)
     return metrics
 
 
@@ -158,7 +164,7 @@ def _date(value):
     return value.strftime("%Y-%m-%d")
 
 
-def forecast_series(frame, task):
+def forecast_series(frame, task, *, decision_policy=None):
     """Evaluate, lock the selected method, then refit for future forecasts.
 
     Validation chooses both the method and the reference baseline, never the
@@ -167,6 +173,8 @@ def forecast_series(frame, task):
     """
     try:
         task = validate_forecast_task(task)
+        policy = validate_forecast_policy(decision_policy) if decision_policy is not None else None
+        objective = 'weighted_absolute_error' if policy is not None else 'mae'
         dates, values = _series(frame, task)
         h, period = task.horizon, task.seasonal_period
         holdout_start = len(values) - h
@@ -179,30 +187,31 @@ def forecast_series(frame, task):
         for candidate in CANDIDATES:
             try:
                 scores = [_metrics(values[origin:origin + h],
-                                   _forecast(values[:origin].copy(), h, period, candidate))
+                                   _forecast(values[:origin].copy(), h, period, candidate), policy)
                           for origin in origins]
                 comparison.append({"model_name": candidate, "status": "ok",
                                    "mean_mae": float(np.mean([score["mae"] for score in scores])),
+                                   "mean_objective_loss": float(np.mean([score[objective] for score in scores])),
                                    "fold_metrics": scores, "selected": False})
             except (ValueError, FloatingPointError, OverflowError):
                 comparison.append({"model_name": candidate, "status": "error",
-                                   "mean_mae": None, "fold_metrics": [], "selected": False,
+                                   "mean_mae": None, "mean_objective_loss": None, "fold_metrics": [], "selected": False,
                                    "reason": "Candidate could not complete all temporal folds."})
         successful = [row for row in comparison if row["status"] == "ok"]
         baselines = [row for row in successful if row["model_name"] in CANDIDATES[:2]]
         if not baselines:
             raise ValueError("No baseline completed temporal validation.")
         # Stable ordering favours the simple baseline on exact ties.
-        selected = min(successful, key=lambda row: row["mean_mae"])
-        baseline = min(baselines, key=lambda row: row["mean_mae"])
+        selected = min(successful, key=lambda row: row["mean_objective_loss"])
+        baseline = min(baselines, key=lambda row: row["mean_objective_loss"])
         selected["selected"] = True
         name, baseline_name = selected["model_name"], baseline["model_name"]
         history = values[:holdout_start].copy()
         prediction = _forecast(history, h, period, name)
         baseline_prediction = (prediction.copy() if name == baseline_name else
                                _forecast(history, h, period, baseline_name))
-        metrics = _metrics(values[holdout_start:], prediction)
-        baseline_metrics = _metrics(values[holdout_start:], baseline_prediction)
+        metrics = _metrics(values[holdout_start:], prediction, policy)
+        baseline_metrics = _metrics(values[holdout_start:], baseline_prediction, policy)
         improvement = (1 - metrics["mae"] / baseline_metrics["mae"]
                        if baseline_metrics["mae"] > 0 else None)
         if improvement is not None and not np.isfinite(improvement):
@@ -215,7 +224,11 @@ def forecast_series(frame, task):
             "contract": CONTRACT, "status": "ok", "task_type": "forecast",
             "task": asdict(task), "target_col": task.target_column, "frequency": "D",
             "model_name": name, "baseline_name": baseline_name,
-            "selection_metric": "mean validation MAE", "model_comparison": comparison,
+            "selection_metric": ("mean validation weighted absolute error" if policy else "mean validation MAE"),
+            "decision_policy": policy,
+            "business_evaluation": (evaluate_forecast_policy(policy, metrics, baseline_metrics) if policy else
+                                    {'status': 'not_specified', 'production_readiness': 'not_established'}),
+            "model_comparison": comparison,
             "cv_folds": VALIDATION_FOLDS, "validation_folds": folds,
             "train_rows": holdout_start, "test_rows": h,
             "holdout": {"train_end": _date(dates[holdout_start - 1]),
