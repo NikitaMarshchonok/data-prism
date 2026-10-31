@@ -11,7 +11,7 @@ does not choose an executor; the requested task and its validated assumptions do
 
 - `descriptive_analysis`: existing confirmed evidence workflow;
 - `daily_forecast`: one complete daily series, past target lags, explicit
-  availability and decision criteria, temporal evaluation;
+  fixed target availability delay and decision criteria, temporal evaluation;
 - `period_comparison`: the existing separate two-CSV comparison workflow;
 - `classification`, `regression`, `causal_analysis`: no confirmed standalone
   VibeDash executor in this intake;

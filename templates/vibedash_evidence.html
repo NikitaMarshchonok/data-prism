@@ -75,6 +75,16 @@
         {% set forecast = dashboard_data.forecast %}
         <section class="dashboard-section forecast-evaluation" aria-labelledby="forecast-heading">
             <div class="section-heading"><div><h2 id="forecast-heading">Daily forecast evaluation</h2></div><p>{{ forecast.task.target_column }} · {{ forecast.task.horizon }} days · past target values only</p></div>
+            {% if forecast.availability %}
+            <div class="readiness-issue" role="note">
+                <h3>Forecast origin and target availability</h3>
+                <p>Fixed target reporting delay: {{ forecast.availability.reporting_delay_days }} whole days. Final holdout origin: {{ forecast.holdout.forecast_origin }}; available training targets through {{ forecast.holdout.train_end }}.</p>
+                <p>Future forecast origin: {{ forecast.future_forecast_origin }} (last date in the file); refit uses targets only through {{ forecast.future_fit_through }}. The unavailable gap is bridged recursively without actual target updates.</p>
+                <p>Validation and holdout outcomes stop at {{ forecast.availability.evaluation_outcomes_available_through }}. The final {{ forecast.availability.unavailable_tail_rows }} unavailable target rows are excluded from model selection, scoring and future fitting.</p>
+                <p>Method selection uses validation outcomes only through {{ forecast.availability.selection_outcomes_available_through }}, already released at the final holdout origin.</p>
+                <p>This is an asserted fixed-delay simulation, not verified release timestamps or historical data vintages. Variable delays and revised targets are unsupported. Input dates are not assumed to be current.</p>
+            </div>
+            {% endif %}
             {% if forecast.decision_policy %}
             <div class="readiness-issue issue-warning" role="note">
                 {% if forecast.business_evaluation.status == 'criteria_met_on_holdout' %}

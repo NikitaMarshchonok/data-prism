@@ -7,11 +7,38 @@ Python/CLI callers explicitly identify the numeric target and daily time column.
 
 ## Task and availability assumptions
 
-`daily-forecast-v1` supports one series with one finite real numeric observation
-per calendar day. The target observation for a completed day is assumed known
-at that day's end. A forecast origin is the end of the last observed day, and
-the horizon is the next 1–90 days. Target reporting delays require a different
-availability design and are not supported here.
+The daily engine supports one series with one finite real numeric observation
+per calendar day. `daily-forecast-v1` retains the zero-delay convention: the
+target for a completed day is known at that day's end. `daily-forecast-v2` adds
+an explicitly asserted constant `reporting_delay_days` from 1 to 30 whole
+calendar days; zero or an omitted delay retains v1 settings and numerical
+behaviour. The horizon is the next 1–90 days after the forecast origin.
+
+An origin is the end of a completed calendar day. With delay 2, an origin of
+10 January can use targets only through 8 January to forecast 11 January
+onward. It must recursively bridge 9–10 January without observing their actual
+targets. The same delay is applied to every model, baseline and historical
+origin. No candidate gets fresher information than its reference baseline.
+
+The final origin is the last date in the file, **not the wall clock**. The final
+`D` target rows are censored from **all** model fitting, selection and scoring,
+where `D` is the delay. Evaluation ends at the last released target (`N-D`
+exclusive in zero-based slicing), and each historical origin has its own
+additional training embargo. This avoids leaking unreleased outcomes through
+validation/model selection when the delay exceeds a scoring horizon.
+
+Selection itself is locked at the **holdout** origin, not at the later final
+origin. The last validation outcome must already be released at the holdout
+origin, so another delay-sized gap separates validation outcomes and holdout.
+Values in that pre-holdout gap cannot affect candidate selection or holdout
+predictions. They may become available for the later separate future refit.
+
+`forecast-origin-availability-v1` records the declared delay, origin convention,
+released-outcome cutoff and number of censored tail rows. This is an assertion,
+not independent verification of release timestamps. Historical revisions,
+variable release schedules, missing recent targets and historical data vintages
+are not reconstructed or supported. The CSV remains a complete retrospective
+series; its recent actuals may be present, but are intentionally censored.
 
 Dates must be timezone-naive midnight datetimes or ISO `YYYY-MM-DD` strings.
 The engine sorts chronologically without modifying its input. Duplicate days,
@@ -19,8 +46,10 @@ missing days, missing/non-finite targets, ambiguous columns, unsupported types,
 unknown task fields and insufficient history fail explicitly. It does not
 silently aggregate multiple entities, fill gaps, interpolate targets, substitute
 a missing target or truncate history. At most 5,000 daily observations are
-accepted. Initial history must be at least `max(30, 4 * seasonal_period)` days
-before three validation horizons and one final holdout horizon.
+accepted. Minimum total history is
+`max(30, 4 * seasonal_period) + 4 * horizon + 3 * reporting_delay_days`.
+This reserves the final unreleased tail, the selection-to-holdout release gap,
+and the first historical origin's own training embargo.
 Integer targets outside exact float64 precision are rejected rather than
 silently losing integer information during model conversion.
 
@@ -32,15 +61,19 @@ general proof that an arbitrary feature is safe for forecasting.
 
 ## Evaluation protocol
 
-1. Reserve the last complete horizon as the final holdout.
-2. On earlier history, use three non-overlapping validation horizons, with an
+1. Censor the unreleased tail at the final origin. Reserve the last complete
+   **released** horizon as the final holdout.
+2. End validation outcomes no later than holdout origin minus delay. On this
+   earlier history, use three non-overlapping validation horizons, with an
    expanding training prefix. Each has the same length as the requested horizon.
 3. Compare last-value and seasonal-naive baselines, standardized lag Ridge,
    and lag Random Forest. Lags are 1, the seasonal period, and twice that
    period. Seasonal period defaults to seven days but is an explicit task
    assumption, not a detected seasonal property. Hyperparameters are fixed.
-4. Fit each learned transform/model on its prefix only. Predict every horizon
-   recursively without inserting any actual target from inside that horizon.
+4. Fit each learned transform/model on its available prefix only, ending at
+   historical origin minus the declared delay. Recursively predict `delay +
+   horizon` steps, discard the gap steps, and score the requested horizon
+   without inserting any actual target from inside the gap or horizon.
    Seasonal naive repeats the last observed seasonal cycle for longer horizons.
 5. Select the method and reference baseline by mean validation MAE (or the
    explicitly predeclared weighted absolute error described below), before
@@ -50,8 +83,11 @@ general proof that an arbitrary feature is safe for forecasting.
    Report MAE, RMSE, per-day errors and descriptive relative MAE improvement.
    When baseline MAE is zero, relative improvement is null, not an invented
    percentage. Do not reselect a method using the holdout results.
-7. Separately refit the locked method on all observed history to predict the
-   next horizon. This later fit does not overwrite the original holdout metrics.
+7. Separately refit the locked method on the final **available** prefix to
+   forecast the next horizon after the last input date. This fit does not use
+   the censored tail or overwrite the original holdout metrics. A seasonal
+   baseline advances its cycle through the gap; it does not reset at the first
+   scored day.
 
 The protocol follows the separation of past training data and future
 evaluation used in [scikit-learn's lagged-feature example](https://scikit-learn.org/stable/auto_examples/applications/plot_time_series_lagged_features.html)
@@ -64,8 +100,10 @@ and the rolling-origin approach described in
 
 Upload a CSV, review column meanings, then select **Daily forecast evaluation
 (pilot)**. Select one numeric measure target and one daily time column, set the
-horizon and seasonal baseline period, and confirm that completed-day targets
-are available before forecasting the next day. Review and confirm the meanings
+horizon, seasonal baseline period and constant reporting delay, and confirm
+that targets through each origin minus that delay are available and final.
+The form explains the day-boundary convention with the 10 January example.
+Review and confirm the meanings
 after changing settings. Forecasting is never enabled merely by mentioning a
 prediction in the free-text analysis question.
 
@@ -78,7 +116,13 @@ business objective. Do not enter personal or confidential information.
 
 The server validates the full input before queueing, without fitting a model.
 The worker revalidates the input and its binding to the confirmed target, time,
-units and settings before training. It rejects a history that would be truncated
+units, release delay and settings before training. A declared delay uses
+`confirmed-daily-forecast-task-v3`, binding `forecast-origin-availability-v1`
+alongside any reviewed decision policy. Altered delay, availability confirmation,
+origin convention or settings fail before evaluation. Existing v1/v2 jobs and
+legacy form clients omitting `forecast_reporting_delay` retain their explicit
+zero-delay assumption; positive delays cannot be injected into legacy records.
+It rejects a history that would be truncated
 by the dashboard preview limit. Forecast jobs use the existing owner-scoped job
 workflow, retention and queue limits; CSRF validation is required.
 
@@ -103,7 +147,8 @@ result. Non-negative output alone does not establish domain validity.
 
 ```bash
 python evaluate_forecast.py --csv /path/to/day.csv \
-  --target cnt --time dteday --horizon 7 --seasonal-period 7
+  --target cnt --time dteday --horizon 7 --seasonal-period 7 \
+  --reporting-delay-days 2
 ```
 
 The CLI reads a local UTF-8 comma-delimited CSV (at most 16 MiB and 64 uniquely
@@ -117,7 +162,7 @@ actual holdout values and forecasts and should be treated as data-bearing.
 from src.forecasting import ForecastTask, forecast_series
 
 task = ForecastTask(target_column="cnt", time_column="dteday",
-                    horizon=7, seasonal_period=7)
+                    horizon=7, seasonal_period=7, reporting_delay_days=2)
 result = forecast_series(dataframe, task)
 
 # The shared predictive entry point also accepts the explicit task:
@@ -128,8 +173,9 @@ result = predict_target(dataframe, forecast_task=task)
 ### Predeclared decision policy
 
 Python callers can pass `decision_policy=` directly to `forecast_series`. The
-browser submits the same policy under `confirmed-daily-forecast-task-v2`, bound
-to confirmed semantics, availability and settings. Existing v1 jobs and CLI
+browser submits the same policy under `confirmed-daily-forecast-task-v3` when
+declaring availability, bound to confirmed semantics and settings. Existing v2
+policy jobs remain readable; v1 jobs and CLI
 calls keep MAE selection and report business criteria as `not_specified`.
 
 ```python
@@ -184,6 +230,13 @@ automatic deployment, model persistence, outcome monitoring or retraining are
 claimed. The Python/CLI core accepts general numeric point forecasts; the web
 adapter adds the explicitly confirmed count-domain check described above.
 Other target constraints are not inferred or silently imposed.
+
+Delay acceptance tests use independent naive/seasonal oracles, check exact
+prefixes and recursive bridge lengths for all real candidates, mutate the
+entire unreleased tail with delay longer than validation horizons, audit scaler
+fit inputs, preserve holdout isolation, and exercise queued jobs, CLI, aggregate
+audit and result/export rendering. They do not certify actual release schedules
+or historical vintages supplied by a customer.
 
 Tests include exact naive/seasonal oracles, known trend sensitivity, retaining a
 perfect seasonal baseline, full-horizon prefix isolation, scaler-fit isolation,

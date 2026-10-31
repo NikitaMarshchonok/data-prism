@@ -87,13 +87,21 @@ Remaining: adaptive collaborative task clarification, validated business definit
 nonlinear decision costs and an explicit feedback/review workflow. The service
 does not yet infer these safely from a free-text request.
 
-## 2. Broader supported inputs — not implemented
+## 2. Broader supported inputs — fixed target delay implemented first
 
-Next introduce a prediction-origin/availability contract before accepting delayed
-targets or external predictors. Then add entity keys and grouped temporal
-backtests. Do not silently pool shops/products or use observed future weather.
+The daily engine now accepts an explicitly confirmed constant target reporting
+delay of 0–30 whole calendar days. Each origin gets an embargoed training
+prefix and a recursive bridge, and final unreleased target outcomes cannot
+influence validation selection or scoring. The report exposes origins and
+available-target cutoffs. This is a declared simulation, not reconstructed
+release timestamps or historical vintages.
 
-Acceptance: tests covering delayed releases, as-of joins, unseen entities,
+Remaining: variable delays, target revisions, external predictors with explicit
+availability/as-of joins, entity keys and grouped temporal backtests. Do not
+silently pool shops/products or use observed future weather.
+
+Acceptance: fixed-delay prefix and selection isolation tests are implemented.
+Future extensions still require tests covering as-of joins, unseen entities,
 missing days and group boundaries, plus rejection of unavailable predictors.
 Each new task type needs its own baselines and evaluation protocol; this is
 not permission to treat classification or independent regression as forecasting.

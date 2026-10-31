@@ -68,6 +68,7 @@ class VibeDashForecastRouteTests(unittest.TestCase):
         with web_app.app.test_client() as client:
             html = client.get('/vibedash/').get_data(as_text=True)
         for field in ('analysis_mode', 'forecast_horizon', 'forecast_period', 'forecast_available',
+                      'forecast_reporting_delay',
                       'forecast_decision', 'forecast_under_weight', 'forecast_over_weight',
                       'forecast_minimum_improvement', 'forecast_maximum_mae', 'forecast_policy_confirmed'):
             self.assertIn('name="' + field + '"', html)
@@ -77,6 +78,48 @@ class VibeDashForecastRouteTests(unittest.TestCase):
         self.assertIn('forecastAvailable.checked = false', render_semantics)
         self.assertIn('forecastPolicyConfirmed.checked = false', render_semantics)
         self.assertIn('semanticConfirmed.checked = false', render_semantics)
+        self.assertIn('invalidateTaskConfirmation(![forecastAvailable, forecastPolicyConfirmed].includes(event.target))', html)
+        invalidate = html.split('function invalidateTaskConfirmation(', 1)[1].split('function syncTaskResult()', 1)[0]
+        self.assertIn('forecastAvailable.checked = false', invalidate)
+        self.assertIn('forecastPolicyConfirmed.checked = false', invalidate)
+
+    @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=True)
+    def test_invalid_delay_is_rejected_before_queue_and_temporary_input_is_removed(self, submit):
+        with web_app.app.test_client() as client:
+            for delay in ('', '-1', '31', '2.5', 'inf'):
+                response = client.post('/vibedash/jobs', data=self.request_data(client, forecast_reporting_delay=delay))
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+        submit.assert_not_called()
+
+    def test_delayed_forecast_completes_owned_job_with_origin_cutoffs_in_result_and_manifest(self):
+        with patch.dict(os.environ, DATA_PRISM_STATE_DIR=self.temporary_directory.name):
+            with web_app.app.test_client() as owner:
+                data = self.request_data(owner, **(POLICY_FORM | {'task_type': 'daily_forecast',
+                                                               'forecast_reporting_delay': '2'}))
+                queued = owner.post('/vibedash/jobs', data=data)
+                self.assertEqual(queued.status_code, 202, queued.get_json())
+                for _ in range(150):
+                    status = owner.get(queued.get_json()['status_url']).get_json()
+                    if status['status'] in {'completed', 'failed'}: break
+                    time.sleep(.05)
+                self.assertEqual(status['status'], 'completed', status)
+                html = owner.get(status['result_url']).get_data(as_text=True)
+                self.assertIn('Forecast origin and target availability', html)
+                self.assertIn('Fixed target reporting delay: 2 whole days', html)
+                self.assertIn('refit uses targets only through 2020-06-06', html)
+                self.assertIn('historical data vintages', html)
+                manifest = owner.get(status['manifest_url']).get_json()['forecast']
+                self.assertEqual(manifest['confirmed_task']['contract'], 'confirmed-daily-forecast-task-v3')
+                self.assertEqual(manifest['availability']['reporting_delay_days'], 2)
+                self.assertEqual(manifest['holdout_end'], '2020-06-06')
+                self.assertEqual(manifest['future_origin'], '2020-06-08')
+                self.assertNotIn('predictions', json.dumps(manifest))
+                with owner.session_transaction() as browser: scope = browser['vibedash_analysis_scope_id']
+                job = AnalysisJobStore(web_app.app.config['VIBEDASH_JOB_STORE_PATH']).get(queued.get_json()['job_id'], scope)
+                export = owner.get('/vibedash/export/' + job['session_id'])
+                self.assertIn('Fixed target reporting delay: 2 whole days', export.get_data(as_text=True))
+                export.close()
 
     def test_forecast_completes_through_owned_background_workflow_and_offline_export(self):
         with patch.dict(os.environ, DATA_PRISM_STATE_DIR=self.temporary_directory.name):

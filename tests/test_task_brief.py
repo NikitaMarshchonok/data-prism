@@ -222,7 +222,7 @@ class TaskBriefRouteTests(unittest.TestCase):
         self.assertIn('What does one row represent?', html)
         self.assertIn('Planned result', html)
         self.assertIn("analysisForm.addEventListener('input'", html)
-        self.assertIn('invalidateTaskConfirmation();', html)
+        self.assertIn('invalidateTaskConfirmation(true);', html)
         self.assertIn('revision !== taskRevision', html)
         self.assertIn('selectedFile !== fileInput.files[0]', html)
         self.assertIn('showTaskQuestions', html)

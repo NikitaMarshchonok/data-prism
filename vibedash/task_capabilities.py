@@ -21,8 +21,8 @@ _CAPABILITIES = {
     'daily_forecast': {
         'status': 'available', 'workflow': 'analysis_jobs', 'analysis_mode': 'forecast',
         'requirements': ['one_complete_daily_series', 'confirmed_numeric_target', 'confirmed_daily_dates',
-                         'explicit_horizon', 'completed_day_target_available_without_delay', 'reviewed_decision_criteria'],
-        'limitations': ['Only past target lags are used; external predictors, multiple entities and reporting delays are unsupported.',
+                         'explicit_horizon', 'confirmed_fixed_target_reporting_delay', 'reviewed_decision_criteria'],
+        'limitations': ['Only past target lags are used; external predictors, multiple entities, variable reporting delays and revised target vintages are unsupported.',
                         'No calibrated prediction interval, saved forecast model or automatic outcome monitoring is provided.'],
     },
     'period_comparison': {

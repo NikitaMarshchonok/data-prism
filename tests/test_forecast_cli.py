@@ -61,6 +61,22 @@ class ForecastCLITests(unittest.TestCase):
                 forecast.assert_not_called()
         self.assertEqual(code, 1)
 
+    def test_explicit_delay_uses_released_evaluation_outcomes_and_available_future_prefix(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / 'daily.csv'
+            frame().to_csv(source, index=False)
+            code, report = self.run_cli(source, '--reporting-delay-days', '2')
+            self.assertEqual(code, 0)
+            self.assertEqual(report['contract'], 'daily-forecast-v2')
+            self.assertEqual(report['availability']['reporting_delay_days'], 2)
+            self.assertEqual(report['holdout']['end'], '2020-06-06')
+            self.assertEqual(report['future_forecast_origin'], '2020-06-08')
+            self.assertEqual(report['future_fit_through'], '2020-06-06')
+            with patch('evaluate_forecast.forecast_series') as fit:
+                code, report = self.run_cli(source, '--reporting-delay-days', '31')
+                fit.assert_not_called()
+                self.assertEqual(code, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
