@@ -69,6 +69,11 @@ try:
         TaskAdmissionError, capability_catalog, assess_task_request,
         resolve_analysis_task, validate_stored_task_routing,
     )
+    from .task_brief import (
+        TaskBriefError, FORM_FIELDS as TASK_BRIEF_FORM_FIELDS, MAX_REVIEW_BYTES,
+        parse_review_json, review_task_brief, prepare_task_brief, bind_task_brief,
+        validate_stored_task_brief, task_brief_audit_view,
+    )
     from .comparison_report import build_comparison_decision_guidance
     from .comparison_semantics import semantic_conflicts, validate_comparison_semantics
     from .pilot_metrics import (
@@ -820,6 +825,15 @@ if vibedash_bp:
                 source_df,
                 submitted_contract,
             )
+        task_brief = None
+        if 'task_brief' in payload:
+            routing = payload.get('task_routing')
+            if not isinstance(routing, Mapping):
+                raise ValueError('A task brief requires an explicit routing record.')
+            task_brief = validate_stored_task_brief(
+                payload['task_brief'], task_type=routing['task_type'], question=prompt,
+                semantics_sha256=semantic_contract['sha256'],
+            )
         column_profiles = profiles_from_semantic_contract(
             df,
             semantic_contract,
@@ -845,6 +859,8 @@ if vibedash_bp:
             semantic_contract_prevalidated=True,
         )
         dashboard_data['readiness'] = readiness
+        if task_brief is not None:
+            dashboard_data['task_brief'] = task_brief
         if payload.get('analysis_kind') == 'daily_forecast' or payload.get('forecast_task') is not None:
             if payload.get('analysis_kind') != 'daily_forecast' or truncated:
                 raise ForecastTaskError('Forecast history must be complete and submitted as an explicit forecasting task.')
@@ -874,6 +890,8 @@ if vibedash_bp:
         )
         if dashboard_data.get('forecast'):
             audit_manifest['forecast'] = forecast_audit_view(dashboard_data['forecast'])
+        if task_brief is not None:
+            audit_manifest['task_brief'] = task_brief_audit_view(task_brief)
         session_id = str(uuid.uuid4())
         session_data = {
             'viz_spec': viz_spec_data,
@@ -1888,6 +1906,28 @@ if vibedash_bp:
         return jsonify(assess_task_request(request.args.get('task_type'), workflow=request.args.get('workflow')))
 
 
+    @vibedash_bp.post('/task-brief')
+    def task_brief_review():
+        """Bounded, non-retained clarification from explicit user context only."""
+        if not _valid_decision_csrf_token(request.headers.get('X-CSRF-Token')):
+            return jsonify({'error': 'Refresh the page before reviewing the task.'}), 400
+        if not request.is_json:
+            return jsonify({'error': 'Task review accepts JSON metadata only, never a file.'}), 415
+        if request.content_length is not None and request.content_length > MAX_REVIEW_BYTES:
+            return jsonify({'error': 'The task review exceeds its byte limit.'}), 413
+        raw = request.stream.read(MAX_REVIEW_BYTES + 1)
+        if len(raw) > MAX_REVIEW_BYTES:
+            return jsonify({'error': 'The task review exceeds its byte limit.'}), 413
+        try:
+            result = review_task_brief(parse_review_json(raw))
+            response = jsonify(result)
+        except TaskBriefError as error:
+            response = jsonify({'error': str(error), 'task_brief': error.assessment})
+            response.status_code = 422
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+
+
     @vibedash_bp.post('/readiness')
     def dataset_readiness():
         """Assess an uploaded CSV without retaining its rows."""
@@ -1933,6 +1973,9 @@ if vibedash_bp:
             mode, _routing = resolve_analysis_task(request.form)
         except TaskAdmissionError as error:
             flash(str(error), 'error')
+            return redirect(url_for('vibedash.index'))
+        if any(field in request.form for field in TASK_BRIEF_FORM_FIELDS):
+            flash('Confirmed task briefs use the queued workflow. Enable JavaScript or submit the reviewed request to /vibedash/jobs.', 'error')
             return redirect(url_for('vibedash.index'))
         if mode != 'evidence':
             flash('Forecasting uses the queued workflow. Enable JavaScript or submit the confirmed task to /vibedash/jobs.', 'error')
@@ -2076,6 +2119,8 @@ if vibedash_bp:
             return jsonify({'error': str(error), 'task_intake': error.assessment}), (422 if 'task_type' in request.form else 400)
         if mode == 'forecast' and not _valid_decision_csrf_token(request.form.get('csrf_token')):
             return jsonify({'error': 'Refresh the page before starting a forecast.'}), 400
+        if any(field in request.form for field in TASK_BRIEF_FORM_FIELDS) and not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Refresh the page before submitting a confirmed task brief.'}), 400
         pilot_opt_in = request.form.get('pilot_metrics') == 'yes'
         if pilot_opt_in and not _valid_decision_csrf_token(request.form.get('csrf_token')):
             return jsonify({'error': 'Refresh the page before opting into pilot measurement.'}), 400
@@ -2084,6 +2129,10 @@ if vibedash_bp:
             return jsonify({'error': 'Analysis description is required.'}), 400
         if len(prompt) > 4000:
             return jsonify({'error': 'Analysis description is too long.'}), 400
+        try:
+            brief_draft = prepare_task_brief(request.form, task_type=task_routing['task_type'], question=prompt)
+        except TaskBriefError as error:
+            return jsonify({'error': str(error), 'task_brief': error.assessment}), 422
         # Capture ownership before creating the temporary input.  If account
         # deletion commits while validation runs, the later durable insert
         # must hit that scope's fence rather than silently becoming guest
@@ -2166,7 +2215,8 @@ if vibedash_bp:
                 raise ForecastTaskError('An explicit daily forecast task requires reviewed and confirmed decision criteria.')
             if forecast_task and len(dataframe) > current_app.config['MAX_ROWS_PREVIEW']:
                 raise ForecastTaskError('Forecast history cannot be truncated to the dashboard preview limit.')
-        except (SemanticContractError, ForecastTaskError) as error:
+            task_brief = bind_task_brief(brief_draft, semantic_contract['sha256']) if brief_draft is not None else None
+        except (SemanticContractError, ForecastTaskError, TaskBriefError) as error:
             upload_path.unlink(missing_ok=True)
             return jsonify({
                 'error': str(error),
@@ -2183,6 +2233,8 @@ if vibedash_bp:
             }
             if forecast_task:
                 job_payload.update(analysis_kind='daily_forecast', forecast_task=forecast_task)
+            if task_brief is not None:
+                job_payload['task_brief'] = task_brief
             job = store.create(
                 request_scope,
                 job_payload,

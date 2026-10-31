@@ -160,6 +160,8 @@
             <form class="analysis-form" id="analysis-form" method="POST" action="{{ url_for('vibedash.preview') }}" enctype="multipart/form-data">
                 <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
                 <input type="hidden" name="semantic_contract" id="semantic-contract-value" value="">
+                <input type="hidden" name="task_type" id="task-type" value="descriptive_analysis">
+                <input type="hidden" name="task_deliverable" id="task-deliverable" value="evidence_summary">
                 <div class="field-card upload-card">
                     <label for="datafile">
                         <span class="field-number">1</span>
@@ -174,7 +176,7 @@
                         <span class="field-number">2</span>
                         <span><strong>Describe the analysis</strong><small>Be specific about KPIs, comparisons, and trends.</small></span>
                     </label>
-                    <textarea id="prompt" name="prompt" rows="5" required placeholder="Example: Compare revenue and churn by plan and region, identify anomalies, validate the strongest differences, and recommend what to investigate next."></textarea>
+                    <textarea id="prompt" name="prompt" rows="5" maxlength="4000" required placeholder="Example: Compare revenue and churn by plan and region, identify anomalies, validate the strongest differences, and recommend what to investigate next."></textarea>
                     <div class="prompt-presets" aria-label="Prompt templates">
                         <button type="button" data-prompt="{{ preset_prompts.saas_review|e }}">Weekly SaaS review</button>
                         <button type="button" data-prompt="{{ preset_prompts.sales|e }}">Revenue</button>
@@ -200,7 +202,7 @@
                     <div class="semantic-panel-header">
                         <div>
                             <span class="readiness-kicker">Required semantic review</span>
-                            <h3 id="semantic-heading">Confirm what each column means</h3>
+                            <h3 id="semantic-heading">Review the task and column meanings</h3>
                         </div>
                         <span class="semantic-status" id="semantic-status">Not confirmed</span>
                     </div>
@@ -208,9 +210,14 @@
                     <div class="semantic-error" id="semantic-error" role="alert" tabindex="-1" hidden></div>
                     <div class="semantic-primary-fields">
                         <label for="analysis-mode">
-                            <span>Task</span>
+                            <span>What result do you need?</span>
                             <select id="analysis-mode" name="analysis_mode"><option value="evidence">Descriptive evidence</option><option value="forecast">Daily forecast evaluation (pilot)</option></select>
                             <small>Forecasting compares past-only models with simple baselines. Training does not establish usefulness.</small>
+                        </label>
+                        <label for="task-observation-unit">
+                            <span>What does one row represent?</span>
+                            <input id="task-observation-unit" name="task_observation_unit" type="text" maxlength="240" required aria-describedby="task-unit-guidance">
+                            <small id="task-unit-guidance">For example: one day for one location, one order, or one customer. Do not enter personal or confidential information.</small>
                         </label>
                         <label for="semantic-target-column">
                             <span>Outcome / target</span>
@@ -222,6 +229,11 @@
                             <select id="semantic-time-column"><option value="">No time column selected</option></select>
                             <small>Optional. Only columns confirmed as temporal are eligible.</small>
                         </label>
+                    </div>
+                    <div class="task-result-plan" aria-labelledby="task-result-heading">
+                        <h4 id="task-result-heading">Planned result</h4>
+                        <p id="task-result-description">A descriptive evidence summary with calculations and limitations.</p>
+                        <p>This is a structured request, not automatic understanding of your business. Data and methodological checks still apply. Unsupported work is not replaced by another task.</p>
                     </div>
                     <fieldset id="forecast-settings" class="semantic-primary-fields" hidden disabled>
                         <legend>Daily forecast settings</legend>
@@ -246,10 +258,11 @@
                         </table>
                     </div>
                     <label class="semantic-confirmation" for="semantic-confirmed">
-                        <input type="checkbox" id="semantic-confirmed">
-                        <span>I reviewed these meanings and confirm they match this dataset.</span>
+                        <input type="checkbox" id="semantic-confirmed" name="task_brief_confirmed" value="yes">
+                        <span>I reviewed the question, row meaning, planned result and column meanings, and confirm they match my task and dataset.</span>
                     </label>
                     <p class="readiness-privacy">The retained contract contains schema metadata only—never source row values.</p>
+                    <p class="readiness-privacy">The confirmed question and row description are retained with the analysis for its retention window. The audit manifest contains only a task fingerprint and fixed metadata, not these texts.</p>
                 </section>
 
                 <label class="pilot-consent form-wide">
@@ -379,6 +392,11 @@
         const semanticConfirmed = document.getElementById('semantic-confirmed');
         const semanticContractValue = document.getElementById('semantic-contract-value');
         const analysisMode = document.getElementById('analysis-mode');
+        const taskType = document.getElementById('task-type');
+        const taskDeliverable = document.getElementById('task-deliverable');
+        const taskObservationUnit = document.getElementById('task-observation-unit');
+        const taskResultDescription = document.getElementById('task-result-description');
+        const taskBriefUrl = {{ url_for('vibedash.task_brief_review')|tojson }};
         const forecastSettings = document.getElementById('forecast-settings');
         const forecastAvailable = document.getElementById('forecast-available');
         const forecastPolicyConfirmed = document.getElementById('forecast-policy-confirmed');
@@ -407,6 +425,8 @@
         let readinessState = 'idle';
         let readinessRequest = null;
         let semanticProposal = null;
+        let analysisBusy = false;
+        let taskRevision = 0;
 
         document.querySelectorAll('a[href="#pilot-privacy"]').forEach((link) => {
             link.addEventListener('click', () => {
@@ -415,6 +435,8 @@
         });
 
         fileInput.addEventListener('change', async (event) => {
+            invalidateTaskConfirmation();
+            taskObservationUnit.value = '';
             const selectedFile = event.target.files[0];
             fileName.textContent = selectedFile ? selectedFile.name : 'No file selected';
             fileName.classList.toggle('has-file', Boolean(selectedFile));
@@ -428,6 +450,7 @@
         document.querySelectorAll('[data-prompt]').forEach((button) => {
             button.addEventListener('click', () => {
                 prompt.value = button.dataset.prompt;
+                invalidateTaskConfirmation();
                 prompt.focus();
             });
         });
@@ -463,6 +486,8 @@
 
         function updateAnalysisSubmitState() {
             submitButton.disabled = !(
+                !analysisBusy
+                &&
                 readinessState === 'allowed'
                 && semanticProposal
                 && semanticConfirmed.checked
@@ -479,6 +504,50 @@
             semanticError.hidden = false;
             semanticError.focus();
         }
+
+        function invalidateTaskConfirmation() {
+            taskRevision += 1;
+            semanticConfirmed.checked = false;
+            semanticContractValue.value = '';
+            semanticStatus.textContent = 'Review changed';
+            semanticStatus.classList.remove('is-confirmed');
+            hideSemanticError();
+            updateAnalysisSubmitState();
+        }
+
+        function syncTaskResult() {
+            const forecasting = analysisMode.value === 'forecast';
+            forecastSettings.hidden = !forecasting;
+            forecastSettings.disabled = !forecasting;
+            submitButton.firstChild.textContent = forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ';
+            taskType.value = forecasting ? 'daily_forecast' : 'descriptive_analysis';
+            taskDeliverable.value = forecasting ? 'forecast_evaluation' : 'evidence_summary';
+            taskResultDescription.textContent = forecasting
+                ? 'A daily forecast evaluation against simple baselines, plus an exploratory future forecast.'
+                : 'A descriptive evidence summary with calculations and limitations.';
+        }
+
+        function showTaskQuestions(review) {
+            showSemanticError(review.message || 'Review the missing task information.');
+            const fields = {question: 'prompt', observation_unit: 'task-observation-unit',
+                deliverable: 'analysis-mode', task_type: 'analysis-mode', confirmed: 'semantic-confirmed'};
+            const list = document.createElement('ul');
+            (review.questions || []).forEach((question) => {
+                const item = document.createElement('li');
+                const link = document.createElement('a');
+                link.href = `#${fields[question.field] || 'semantic-heading'}`;
+                link.textContent = question.question;
+                link.addEventListener('click', () => document.getElementById(fields[question.field] || 'semantic-heading').focus());
+                item.append(link);
+                list.append(item);
+            });
+            semanticError.append(list);
+        }
+
+        analysisForm.addEventListener('input', (event) => {
+            if (event.target !== semanticConfirmed && event.target !== fileInput
+                && event.target.name !== 'pilot_metrics') invalidateTaskConfirmation();
+        });
 
         function semanticRowState(row) {
             return {
@@ -544,6 +613,7 @@
         }
 
         function renderSemanticContract(proposal) {
+            syncTaskResult();
             semanticProposal = proposal;
             forecastAvailable.checked = false;
             forecastPolicyConfirmed.checked = false;
@@ -618,10 +688,8 @@
         }
 
         semanticPanel.addEventListener('change', (event) => {
-            const forecasting = analysisMode.value === 'forecast';
-            forecastSettings.hidden = !forecasting;
-            forecastSettings.disabled = !forecasting;
-            submitButton.firstChild.textContent = forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ';
+            taskRevision += 1;
+            syncTaskResult();
             if (![semanticConfirmed, forecastAvailable, forecastPolicyConfirmed].includes(event.target)) {
                 forecastAvailable.checked = false;
                 forecastPolicyConfirmed.checked = false;
@@ -709,6 +777,7 @@
                     signal: controller.signal,
                 });
                 const payload = await readResponse(response);
+                if (readinessRequest !== controller) return;
                 if (!response.ok) {
                     throw new Error(payload.error || 'The dataset preflight could not be completed.');
                 }
@@ -760,6 +829,7 @@
                 const error = new Error(job.error || 'The analysis could not be started.');
                 error.readiness = job.readiness;
                 error.semanticContract = job.semantic_contract_error === true;
+                error.taskBrief = job.task_brief;
                 throw error;
             }
             statusNode.textContent = 'Analysis queued. Waiting for an available worker…';
@@ -768,6 +838,7 @@
 
         analysisForm.addEventListener('submit', async (event) => {
             event.preventDefault();
+            if (analysisBusy) return;
             const selectedFile = fileInput.files[0];
             if (!selectedFile) return;
             if (readinessState !== 'allowed') {
@@ -787,17 +858,41 @@
                     showSemanticError('Daily forecasting requires a numeric measure target and a time column. Select them above, then confirm the review again.');
                     return;
                 }
-                if (!analysisForm.reportValidity()) return;
             }
+            if (!analysisForm.reportValidity()) return;
+            syncTaskResult();
             semanticContractValue.value = JSON.stringify(serializeSemanticContract());
+            const reviewedSemantics = semanticContractValue.value;
+            const revision = taskRevision;
             const originalSubmitNodes = Array.from(submitButton.childNodes, (node) => node.cloneNode(true));
+            analysisBusy = true;
             submitButton.disabled = true;
             loadingIndicator.hidden = false;
             loadingIndicator.classList.remove('has-error');
-            loadingIndicator.textContent = 'Calculating evidence and building the dashboard…';
+            loadingIndicator.textContent = 'Reviewing task context before starting analysis…';
             try {
+                const response = await fetch(taskBriefUrl, {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/json', 'Accept': 'application/json',
+                        'X-CSRF-Token': analysisForm.elements.csrf_token.value},
+                    body: JSON.stringify({task_type: taskType.value, question: prompt.value,
+                        observation_unit: taskObservationUnit.value, deliverable: taskDeliverable.value,
+                        confirmed: semanticConfirmed.checked}),
+                });
+                const review = await readResponse(response);
+                if (revision !== taskRevision || selectedFile !== fileInput.files[0]
+                    || !semanticConfirmed.checked || readinessState !== 'allowed'
+                    || JSON.stringify(serializeSemanticContract()) !== reviewedSemantics) {
+                    throw new Error('The request changed during review. Review and confirm it again before starting.');
+                }
+                if (!response.ok || review.status !== 'ready_for_dataset_review') {
+                    const error = new Error(review.error || review.message || 'The task review could not finish.');
+                    error.taskBrief = review.task_brief || review;
+                    throw error;
+                }
                 await queueAnalysis(analysisForm, loadingIndicator);
             } catch (error) {
+                analysisBusy = false;
                 if (error.readiness) renderReadiness(error.readiness);
                 if (error.semanticContract) {
                     semanticConfirmed.checked = false;
@@ -806,12 +901,14 @@
                     semanticStatus.classList.remove('is-confirmed');
                     showSemanticError(error.message);
                 }
+                if (error.taskBrief) showTaskQuestions(error.taskBrief);
                 loadingIndicator.textContent = error.message;
                 loadingIndicator.classList.add('has-error');
                 updateAnalysisSubmitState();
                 submitButton.replaceChildren(
                     ...originalSubmitNodes.map((node) => node.cloneNode(true)),
                 );
+                syncTaskResult();
             }
         });
 
@@ -1050,6 +1147,8 @@
         });
 
         window.addEventListener('pageshow', () => {
+            analysisBusy = false;
+            taskRevision += 1;
             demoSubmit.disabled = false;
             demoSubmit.classList.remove('is-loading');
             demoSubmitLabel.textContent = 'Run the live demo';

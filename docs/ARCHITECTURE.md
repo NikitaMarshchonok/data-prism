@@ -127,6 +127,7 @@ profile and are follow-up integrations.
 | `src/forecast_policy.py` | Validate predeclared decision criteria, calculate asymmetric error penalties and evaluate conjunctive holdout requirements | Inferred business intent, realized financial value or deployment approval |
 | `vibedash/forecast_tasks.py` | Bind opt-in daily forecasting to confirmed target/time/units/availability, preflight and worker revalidation, count-domain warning and aggregate audit metadata | Inferred task intent, reporting delays, production model approval |
 | `vibedash/task_capabilities.py` | Industry-independent catalogue of confirmed VibeDash workflows, explicit task admission, no silent substitution and worker routing checks | Free-text intent understanding, dataset eligibility, legacy Python feature certification or professional equivalence |
+| `vibedash/task_brief.py` | Bounded explicit question/row-unit/deliverable review, field-specific clarification, semantic fingerprint binding and worker revalidation; aggregate audit omits free text | Truth of business definitions, natural-language intent inference, task eligibility or permission for operational use |
 | `src/model_reliability.py` | Split stability and supported subgroup diagnostics | Fairness certification |
 | `src/data_drift.py` | Aggregate profiles and baseline-to-current comparisons | Persistent storage |
 | `src/drift_store.py` | SQLite run history, retention, deduplication, alerts | Drift calculation |

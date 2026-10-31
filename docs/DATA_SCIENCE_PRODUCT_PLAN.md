@@ -56,8 +56,12 @@ rechecks routing. Existing mode-only clients remain compatible but do not gain
 an inferred-intent or professional-equivalence claim.
 
 The catalogue, explicit submission rules and compatibility boundary are defined
-in [TASK_INTAKE.md](TASK_INTAKE.md). Connecting a conversational clarification
-interface to this boundary remains follow-up work.
+in [TASK_INTAKE.md](TASK_INTAKE.md). A structured browser brief now asks for
+the question, observation unit and expected supported result, and confirms
+them with the reviewed column meanings. Missing fields produce clarification
+questions; the worker rechecks the bound request before calculation. This is
+explicit user context, not inferred business understanding. Conversational
+clarification and substantive definition checks remain follow-up work.
 
 ## Current implementation and next milestones
 
@@ -79,7 +83,7 @@ can change validation selection; final-target mutation cannot change selection;
 missing confirmation or altered bound settings cannot train; a relative gain
 cannot override an absolute limit; no monetary-value or deployment claim.
 
-Remaining: collaborative task clarification, validated business definitions,
+Remaining: adaptive collaborative task clarification, validated business definitions,
 nonlinear decision costs and an explicit feedback/review workflow. The service
 does not yet infer these safely from a free-text request.
 

@@ -60,6 +60,17 @@
             <span class="evidence-badge">Traceable output</span>
         </section>
 
+        {% if dashboard_data.task_brief %}
+        <section class="dashboard-section" aria-labelledby="task-brief-heading">
+            <div class="section-heading"><div><h2 id="task-brief-heading">Confirmed task context</h2></div><p>User-confirmed, not independently validated</p></div>
+            <div class="readiness-issue" role="note">
+                <p>One row represents: {{ dashboard_data.task_brief.observation_unit }}</p>
+                <p>Planned result: {{ 'Daily forecast evaluation against simple baselines, with an exploratory future forecast' if dashboard_data.task_brief.deliverable == 'forecast_evaluation' else 'Descriptive evidence summary with calculations and limitations' }}.</p>
+                <p>These are the user’s definitions. Confirmation is not proof of correct business interpretation, data fitness, or operational usefulness.</p>
+            </div>
+        </section>
+        {% endif %}
+
         {% if dashboard_data.forecast %}
         {% set forecast = dashboard_data.forecast %}
         <section class="dashboard-section forecast-evaluation" aria-labelledby="forecast-heading">

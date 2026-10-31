@@ -54,20 +54,63 @@ worker rechecks it against the execution kind before processing the source.
 An explicit forecast also retains its confirmed decision policy; the existing
 forecast adapter validates its fingerprint and binding before training.
 
+## Confirmed task brief — structured clarification
+
+The main upload form now asks for the expected result and what one row
+represents, alongside the existing question and column review. Changing the
+question, row meaning, selected task or definitions invalidates confirmation.
+Forecast decision criteria and availability remain separate required checks.
+
+`POST /vibedash/task-brief` accepts JSON metadata only, at most 16 KiB, protected
+by the page's `X-CSRF-Token`. Fields are `task_type`, `question` (1–4000
+characters), `observation_unit` (1–240), `deliverable` and boolean `confirmed`.
+The supported deliverables are `evidence_summary` for descriptive analysis and
+`forecast_evaluation` for daily forecasting. Duplicate/unknown fields, invalid
+text and non-finite JSON are rejected. No uploaded file, retained brief, job,
+source processing or model training is created by this endpoint. Responses are
+not cached and do not echo the question or row description.
+
+Missing context produces field-specific questions with `needs_clarification`.
+A complete confirmed brief returns `ready_for_dataset_review`, never
+`ready_for_execution: true`. This deterministic check tests completeness and
+the explicitly chosen supported result. It does not interpret arbitrary prose,
+verify the truth of the supplied row meaning, discover business requirements,
+or detect a contradiction between prose and the selected task.
+
+The browser reviews the brief before queueing and refuses a stale review if the
+file or form changes while awaiting it. Submission to `/vibedash/jobs` includes
+`task_observation_unit`, `task_deliverable` and `task_brief_confirmed=yes`.
+The server independently validates these fields; partial briefs fail before
+creating an application working copy. Both review and brief submission require
+CSRF protection. After validating column meanings, it binds the complete brief
+to their fingerprint with `confirmed-task-brief-v1`. The worker rechecks the
+question, task and semantic fingerprint before specification generation or
+training. A hash detects inconsistent records; it is not a secret signature or
+an independent validation of business meaning.
+
+The owner-scoped analysis and HTML result retain the confirmed question and row
+description for the existing retention window. The aggregate audit manifest
+contains fixed metadata and the brief fingerprint, not either free-text field.
+The result labels context as user-confirmed, not independently validated.
+
 ## Compatibility and remaining work
 
 Existing clients without `task_type` retain the meaning of `analysis_mode`
 (`evidence` by default). Their routing source is `legacy_analysis_mode`, never
 `inferred_business_intent`. Existing stored jobs without a routing record remain
-readable. Ordinary HTML form clients are not automatically migrated to a new
-business-intent dialog by this change.
+readable. Clients that omit all three task-brief fields retain their existing
+path without claiming a reviewed business brief. The new browser form uses
+the queued workflow; synchronous preview refuses task-brief fields rather than
+silently discarding them.
 
 This boundary does not guarantee that arbitrary free-text requests match the
-selected task. A future shared intake should propose a task interpretation,
-ask essential questions about observation unit, business definitions and
-deliverable, and obtain confirmation. Only then should it admit a supported
-executor. Do not advertise that future dialog as implemented.
+selected task. Structured questions about observation unit and deliverable are
+implemented, but safe conversational interpretation, substantive business
+definition review and an adaptive clarification dialogue remain future work.
+Do not advertise those capabilities as implemented.
 
 Acceptance tests cover static discovery without training/storage, no silent
 substitution, mode conflicts, preservation of legacy modes, forecast CSRF and
-decision-policy requirements, and worker refusal of inconsistent routing.
+decision-policy requirements, bounded brief review, no retained source or
+training during clarification, partial-brief refusal, worker binding checks,
+escaped result rendering and omission of free text from the audit manifest.

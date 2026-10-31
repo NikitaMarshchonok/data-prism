@@ -13,7 +13,9 @@ and business context to a common intake with specialized, verified executors.
 This is not a promise to solve every task from any file. Current confirmed
 VibeDash workflows and their limits are exposed by `GET /vibedash/task-capabilities`;
 `GET /vibedash/task-intake?task_type=daily_forecast` provides read-only admission
-guidance, not dataset approval. See the [product plan](docs/DATA_SCIENCE_PRODUCT_PLAN.md)
+guidance, not dataset approval. The upload form also confirms the question,
+row meaning and planned supported result before queueing; this is structured
+user context, not automatic understanding of business intent. See the [product plan](docs/DATA_SCIENCE_PRODUCT_PLAN.md)
 for the agreed target, current boundaries and acceptance milestones.
 
 ![Data Prism evidence-first analytics workspace](docs/assets/data-prism-landing.jpg)
