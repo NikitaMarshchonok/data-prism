@@ -96,11 +96,20 @@ influence validation selection or scoring. The report exposes origins and
 available-target cutoffs. This is a declared simulation, not reconstructed
 release timestamps or historical vintages.
 
+An explicit end-of-day issue date now supports available-history-only input:
+the file ends exactly at origin minus delay, and unavailable recent targets
+need not be supplied or invented. Future/stale history is rejected before
+training. Historical evaluation retains training and selection embargoes; the
+forecast starts after the issue date, not after the last available fact. The
+previous retrospective convention remains available when no date is supplied.
+This is an evaluated forecast run, not persisted-model serving or live monitoring.
+
 Remaining: variable delays, target revisions, external predictors with explicit
 availability/as-of joins, entity keys and grouped temporal backtests. Do not
 silently pool shops/products or use observed future weather.
 
-Acceptance: fixed-delay prefix and selection isolation tests are implemented.
+Acceptance: fixed-delay prefix/selection isolation and explicit-origin cutoff
+tests are implemented, including equivalence with censored retrospective data.
 Future extensions still require tests covering as-of joins, unseen entities,
 missing days and group boundaries, plus rejection of unavailable predictors.
 Each new task type needs its own baselines and evaluation protocol; this is

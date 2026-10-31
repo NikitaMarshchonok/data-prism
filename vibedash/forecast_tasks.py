@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from src.forecasting import (
     ForecastTask, forecast_series, validate_forecast_input, forecast_task_settings,
-    AVAILABILITY_CONTRACT,
+    AVAILABILITY_CONTRACT, ORIGIN_AVAILABILITY_CONTRACT,
 )
 from src.semantic_contract import validate_semantic_contract
 from src.forecast_policy import validate_forecast_policy, CONTRACT as DECISION_POLICY_CONTRACT
@@ -15,6 +15,7 @@ from src.forecast_policy import validate_forecast_policy, CONTRACT as DECISION_P
 CONTRACT = 'confirmed-daily-forecast-task-v1'
 POLICY_TASK_CONTRACT = 'confirmed-daily-forecast-task-v2'
 AVAILABILITY_TASK_CONTRACT = 'confirmed-daily-forecast-task-v3'
+ORIGIN_TASK_CONTRACT = 'confirmed-daily-forecast-task-v4'
 POLICY_FIELDS = ('forecast_decision', 'forecast_under_weight', 'forecast_over_weight',
                  'forecast_minimum_improvement', 'forecast_maximum_mae', 'forecast_policy_confirmed')
 
@@ -29,16 +30,18 @@ def _fingerprint(value):
 
 
 def _confirmed_task(frame, semantics, horizon, period, available, policy=None, policy_confirmed=False,
-                    *, reporting_delay_days=0, availability_declared=False):
+                    *, reporting_delay_days=0, availability_declared=False, forecast_origin=None):
     if available is not True:
         raise ForecastTaskError('Review and confirm when completed-day targets become available at each forecast origin.')
+    if forecast_origin is not None and not availability_declared:
+        raise ForecastTaskError('An explicit forecast origin requires an explicitly reviewed reporting delay, including zero.')
     semantics = validate_semantic_contract(frame, semantics)
     targets = [column for column in semantics['columns'] if column['is_target']]
     times = [column for column in semantics['columns'] if column['is_time']]
     if len(targets) != 1 or targets[0]['role'] != 'measure' or len(times) != 1:
         raise ForecastTaskError('Daily forecasting requires one confirmed numeric measure target and one time column.')
     try:
-        task = ForecastTask(targets[0]['name'], times[0]['name'], horizon, period, reporting_delay_days)
+        task = ForecastTask(targets[0]['name'], times[0]['name'], horizon, period, reporting_delay_days, forecast_origin)
         validate_forecast_input(frame, task)
         if targets[0]['unit'] == 'count' and (frame[task.target_column] < 0).any():
             raise ValueError('The confirmed count target contains negative observations.')
@@ -56,6 +59,10 @@ def _confirmed_task(frame, semantics, horizon, period, available, policy=None, p
             'contract': AVAILABILITY_CONTRACT, 'reporting_delay_days': reporting_delay_days,
             'origin_convention': 'end_of_completed_day', 'confirmed': True,
         })
+        if forecast_origin is not None:
+            result['contract'] = ORIGIN_TASK_CONTRACT
+            result['availability'].update(contract=ORIGIN_AVAILABILITY_CONTRACT,
+                                          forecast_origin=forecast_origin, history_mode='available_history_only')
     result['sha256'] = _fingerprint(result)
     return result
 
@@ -79,6 +86,10 @@ def forecast_task_from_form(frame, semantics, form):
         if not isinstance(raw, str) or not re.fullmatch(r'[0-9]{1,2}', raw) or not 0 <= int(raw) <= 30:
             raise ForecastTaskError('Target reporting delay must be an explicit integer from 0 to 30 whole days.')
         delay = int(raw)
+    raw_origin = form.get('forecast_origin', '')
+    if not isinstance(raw_origin, str):
+        raise ForecastTaskError('Forecast origin must be an ISO date or empty for retrospective mode.')
+    origin = raw_origin if raw_origin != '' else None
     policy = None
     if any(name in form for name in POLICY_FIELDS):
         try:
@@ -94,30 +105,37 @@ def forecast_task_from_form(frame, semantics, form):
             raise ForecastTaskError('Provide valid, complete forecast decision criteria: decision, positive error weights, improvement below 100%, and an optional non-negative MAE limit.') from error
     return _confirmed_task(frame, semantics, *values, form.get('forecast_available') == 'yes',
                            policy, form.get('forecast_policy_confirmed') == 'yes',
-                           reporting_delay_days=delay, availability_declared=declared)
+                           reporting_delay_days=delay, availability_declared=declared, forecast_origin=origin)
 
 
 def run_confirmed_forecast(frame, semantics, stored_task):
-    if not isinstance(stored_task, Mapping) or stored_task.get('contract') not in {CONTRACT, POLICY_TASK_CONTRACT, AVAILABILITY_TASK_CONTRACT}:
+    if not isinstance(stored_task, Mapping) or stored_task.get('contract') not in {CONTRACT, POLICY_TASK_CONTRACT, AVAILABILITY_TASK_CONTRACT, ORIGIN_TASK_CONTRACT}:
         raise ForecastTaskError('The confirmed forecast task is missing or unsupported.')
     settings = stored_task.get('settings')
     if not isinstance(settings, Mapping):
         raise ForecastTaskError('The forecast settings are missing.')
     if stored_task['contract'] == POLICY_TASK_CONTRACT and stored_task.get('decision_policy') is None:
         raise ForecastTaskError('The confirmed forecast decision policy is missing.')
-    declared = stored_task['contract'] == AVAILABILITY_TASK_CONTRACT
+    explicit_origin = stored_task['contract'] == ORIGIN_TASK_CONTRACT
+    declared = stored_task['contract'] in {AVAILABILITY_TASK_CONTRACT, ORIGIN_TASK_CONTRACT}
     delay = 0
+    origin = None
     if declared:
         availability = stored_task.get('availability')
-        if not isinstance(availability, Mapping) or availability.get('contract') != AVAILABILITY_CONTRACT:
+        availability_contract = ORIGIN_AVAILABILITY_CONTRACT if explicit_origin else AVAILABILITY_CONTRACT
+        if not isinstance(availability, Mapping) or availability.get('contract') != availability_contract:
             raise ForecastTaskError('The confirmed forecast availability contract is missing or unsupported.')
         if availability.get('confirmed') is not True:
             raise ForecastTaskError('The target reporting delay must be explicitly confirmed.')
         delay = availability.get('reporting_delay_days')
+        if explicit_origin:
+            origin = availability.get('forecast_origin')
+            if not isinstance(origin, str) or not origin:
+                raise ForecastTaskError('The confirmed forecast origin is missing.')
     expected = _confirmed_task(frame, semantics, settings.get('horizon'), settings.get('seasonal_period'),
                                stored_task.get('availability_confirmed'), stored_task.get('decision_policy'),
                                stored_task.get('decision_policy_confirmed', False),
-                               reporting_delay_days=delay, availability_declared=declared)
+                               reporting_delay_days=delay, availability_declared=declared, forecast_origin=origin)
     if dict(stored_task) != expected:
         raise ForecastTaskError('The forecast task no longer matches the confirmed target, dates or units. Review it again.')
     report = forecast_series(frame, expected['settings'], decision_policy=expected.get('decision_policy'))

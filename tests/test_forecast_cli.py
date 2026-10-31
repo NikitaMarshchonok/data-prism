@@ -77,6 +77,21 @@ class ForecastCLITests(unittest.TestCase):
                 fit.assert_not_called()
                 self.assertEqual(code, 1)
 
+    def test_issue_date_accepts_only_available_history_without_unknown_tail(self):
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / 'daily.csv'
+            frame().to_csv(source, index=False)
+            before = source.read_bytes()
+            code, report = self.run_cli(source, '--reporting-delay-days', '2', '--forecast-origin', '2020-06-10')
+            self.assertEqual(code, 0)
+            self.assertEqual(report['contract'], 'daily-forecast-v3')
+            self.assertEqual(report['future_fit_through'], '2020-06-08')
+            self.assertEqual(report['future_forecast'][0]['date'], '2020-06-11')
+            self.assertEqual(source.read_bytes(), before)
+            for origin in ('2020-06-09', '2020-06-11', 'not-a-date'):
+                code, report = self.run_cli(source, '--reporting-delay-days', '2', '--forecast-origin', origin)
+                self.assertEqual(code, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

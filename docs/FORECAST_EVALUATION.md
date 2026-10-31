@@ -12,7 +12,9 @@ per calendar day. `daily-forecast-v1` retains the zero-delay convention: the
 target for a completed day is known at that day's end. `daily-forecast-v2` adds
 an explicitly asserted constant `reporting_delay_days` from 1 to 30 whole
 calendar days; zero or an omitted delay retains v1 settings and numerical
-behaviour. The horizon is the next 1–90 days after the forecast origin.
+behaviour. `daily-forecast-v3` adds an explicit `forecast_origin` date and an
+available-history-only input convention. The horizon is the next 1–90 days
+after the forecast origin.
 
 An origin is the end of a completed calendar day. With delay 2, an origin of
 10 January can use targets only through 8 January to forecast 11 January
@@ -20,12 +22,28 @@ onward. It must recursively bridge 9–10 January without observing their actual
 targets. The same delay is applied to every model, baseline and historical
 origin. No candidate gets fresher information than its reference baseline.
 
-The final origin is the last date in the file, **not the wall clock**. The final
+Without an explicit issue date, the final origin is the last date in the file,
+**not the wall clock**. This is the compatible retrospective convention. The final
 `D` target rows are censored from **all** model fitting, selection and scoring,
 where `D` is the delay. Evaluation ends at the last released target (`N-D`
 exclusive in zero-based slicing), and each historical origin has its own
 additional training embargo. This avoids leaking unreleased outcomes through
 validation/model selection when the delay exceeds a scoring horizon.
+
+With `forecast_origin="2026-01-10"` and delay 2, instead upload only the complete
+available history through 8 January. No rows or invented targets for 9–10
+January are needed. All uploaded target dates must be on or before the cutoff,
+and the last date must equal origin minus delay exactly. Later observations
+are rejected rather than clipped; stale history is rejected rather than filled
+or silently treated as a longer reporting delay. The first forecast date is
+11 January, not 9 January. The unavailable gap is bridged recursively.
+
+In this explicit mode, every source outcome is already released at the final
+origin. Evaluation therefore ends at the last source date (`N` exclusive),
+while historical training and selection retain their own release embargoes.
+`forecast-origin-availability-v2` records `available_history_only`, the explicit
+date source, latest source date and released-outcome cutoffs. It is not a
+real-time scheduler: a supplied date is never inferred to be today.
 
 Selection itself is locked at the **holdout** origin, not at the later final
 origin. The last validation outcome must already be released at the holdout
@@ -36,9 +54,10 @@ predictions. They may become available for the later separate future refit.
 `forecast-origin-availability-v1` records the declared delay, origin convention,
 released-outcome cutoff and number of censored tail rows. This is an assertion,
 not independent verification of release timestamps. Historical revisions,
-variable release schedules, missing recent targets and historical data vintages
-are not reconstructed or supported. The CSV remains a complete retrospective
-series; its recent actuals may be present, but are intentionally censored.
+variable release schedules and historical data vintages are not reconstructed
+or supported. The legacy CSV remains a complete retrospective series; its
+recent actuals may be present, but are intentionally censored. Explicit-origin
+input contains only available history, without missing-value placeholders.
 
 Dates must be timezone-naive midnight datetimes or ISO `YYYY-MM-DD` strings.
 The engine sorts chronologically without modifying its input. Duplicate days,
@@ -46,10 +65,14 @@ missing days, missing/non-finite targets, ambiguous columns, unsupported types,
 unknown task fields and insufficient history fail explicitly. It does not
 silently aggregate multiple entities, fill gaps, interpolate targets, substitute
 a missing target or truncate history. At most 5,000 daily observations are
-accepted. Minimum total history is
+accepted. Minimum total history in retrospective mode is
 `max(30, 4 * seasonal_period) + 4 * horizon + 3 * reporting_delay_days`.
 This reserves the final unreleased tail, the selection-to-holdout release gap,
 and the first historical origin's own training embargo.
+Explicit available-history input needs
+`max(30, 4 * seasonal_period) + 4 * horizon + 2 * reporting_delay_days`, because
+unreleased tail rows are not part of that input. This is the same physical
+information boundary as a retrospective input with its tail removed.
 Integer targets outside exact float64 precision are rejected rather than
 silently losing integer information during model conversion.
 
@@ -61,7 +84,8 @@ general proof that an arbitrary feature is safe for forecasting.
 
 ## Evaluation protocol
 
-1. Censor the unreleased tail at the final origin. Reserve the last complete
+1. Censor the unreleased tail in retrospective mode, or validate the exact
+   available-history cutoff in explicit-origin mode. Reserve the last complete
    **released** horizon as the final holdout.
 2. End validation outcomes no later than holdout origin minus delay. On this
    earlier history, use three non-overlapping validation horizons, with an
@@ -84,7 +108,7 @@ general proof that an arbitrary feature is safe for forecasting.
    When baseline MAE is zero, relative improvement is null, not an invented
    percentage. Do not reselect a method using the holdout results.
 7. Separately refit the locked method on the final **available** prefix to
-   forecast the next horizon after the last input date. This fit does not use
+   forecast the next horizon after the final issue date. This fit does not use
    the censored tail or overwrite the original holdout metrics. A seasonal
    baseline advances its cycle through the gap; it does not reset at the first
    scored day.
@@ -103,6 +127,10 @@ Upload a CSV, review column meanings, then select **Daily forecast evaluation
 horizon, seasonal baseline period and constant reporting delay, and confirm
 that targets through each origin minus that delay are available and final.
 The form explains the day-boundary convention with the 10 January example.
+Optionally set **Forecast issue date** to use available-history mode. Leaving
+it empty intentionally keeps the retrospective convention; entering an invalid
+date never silently switches modes. A non-empty `forecast_origin` form field
+requires an explicit `forecast_reporting_delay`, including zero.
 Review and confirm the meanings
 after changing settings. Forecasting is never enabled merely by mentioning a
 prediction in the free-text analysis question.
@@ -119,7 +147,11 @@ The worker revalidates the input and its binding to the confirmed target, time,
 units, release delay and settings before training. A declared delay uses
 `confirmed-daily-forecast-task-v3`, binding `forecast-origin-availability-v1`
 alongside any reviewed decision policy. Altered delay, availability confirmation,
-origin convention or settings fail before evaluation. Existing v1/v2 jobs and
+origin convention or settings fail before evaluation. An explicit date uses
+`confirmed-daily-forecast-task-v4`, binding `forecast-origin-availability-v2`,
+the date, available-history convention and semantic fingerprint. The worker
+rejects modified dates/modes before evaluation; older v1/v2/v3 records remain
+readable, and a date cannot be injected into a legacy task. Existing v1/v2 jobs and
 legacy form clients omitting `forecast_reporting_delay` retain their explicit
 zero-delay assumption; positive delays cannot be injected into legacy records.
 It rejects a history that would be truncated
@@ -149,6 +181,11 @@ result. Non-negative output alone does not establish domain validity.
 python evaluate_forecast.py --csv /path/to/day.csv \
   --target cnt --time dteday --horizon 7 --seasonal-period 7 \
   --reporting-delay-days 2
+
+# Available history through 2026-01-08; predict 2026-01-11 onward:
+python evaluate_forecast.py --csv /path/to/available-history.csv \
+  --target cnt --time dteday --horizon 7 --reporting-delay-days 2 \
+  --forecast-origin 2026-01-10
 ```
 
 The CLI reads a local UTF-8 comma-delimited CSV (at most 16 MiB and 64 uniquely
@@ -162,7 +199,8 @@ actual holdout values and forecasts and should be treated as data-bearing.
 from src.forecasting import ForecastTask, forecast_series
 
 task = ForecastTask(target_column="cnt", time_column="dteday",
-                    horizon=7, seasonal_period=7, reporting_delay_days=2)
+                    horizon=7, seasonal_period=7, reporting_delay_days=2,
+                    forecast_origin="2026-01-10")  # history must end 2026-01-08
 result = forecast_series(dataframe, task)
 
 # The shared predictive entry point also accepts the explicit task:
@@ -174,9 +212,10 @@ result = predict_target(dataframe, forecast_task=task)
 
 Python callers can pass `decision_policy=` directly to `forecast_series`. The
 browser submits the same policy under `confirmed-daily-forecast-task-v3` when
-declaring availability, bound to confirmed semantics and settings. Existing v2
-policy jobs remain readable; v1 jobs and CLI
-calls keep MAE selection and report business criteria as `not_specified`.
+declaring availability, bound to confirmed semantics and settings. Explicit-origin
+browser tasks use v4. Existing v2 policy jobs remain readable and retain their
+weighted objective. Tasks without a policy, including v1 jobs and CLI calls,
+keep MAE selection and report business criteria as `not_specified`.
 
 ```python
 policy = {
@@ -237,6 +276,14 @@ entire unreleased tail with delay longer than validation horizons, audit scaler
 fit inputs, preserve holdout isolation, and exercise queued jobs, CLI, aggregate
 audit and result/export rendering. They do not certify actual release schedules
 or historical vintages supplied by a customer.
+
+Explicit-origin acceptance tests compare against the equivalent censored
+retrospective calculation, verify real model prefix lengths and seasonal bridge
+phase, mutate released holdout and pre-holdout gap targets, and reject future,
+stale, gapped, placeholder-filled or date-overflow input before fitting. Queued
+jobs, metadata binding, owner access, CLI, audit and result/export presentation
+are exercised. Each run still trains and evaluates its candidates; saved-model
+inference, live outcome collection and automatic monitoring remain unimplemented.
 
 Tests include exact naive/seasonal oracles, known trend sensitivity, retaining a
 perfect seasonal baseline, full-horizon prefix isolation, scaler-fit isolation,

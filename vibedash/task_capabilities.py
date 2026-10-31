@@ -23,6 +23,7 @@ _CAPABILITIES = {
         'requirements': ['one_complete_daily_series', 'confirmed_numeric_target', 'confirmed_daily_dates',
                          'explicit_horizon', 'confirmed_fixed_target_reporting_delay', 'reviewed_decision_criteria'],
         'limitations': ['Only past target lags are used; external predictors, multiple entities, variable reporting delays and revised target vintages are unsupported.',
+                        'An explicit issue date requires history ending exactly at origin minus delay; otherwise the retrospective origin is the last file date, never automatically today.',
                         'No calibrated prediction interval, saved forecast model or automatic outcome monitoring is provided.'],
     },
     'period_comparison': {

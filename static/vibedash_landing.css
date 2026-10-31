@@ -268,7 +268,7 @@ textarea::placeholder { color: #61736d; }
 #forecast-settings legend { padding: 0 6px; color: var(--text); }
 #forecast-settings p, #forecast-settings .forecast-decision, #forecast-settings label[for="forecast-policy-confirmed"], #forecast-settings label[for="forecast-available"] { grid-column: 1 / -1; color: var(--text); font-size: 13px; line-height: 1.6; }
 #forecast-settings label[for="forecast-policy-confirmed"], #forecast-settings label[for="forecast-available"] { display: flex; align-items: center; min-height: 44px; gap: 10px; }
-#forecast-settings input[type="number"], #forecast-settings input[type="text"] { min-height: 44px; width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #07130f; color: var(--text); }
+#forecast-settings input[type="number"], #forecast-settings input[type="text"], #forecast-settings input[type="date"] { min-height: 44px; width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 10px; background: #07130f; color: var(--text); }
 #forecast-settings input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .semantic-primary-fields label { display: grid; gap: 7px; color: var(--text); font-size: 12px; font-weight: 600; }
 .semantic-primary-fields small { color: #839a92; font-size: 10px; font-weight: 400; line-height: 1.45; }

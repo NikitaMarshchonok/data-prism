@@ -34,7 +34,7 @@ for the agreed target, current boundaries and acceptance milestones.
 | Statistical validation | Welch group comparisons, Pearson correlation, effect sizes, 95% confidence intervals, and Benjamini–Hochberg FDR correction |
 | Exploratory ML | Fixed-budget anomaly review ranking and gap-statistic-gated, subsample-stability-tested segmentation |
 | Predictive ML | Leakage-safe preprocessing, cross-validated model selection, untouched-holdout evaluation, naive-baseline comparison, and a holdout permutation support gate |
-| Daily forecasting (opt-in pilot, Python/CLI) | Confirmed single-series task, fixed target reporting delay, available-prefix lag models and outcome-censored temporal selection, simple baselines, reserved-horizon evaluation and separate future refit; no production-readiness or automatic monitoring claim |
+| Daily forecasting (opt-in pilot, Python/CLI) | Confirmed single-series task, explicit issue date with available history or retrospective mode, fixed target reporting delay, isolated temporal evaluation and simple baselines; no production-readiness or automatic monitoring claim |
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
 | Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run and decision history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |

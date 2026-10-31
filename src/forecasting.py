@@ -5,6 +5,7 @@ imputation. Every validation forecast predicts its entire horizon recursively
 without observing the actual target inside that horizon.
 """
 from dataclasses import asdict, dataclass
+import re
 from typing import Mapping
 
 import numpy as np
@@ -21,7 +22,9 @@ from src.forecast_policy import (
 
 CONTRACT = "daily-forecast-v1"
 DELAY_CONTRACT = "daily-forecast-v2"
+ORIGIN_CONTRACT = "daily-forecast-v3"
 AVAILABILITY_CONTRACT = "forecast-origin-availability-v1"
+ORIGIN_AVAILABILITY_CONTRACT = "forecast-origin-availability-v2"
 CANDIDATES = ("last_value", "seasonal_naive", "lag_ridge", "lag_random_forest")
 VALIDATION_FOLDS = 3
 MAX_ROWS = 5000
@@ -34,6 +37,7 @@ class ForecastTask:
     horizon: int
     seasonal_period: int = 7
     reporting_delay_days: int = 0
+    forecast_origin: str | None = None
 
     def __post_init__(self):
         for value in (self.target_column, self.time_column):
@@ -47,6 +51,13 @@ class ForecastTask:
                 raise ValueError(f"{name} must be an integer from 1 to 90 days.")
         if type(self.reporting_delay_days) is not int or not 0 <= self.reporting_delay_days <= 30:
             raise ValueError("reporting_delay_days must be an integer from 0 to 30 days.")
+        if self.forecast_origin is not None:
+            if not isinstance(self.forecast_origin, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', self.forecast_origin):
+                raise ValueError("forecast_origin must be an explicit ISO YYYY-MM-DD date.")
+            try:
+                pd.to_datetime(self.forecast_origin, format='%Y-%m-%d', errors='raise')
+            except (ValueError, OverflowError) as error:
+                raise ValueError("forecast_origin must be a valid supported daily date.") from error
 
 
 def validate_forecast_task(value):
@@ -54,7 +65,7 @@ def validate_forecast_task(value):
     if isinstance(value, ForecastTask):
         return value
     if isinstance(value, Mapping):
-        allowed = {"target_column", "time_column", "horizon", "seasonal_period", "reporting_delay_days"}
+        allowed = {"target_column", "time_column", "horizon", "seasonal_period", "reporting_delay_days", "forecast_origin"}
         if set(value) - allowed:
             raise ValueError("Unknown forecast task fields.")
         try:
@@ -69,7 +80,29 @@ def forecast_task_settings(task):
     result = asdict(validate_forecast_task(task))
     if result['reporting_delay_days'] == 0:
         result.pop('reporting_delay_days')
+    if result['forecast_origin'] is None:
+        result.pop('forecast_origin')
     return result
+
+
+def _future_window(dates, task):
+    """Validate requested dates before any fit, without consulting the clock."""
+    try:
+        origin = pd.Timestamp(task.forecast_origin) if task.forecast_origin is not None else dates[-1]
+        cutoff = origin - pd.Timedelta(days=task.reporting_delay_days)
+        future = pd.date_range(origin + pd.Timedelta(days=1), periods=task.horizon, freq='D')
+    except (ValueError, OverflowError) as error:
+        raise ValueError('Forecast origin, cutoff and horizon must lie in the supported daily date range.') from error
+    return origin, cutoff, future
+
+
+def _report_contract(task):
+    if isinstance(task, ForecastTask):
+        if task.forecast_origin is not None:
+            return ORIGIN_CONTRACT
+        if task.reporting_delay_days:
+            return DELAY_CONTRACT
+    return CONTRACT
 
 
 def _series(frame, task):
@@ -111,8 +144,14 @@ def _series(frame, task):
     dates = pd.DatetimeIndex(dates.iloc[order])
     if not (dates[1:] - dates[:-1] == pd.Timedelta(days=1)).all():
         raise ValueError("Missing or irregular days: define a regular daily series before forecasting.")
+    _, cutoff, _ = _future_window(dates, task)
+    explicit_origin = task.forecast_origin is not None
+    if explicit_origin and dates[-1] > cutoff:
+        raise ValueError('Available-history input contains target dates after origin minus reporting delay. Submit only the available history; no automatic clipping is applied.')
+    if explicit_origin and dates[-1] < cutoff:
+        raise ValueError('Available-history input is stale: it must end exactly at origin minus reporting delay. Supply the missing observations or review the origin and delay; no automatic filling is applied.')
     minimum = (max(30, 4 * task.seasonal_period) + (VALIDATION_FOLDS + 1) * task.horizon
-               + 3 * task.reporting_delay_days)
+               + (2 if explicit_origin else 3) * task.reporting_delay_days)
     if len(frame) < minimum:
         raise ValueError(f"Insufficient history: at least {minimum} daily observations are required.")
     return dates, values[order]
@@ -190,6 +229,8 @@ def forecast_series(frame, task, *, decision_policy=None):
         policy = validate_forecast_policy(decision_policy) if decision_policy is not None else None
         objective = 'weighted_absolute_error' if policy is not None else 'mae'
         dates, values = _series(frame, task)
+        future_origin, _, future_dates = _future_window(dates, task)
+        available_history = task.forecast_origin is not None
         h, period, delay = task.horizon, task.seasonal_period, task.reporting_delay_days
         # origin is the first date being forecast, not the last available label.
         # Bridge unavailable days recursively; never insert their actual targets.
@@ -199,7 +240,7 @@ def forecast_series(frame, task, *, decision_policy=None):
         # Validation/holdout outcomes must themselves have been released at the
         # final origin. Otherwise delayed labels can leak through model selection
         # even when every individual fit uses a properly embargoed prefix.
-        evaluation_end = len(values) - delay
+        evaluation_end = len(values) if available_history else len(values) - delay
         holdout_start = evaluation_end - h
         # The chosen method must also have been selectable at the HOLDOUT origin,
         # not only at the later final origin. Leave a release gap between the
@@ -245,16 +286,18 @@ def forecast_series(frame, task, *, decision_policy=None):
             improvement = None
         # This refit is explicitly AFTER the locked holdout evaluation. Its
         # in-sample history is not used to overwrite the holdout metrics.
-        future = predict_at(len(values), name)
-        future_dates = pd.date_range(dates[-1] + pd.Timedelta(days=1), periods=h, freq="D")
+        future = predict_at(evaluation_end + delay, name)
         return {
-            "contract": DELAY_CONTRACT if delay else CONTRACT, "status": "ok", "task_type": "forecast",
+            "contract": _report_contract(task), "status": "ok", "task_type": "forecast",
             "task": forecast_task_settings(task), "target_col": task.target_column, "frequency": "D",
-            "availability": {"contract": AVAILABILITY_CONTRACT, "reporting_delay_days": delay,
+            "availability": {"contract": ORIGIN_AVAILABILITY_CONTRACT if available_history else AVAILABILITY_CONTRACT,
+                             "history_mode": "available_history_only" if available_history else "retrospective_complete_series",
+                             "origin_source": "explicit_task_date" if available_history else "last_input_date",
+                             "latest_input_date": _date(dates[-1]), "reporting_delay_days": delay,
                              "origin_convention": "end_of_completed_day",
                              "evaluation_outcomes_available_through": _date(dates[evaluation_end - 1]),
                              "selection_outcomes_available_through": _date(dates[selection_end - 1]),
-                             "unavailable_tail_rows": delay,
+                             "unavailable_tail_rows": 0 if available_history else delay,
                              "source": "caller_assertion", "historical_vintages_verified": False},
             "model_name": name, "baseline_name": baseline_name,
             "selection_metric": ("mean validation weighted absolute error" if policy else "mean validation MAE"),
@@ -279,8 +322,8 @@ def forecast_series(frame, task, *, decision_policy=None):
                            else "no_holdout_improvement"),
                 "statistical_significance": "not_assessed",
                 "production_readiness": "not_established"},
-            "future_forecast_origin": _date(dates[-1]),
-            "future_fit_through": _date(dates[len(values) - delay - 1]),
+            "future_forecast_origin": _date(future_origin),
+            "future_fit_through": _date(dates[evaluation_end - 1]),
             "future_forecast": [{"date": _date(day), "prediction": float(pred)}
                                 for day, pred in zip(future_dates, future)],
             "unused_columns": [str(column) for column in frame.columns
@@ -294,13 +337,15 @@ def forecast_series(frame, task, *, decision_policy=None):
                 "Validation and holdout outcomes end at the final available cutoff; unreleased tail labels cannot influence selection or scoring.",
                 "Every fold and holdout recursively bridges the unavailable days and predicts the full horizon without actual target updates.",
                 "Only past target lags are used; all other columns are excluded, including future weather and target components.",
-                "Future forecasts refit the locked method on the available prefix only, using the last input date as their origin.",
+                ("The explicit origin requires history ending exactly at origin minus delay; no unavailable-day placeholders or future observations are accepted."
+                 if available_history else "Retrospective mode uses the last input date as origin and censors its unreleased tail."),
+                "Future forecasts refit the locked method on available targets only; origin is not inferred from the wall clock.",
                 "Availability is an assertion, not reconstructed release timestamps or historical data vintages. Revised targets and variable delays remain unsupported.",
                 "Holdout gains are descriptive; no IID permutation p-values, calibrated intervals, production monitoring or serving are claimed.",
             ],
         }
     except (ValueError, TypeError, FloatingPointError, OverflowError) as error:
-        contract = DELAY_CONTRACT if isinstance(task, ForecastTask) and task.reporting_delay_days else CONTRACT
+        contract = _report_contract(task)
         return {"contract": contract, "status": "error", "task_type": "forecast",
                 "message": str(error), "future_forecast": [], "model_comparison": [],
                 "predictive_support": {"status": "not_evaluated"}}

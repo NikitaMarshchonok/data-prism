@@ -22,9 +22,10 @@ def main(argv=None):
     parser.add_argument("--seasonal-period", type=int, default=7, help="Explicit seasonal baseline period in days.")
     parser.add_argument("--reporting-delay-days", type=int, default=0,
                         help="Assert a fixed target release delay, 0–30 whole calendar days; no data vintages are verified.")
+    parser.add_argument('--forecast-origin', help='Explicit ISO YYYY-MM-DD end-of-day origin; input must end exactly at origin minus delay. Omit for retrospective mode.')
     args = parser.parse_args(argv)
     try:
-        task = ForecastTask(args.target, args.time, args.horizon, args.seasonal_period, args.reporting_delay_days)
+        task = ForecastTask(args.target, args.time, args.horizon, args.seasonal_period, args.reporting_delay_days, args.forecast_origin)
         with args.csv.expanduser().open("rb") as source:
             raw = source.read(MAX_CSV_BYTES + 1)
         if len(raw) > MAX_CSV_BYTES:

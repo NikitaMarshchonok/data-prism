@@ -68,7 +68,7 @@ class VibeDashForecastRouteTests(unittest.TestCase):
         with web_app.app.test_client() as client:
             html = client.get('/vibedash/').get_data(as_text=True)
         for field in ('analysis_mode', 'forecast_horizon', 'forecast_period', 'forecast_available',
-                      'forecast_reporting_delay',
+                      'forecast_reporting_delay', 'forecast_origin',
                       'forecast_decision', 'forecast_under_weight', 'forecast_over_weight',
                       'forecast_minimum_improvement', 'forecast_maximum_mae', 'forecast_policy_confirmed'):
             self.assertIn('name="' + field + '"', html)
@@ -82,6 +82,51 @@ class VibeDashForecastRouteTests(unittest.TestCase):
         invalidate = html.split('function invalidateTaskConfirmation(', 1)[1].split('function syncTaskResult()', 1)[0]
         self.assertIn('forecastAvailable.checked = false', invalidate)
         self.assertIn('forecastPolicyConfirmed.checked = false', invalidate)
+
+    @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=True)
+    def test_issue_date_refuses_unavailable_or_stale_history_before_queue(self, submit):
+        with web_app.app.test_client() as client:
+            for origin in ('2020-06-09', '2020-06-11', 'not-a-date'):
+                response = client.post('/vibedash/jobs', data=self.request_data(client,
+                    forecast_reporting_delay='2', forecast_origin=origin))
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+        submit.assert_not_called()
+
+    def test_issue_date_owned_job_result_export_and_audit_preserve_available_history_convention(self):
+        with patch.dict(os.environ, DATA_PRISM_STATE_DIR=self.temporary_directory.name):
+            with web_app.app.test_client() as owner:
+                fields = POLICY_FORM | {'task_type': 'daily_forecast', 'forecast_reporting_delay': '2',
+                    'forecast_origin': '2020-06-10', 'task_observation_unit': 'One day for one location',
+                    'task_deliverable': 'forecast_evaluation', 'task_brief_confirmed': 'yes'}
+                queued = owner.post('/vibedash/jobs', data=self.request_data(owner, **fields))
+                self.assertEqual(queued.status_code, 202, queued.get_json())
+                for _ in range(150):
+                    status = owner.get(queued.get_json()['status_url']).get_json()
+                    if status['status'] in {'completed', 'failed'}: break
+                    time.sleep(.05)
+                self.assertEqual(status['status'], 'completed', status)
+                html = owner.get(status['result_url']).get_data(as_text=True)
+                self.assertIn('Available-history mode', html)
+                self.assertIn('2020-06-10 (explicit end-of-day issue date)', html)
+                self.assertIn('refit uses targets only through 2020-06-08', html)
+                self.assertIn('2020-06-11', html)
+                self.assertIn('No target rows for unavailable days are required', html)
+                manifest = owner.get(status['manifest_url']).get_json()['forecast']
+                self.assertEqual(manifest['confirmed_task']['contract'], 'confirmed-daily-forecast-task-v4')
+                self.assertEqual(manifest['availability']['history_mode'], 'available_history_only')
+                self.assertEqual(manifest['future_origin'], '2020-06-10')
+                self.assertEqual(manifest['future_fit_through'], '2020-06-08')
+                self.assertEqual(manifest['holdout_end'], '2020-06-08')
+                self.assertNotIn('predictions', json.dumps(manifest))
+                with owner.session_transaction() as browser: scope = browser['vibedash_analysis_scope_id']
+                job = AnalysisJobStore(web_app.app.config['VIBEDASH_JOB_STORE_PATH']).get(queued.get_json()['job_id'], scope)
+                export = owner.get('/vibedash/export/' + job['session_id'])
+                self.assertIn('Available-history mode', export.get_data(as_text=True))
+                export.close()
+            with web_app.app.test_client() as stranger:
+                self.assertEqual(stranger.get(status['result_url']).status_code, 404)
+                self.assertEqual(stranger.get(status['manifest_url']).status_code, 404)
 
     @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=True)
     def test_invalid_delay_is_rejected_before_queue_and_temporary_input_is_removed(self, submit):

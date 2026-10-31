@@ -79,8 +79,12 @@
             <div class="readiness-issue" role="note">
                 <h3>Forecast origin and target availability</h3>
                 <p>Fixed target reporting delay: {{ forecast.availability.reporting_delay_days }} whole days. Final holdout origin: {{ forecast.holdout.forecast_origin }}; available training targets through {{ forecast.holdout.train_end }}.</p>
-                <p>Future forecast origin: {{ forecast.future_forecast_origin }} (last date in the file); refit uses targets only through {{ forecast.future_fit_through }}. The unavailable gap is bridged recursively without actual target updates.</p>
+                <p>Future forecast origin: {{ forecast.future_forecast_origin }} ({{ 'explicit end-of-day issue date' if forecast.availability.origin_source == 'explicit_task_date' else 'last date in the file' }}); refit uses targets only through {{ forecast.future_fit_through }}. The unavailable gap is bridged recursively without actual target updates.</p>
+                {% if forecast.availability.history_mode == 'available_history_only' %}
+                <p>Available-history mode: the last source date is {{ forecast.availability.latest_input_date }}, exactly origin minus delay. No target rows for unavailable days are required, invented or imputed. Validation and holdout outcomes stop at {{ forecast.availability.evaluation_outcomes_available_through }}.</p>
+                {% else %}
                 <p>Validation and holdout outcomes stop at {{ forecast.availability.evaluation_outcomes_available_through }}. The final {{ forecast.availability.unavailable_tail_rows }} unavailable target rows are excluded from model selection, scoring and future fitting.</p>
+                {% endif %}
                 <p>Method selection uses validation outcomes only through {{ forecast.availability.selection_outcomes_available_through }}, already released at the final holdout origin.</p>
                 <p>This is an asserted fixed-delay simulation, not verified release timestamps or historical data vintages. Variable delays and revised targets are unsupported. Input dates are not assumed to be current.</p>
             </div>
