@@ -1,10 +1,9 @@
 # Daily forecast evaluation
 
 This is the first bounded forecasting engine, not a production model service.
-It is available through Python and a local CLI. VibeDash's upload form and
-background jobs do not yet submit forecasting tasks. The confirmed VibeDash
-semantic contract is not yet connected to this engine; callers explicitly
-identify the numeric target and daily time column.
+It is available through Python, a local CLI, and an opt-in VibeDash background
+job. The browser workflow binds the task to the reviewed semantic contract;
+Python/CLI callers explicitly identify the numeric target and daily time column.
 
 ## Task and availability assumptions
 
@@ -60,6 +59,36 @@ and the rolling-origin approach described in
 
 ## Usage
 
+### VibeDash
+
+Upload a CSV, review column meanings, then select **Daily forecast evaluation
+(pilot)**. Select one numeric measure target and one daily time column, set the
+horizon and seasonal baseline period, and confirm that completed-day targets
+are available before forecasting the next day. Review and confirm the meanings
+after changing settings. Forecasting is never enabled merely by mentioning a
+prediction in the free-text analysis question.
+
+The server validates the full input before queueing, without fitting a model.
+The worker revalidates the input and its binding to the confirmed target, time,
+units and settings before training. It rejects a history that would be truncated
+by the dashboard preview limit. Forecast jobs use the existing owner-scoped job
+workflow, retention and queue limits; CSRF validation is required.
+
+The result separates holdout evaluation from the later future refit. A worse
+holdout result remains visible as **No improvement over the baseline**, not a
+successful-model badge. Retaining a simple baseline is also a valid outcome.
+Input readiness scores describe input checks, not forecast reliability.
+The optional forecast section of the audit manifest contains settings and
+aggregate metrics, never per-day observations or predictions. The result page
+itself contains those values and remains data-bearing.
+
+For a target explicitly confirmed as a count, negative observations are rejected
+and negative future point forecasts are flagged and withheld from the displayed
+future table. The raw forecast is not clipped or rounded to manufacture a valid
+result. Non-negative output alone does not establish domain validity.
+
+### CLI and Python
+
 ```bash
 python evaluate_forecast.py --csv /path/to/day.csv \
   --target cnt --time dteday --horizon 7 --seasonal-period 7
@@ -100,8 +129,9 @@ that outcome instead of claiming success or choosing a replacement after seeing
 the answers. Noise can yield a chance positive descriptive improvement. No IID
 permutation significance, calibrated prediction intervals, fairness assurance,
 automatic deployment, model persistence, outcome monitoring or retraining are
-claimed. Target constraints such as non-negative demand are not inferred or
-silently imposed; the current contract is for general numeric point forecasts.
+claimed. The Python/CLI core accepts general numeric point forecasts; the web
+adapter adds the explicitly confirmed count-domain check described above.
+Other target constraints are not inferred or silently imposed.
 
 Tests include exact naive/seasonal oracles, known trend sensitivity, retaining a
 perfect seasonal baseline, full-horizon prefix isolation, scaler-fit isolation,

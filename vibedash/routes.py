@@ -64,6 +64,7 @@ try:
         build_period_comparison_manifest,
     )
     from .decision_brief import build_decision_brief
+    from .forecast_tasks import ForecastTaskError, forecast_task_from_form, run_confirmed_forecast, forecast_audit_view
     from .comparison_report import build_comparison_decision_guidance
     from .comparison_semantics import semantic_conflicts, validate_comparison_semantics
     from .pilot_metrics import (
@@ -839,6 +840,12 @@ if vibedash_bp:
             semantic_contract_prevalidated=True,
         )
         dashboard_data['readiness'] = readiness
+        if payload.get('analysis_kind') == 'daily_forecast' or payload.get('forecast_task') is not None:
+            if payload.get('analysis_kind') != 'daily_forecast' or truncated:
+                raise ForecastTaskError('Forecast history must be complete and submitted as an explicit forecasting task.')
+            dashboard_data['forecast'] = run_confirmed_forecast(
+                source_df, semantic_contract, payload.get('forecast_task'),
+            )
         dashboard_data['decision_brief'] = build_decision_brief(
             dashboard_data,
             readiness,
@@ -860,6 +867,8 @@ if vibedash_bp:
             retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
             semantic_contract=semantic_contract,
         )
+        if dashboard_data.get('forecast'):
+            audit_manifest['forecast'] = forecast_audit_view(dashboard_data['forecast'])
         session_id = str(uuid.uuid4())
         session_data = {
             'viz_spec': viz_spec_data,
@@ -1902,6 +1911,9 @@ if vibedash_bp:
     @vibedash_bp.route('/preview', methods=['POST'])
     def preview():
         """Предварительный просмотр дашборда"""
+        if request.form.get('analysis_mode', 'evidence') != 'evidence':
+            flash('Forecasting uses the queued workflow. Enable JavaScript or submit the confirmed task to /vibedash/jobs.', 'error')
+            return redirect(url_for('vibedash.index'))
         upload_path = None
         try:
             # Resolve the request's owner before any upload or CPU work.  A
@@ -2035,6 +2047,11 @@ if vibedash_bp:
     @vibedash_bp.post('/jobs')
     def create_analysis_job():
         """Queue one bounded VibeDash analysis and return its status URL."""
+        mode = request.form.get('analysis_mode', 'evidence')
+        if mode not in {'evidence', 'forecast'}:
+            return jsonify({'error': 'Unsupported analysis mode.'}), 400
+        if mode == 'forecast' and not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return jsonify({'error': 'Refresh the page before starting a forecast.'}), 400
         pilot_opt_in = request.form.get('pilot_metrics') == 'yes'
         if pilot_opt_in and not _valid_decision_csrf_token(request.form.get('csrf_token')):
             return jsonify({'error': 'Refresh the page before opting into pilot measurement.'}), 400
@@ -2115,7 +2132,12 @@ if vibedash_bp:
                     ),
                 )
             )
-        except SemanticContractError as error:
+            if mode == 'forecast' and demo_dataset:
+                raise ForecastTaskError('Upload your own confirmed daily series for forecasting; the fixed evidence demo is unchanged.')
+            forecast_task = forecast_task_from_form(dataframe, semantic_contract, request.form)
+            if forecast_task and len(dataframe) > current_app.config['MAX_ROWS_PREVIEW']:
+                raise ForecastTaskError('Forecast history cannot be truncated to the dashboard preview limit.')
+        except (SemanticContractError, ForecastTaskError) as error:
             upload_path.unlink(missing_ok=True)
             return jsonify({
                 'error': str(error),
@@ -2125,15 +2147,15 @@ if vibedash_bp:
 
         try:
             store = _analysis_job_store()
+            job_payload = {
+                'stored_filename': stored_filename, 'filename': filename,
+                'prompt': prompt, 'demo_dataset': demo_dataset, 'semantic_contract': semantic_contract,
+            }
+            if forecast_task:
+                job_payload.update(analysis_kind='daily_forecast', forecast_task=forecast_task)
             job = store.create(
                 request_scope,
-                {
-                    'stored_filename': stored_filename,
-                    'filename': filename,
-                    'prompt': prompt,
-                    'demo_dataset': demo_dataset,
-                    'semantic_contract': semantic_contract,
-                },
+                job_payload,
                 max_active_per_scope=current_app.config[
                     'VIBEDASH_MAX_ACTIVE_JOBS_PER_SCOPE'
                 ],

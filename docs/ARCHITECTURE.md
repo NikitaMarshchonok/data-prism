@@ -123,7 +123,8 @@ profile and are follow-up integrations.
 | `vibedash/audit_manifest.py` | Versioned dataset, schema, request, specification, and evidence fingerprints | Raw-row persistence or identity management |
 | `src/quality_evaluation.py` | Known-signal and null-signal regression scenarios across evidence, statistics, anomaly/segmentation, and prediction | Domain certification or causal validation |
 | `src/ml_predictor.py` | Train-only preprocessing, exact target-proxy checks, cross-validated model selection, untouched-holdout metrics, baseline/permutation support, and explainability | Temporal leakage proof, model serving, or retraining |
-| `src/forecasting.py` | Explicit daily single-series tasks, expanding-window selection, fixed-horizon holdout evaluation and separate future refit | Exogenous feature availability, calibrated intervals, serving, monitoring, or VibeDash task submission |
+| `src/forecasting.py` | Explicit daily single-series tasks, expanding-window selection, fixed-horizon holdout evaluation and separate future refit | Exogenous feature availability, calibrated intervals, serving or monitoring |
+| `vibedash/forecast_tasks.py` | Bind opt-in daily forecasting to confirmed target/time/units/availability, preflight and worker revalidation, count-domain warning and aggregate audit metadata | Inferred task intent, reporting delays, production model approval |
 | `src/model_reliability.py` | Split stability and supported subgroup diagnostics | Fairness certification |
 | `src/data_drift.py` | Aggregate profiles and baseline-to-current comparisons | Persistent storage |
 | `src/drift_store.py` | SQLite run history, retention, deduplication, alerts | Drift calculation |
@@ -244,7 +245,7 @@ The predictive block is an evaluation pipeline rather than an AutoML deployment 
 
 This design supports honest exploratory evaluation. A positive support decision requires both improvement over the naive baseline and a holdout permutation p-value at or below 0.05. It does not establish feature availability at prediction time, causal validity, fairness, robustness under drift, or production readiness; those still require domain and temporal validation.
 
-Daily forecasting is a separate bounded protocol, described in [FORECAST_EVALUATION.md](FORECAST_EVALUATION.md). It accepts explicit target/time/horizon settings, uses only past target lags, selects methods and baselines on three expanding-prefix validation horizons, and reserves a final complete horizon for descriptive evaluation. It does not reuse the IID permutation-support gate or random-split reliability audit. A later future refit is labelled separately. Python and `evaluate_forecast.py` expose this engine; browser task submission and confirmed semantic-contract integration remain follow-up work.
+Daily forecasting is a separate bounded protocol, described in [FORECAST_EVALUATION.md](FORECAST_EVALUATION.md). It accepts explicit target/time/horizon settings, uses only past target lags, selects methods and baselines on three expanding-prefix validation horizons, and reserves a final complete horizon for descriptive evaluation. It does not reuse the IID permutation-support gate or random-split reliability audit. A later future refit is labelled separately. Python and `evaluate_forecast.py` expose this engine. The opt-in VibeDash job adapter validates and binds the full history to confirmed semantics, settings and availability before queueing, then rechecks that binding in the worker. Ordinary evidence tasks do not implicitly train forecasts. Forecast audit metadata excludes per-day observations and predictions; the result/session remains data-bearing and subject to existing scoped ownership and temporary retention.
 
 ## Statistical-evidence boundary
 

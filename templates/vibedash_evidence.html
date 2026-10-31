@@ -60,6 +60,37 @@
             <span class="evidence-badge">Traceable output</span>
         </section>
 
+        {% if dashboard_data.forecast %}
+        {% set forecast = dashboard_data.forecast %}
+        <section class="dashboard-section forecast-evaluation" aria-labelledby="forecast-heading">
+            <div class="section-heading"><div><h2 id="forecast-heading">Daily forecast evaluation</h2></div><p>{{ forecast.task.target_column }} · {{ forecast.task.horizon }} days · past target values only</p></div>
+            <div class="readiness-issue issue-warning" role="note">
+                {% if forecast.domain_constraints.status == 'failed' %}
+                <h3>Forecast violates the confirmed count domain</h3><p>Negative count predictions were produced. Do not use this forecast operationally.</p>
+                {% elif forecast.predictive_support.status == 'no_holdout_improvement' %}
+                <h3>No improvement over the baseline</h3><p>The selected model had higher or equal MAE on the final holdout. Training completed, but an advantage was not demonstrated.</p>
+                {% elif forecast.predictive_support.status == 'baseline_selected' %}
+                <h3>Simple baseline retained</h3><p>Validation did not justify selecting a more complex model.</p>
+                {% elif forecast.predictive_support.status == 'observed_holdout_improvement' %}
+                <h3>Lower MAE on this holdout — exploratory result</h3><p>This historical improvement is not proof of future reliability or production readiness.</p>
+                {% else %}
+                <h3>Forecast support not established</h3><p>No supported evaluation status is available. Do not use this forecast operationally.</p>
+                {% endif %}
+                <p>Model: {{ forecast.model_name }}. Reference baseline: {{ forecast.baseline_name }}. Selected using three earlier validation periods, before the final holdout.</p>
+                <p>Holdout: {{ forecast.holdout.start }} to {{ forecast.holdout.end }}. Training ended {{ forecast.holdout.train_end }}. Errors use the target’s stored unit: {{ forecast.confirmed_task.target_unit }}.</p>
+            </div>
+            <div class="kpi-grid">
+                <article class="kpi-card"><div class="kpi-label">Selected method MAE</div><strong>{{ "%.2f"|format(forecast.holdout.metrics.mae) }}</strong><small>Mean absolute error per day, not accuracy percent.</small></article>
+                <article class="kpi-card"><div class="kpi-label">Reference baseline MAE</div><strong>{{ "%.2f"|format(forecast.holdout.baseline_metrics.mae) }}</strong><small>Baseline selected on earlier validation only.</small></article>
+                <article class="kpi-card"><div class="kpi-label">MAE improvement vs baseline</div><strong>{% if forecast.holdout.mae_improvement is not none %}{{ "%+.1f%%"|format(forecast.holdout.mae_improvement * 100) }}{% else %}Not defined{% endif %}</strong><small>Negative means worse. Undefined when the baseline error is zero or the ratio is not representable.</small></article>
+            </div>
+            <article class="table-card"><h3>Final holdout predictions</h3><div class="table-scroll"><table><thead><tr><th>Date</th><th>Observed</th><th>Selected method</th><th>Baseline</th></tr></thead><tbody>{% for row in forecast.holdout.predictions %}<tr><td>{{ row.date }}</td><td>{{ "%.2f"|format(row.actual) }}</td><td>{{ "%.2f"|format(row.prediction) }}</td><td>{{ "%.2f"|format(row.baseline) }}</td></tr>{% endfor %}</tbody></table></div></article>
+            {% if forecast.domain_constraints.status != 'failed' %}
+            <article class="table-card"><h3>Exploratory future point forecast</h3><p>Separate refit through {{ forecast.future_fit_through }} after evaluation. Not approved for operational use. No calibrated prediction interval or automated monitoring is available.</p><div class="table-scroll"><table><thead><tr><th>Date</th><th>Point forecast</th></tr></thead><tbody>{% for row in forecast.future_forecast %}<tr><td>{{ row.date }}</td><td>{{ "%.2f"|format(row.prediction) }}</td></tr>{% endfor %}</tbody></table></div></article>
+            {% endif %}
+        </section>
+        {% endif %}
+
         {% if dashboard_data.readiness %}
         <section class="dashboard-section" aria-labelledby="readiness-heading">
             <div class="section-heading"><div><span>02</span><h2 id="readiness-heading">Dataset readiness</h2></div><p>{{ dashboard_data.readiness.summary }}</p></div>

@@ -100,6 +100,13 @@ def _series(frame, task):
     return dates, values[order]
 
 
+def validate_forecast_input(frame, task):
+    """Preflight the full history without training or silently truncating it."""
+    task = validate_forecast_task(task)
+    _series(frame, task)
+    return task
+
+
 def _lags(period):
     return sorted({1, period, 2 * period})
 
