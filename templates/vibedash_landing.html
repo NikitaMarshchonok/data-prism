@@ -160,6 +160,8 @@
             <form class="analysis-form" id="analysis-form" method="POST" action="{{ url_for('vibedash.preview') }}" enctype="multipart/form-data">
                 <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
                 <input type="hidden" name="semantic_contract" id="semantic-contract-value" value="">
+                <input type="hidden" name="task_type" id="task-type" value="descriptive_analysis">
+                <input type="hidden" name="task_deliverable" id="task-deliverable" value="evidence_summary">
                 <div class="field-card upload-card">
                     <label for="datafile">
                         <span class="field-number">1</span>
@@ -174,7 +176,7 @@
                         <span class="field-number">2</span>
                         <span><strong>Describe the analysis</strong><small>Be specific about KPIs, comparisons, and trends.</small></span>
                     </label>
-                    <textarea id="prompt" name="prompt" rows="5" required placeholder="Example: Compare revenue and churn by plan and region, identify anomalies, validate the strongest differences, and recommend what to investigate next."></textarea>
+                    <textarea id="prompt" name="prompt" rows="5" maxlength="4000" required placeholder="Example: Compare revenue and churn by plan and region, identify anomalies, validate the strongest differences, and recommend what to investigate next."></textarea>
                     <div class="prompt-presets" aria-label="Prompt templates">
                         <button type="button" data-prompt="{{ preset_prompts.saas_review|e }}">Weekly SaaS review</button>
                         <button type="button" data-prompt="{{ preset_prompts.sales|e }}">Revenue</button>
@@ -200,13 +202,23 @@
                     <div class="semantic-panel-header">
                         <div>
                             <span class="readiness-kicker">Required semantic review</span>
-                            <h3 id="semantic-heading">Confirm what each column means</h3>
+                            <h3 id="semantic-heading">Review the task and column meanings</h3>
                         </div>
                         <span class="semantic-status" id="semantic-status">Not confirmed</span>
                     </div>
                     <p class="semantic-intro">Data Prism inferred these roles and units from the schema and observed values. Correct any mistakes before analysis; the confirmed contract controls calculations, charts, and the audit record.</p>
                     <div class="semantic-error" id="semantic-error" role="alert" tabindex="-1" hidden></div>
                     <div class="semantic-primary-fields">
+                        <label for="analysis-mode">
+                            <span>What result do you need?</span>
+                            <select id="analysis-mode" name="analysis_mode"><option value="evidence">Descriptive evidence</option><option value="forecast">Daily forecast evaluation (pilot)</option></select>
+                            <small>Forecasting compares past-only models with simple baselines. Training does not establish usefulness.</small>
+                        </label>
+                        <label for="task-observation-unit">
+                            <span>What does one row represent?</span>
+                            <input id="task-observation-unit" name="task_observation_unit" type="text" maxlength="240" required aria-describedby="task-unit-guidance">
+                            <small id="task-unit-guidance">For example: one day for one location, one order, or one customer. Do not enter personal or confidential information.</small>
+                        </label>
                         <label for="semantic-target-column">
                             <span>Outcome / target</span>
                             <select id="semantic-target-column"><option value="">No target selected</option></select>
@@ -218,6 +230,28 @@
                             <small>Optional. Only columns confirmed as temporal are eligible.</small>
                         </label>
                     </div>
+                    <div class="task-result-plan" aria-labelledby="task-result-heading">
+                        <h4 id="task-result-heading">Planned result</h4>
+                        <p id="task-result-description">A descriptive evidence summary with calculations and limitations.</p>
+                        <p>This is a structured request, not automatic understanding of your business. Data and methodological checks still apply. Unsupported work is not replaced by another task.</p>
+                    </div>
+                    <fieldset id="forecast-settings" class="semantic-primary-fields" hidden disabled>
+                        <legend>Daily forecast settings</legend>
+                        <label for="forecast-horizon"><span>Forecast horizon (days)</span><input id="forecast-horizon" name="forecast_horizon" type="number" min="1" max="90" step="1" value="7" required></label>
+                        <label for="forecast-period"><span>Seasonal baseline period (days)</span><input id="forecast-period" name="forecast_period" type="number" min="1" max="90" step="1" value="7" required><small>Seven means the same day last week. This is your assumption, not detected seasonality.</small></label>
+                        <label for="forecast-reporting-delay"><span>Target reporting delay (whole days)</span><input id="forecast-reporting-delay" name="forecast_reporting_delay" type="number" min="0" max="30" step="1" value="0" required aria-describedby="forecast-delay-guidance"><small>Fixed delay, 0–30 calendar days. Zero means a completed day’s target is known at that day’s end.</small></label>
+                        <label for="forecast-origin"><span>Forecast issue date (optional, end of day)</span><input id="forecast-origin" name="forecast_origin" type="date" aria-describedby="forecast-origin-guidance"><small id="forecast-origin-guidance">Set a date to use available history only. The file must end exactly at this date minus the reporting delay. Leave empty for retrospective mode: origin is the last file date and its unavailable tail is withheld.</small></label>
+                        <p id="forecast-delay-guidance">With delay 2 and an issue date of 10 January, upload available targets through 8 January to predict 11 January onward. Do not add invented targets or empty rows for 9–10 January. The gap is predicted recursively, not filled with actual values. Neither mode assumes today’s date.</p>
+                        <label class="forecast-decision" for="forecast-decision"><span>What decision will this forecast support?</span><input id="forecast-decision" name="forecast_decision" type="text" maxlength="500" required aria-describedby="forecast-policy-guidance"><small>For example: plan next week’s staffing. Do not enter personal or confidential information.</small></label>
+                        <label for="forecast-under-weight"><span>Underprediction penalty per unit</span><input id="forecast-under-weight" name="forecast_under_weight" type="number" min="0.001" max="1000" step="any" value="1" required></label>
+                        <label for="forecast-over-weight"><span>Overprediction penalty per unit</span><input id="forecast-over-weight" name="forecast_over_weight" type="number" min="0.001" max="1000" step="any" value="1" required></label>
+                        <p id="forecast-policy-guidance">These are relative error weights, not currency. Values 5 and 1 penalize each unit of underprediction five times as much as overprediction. Methods and the reference baseline are selected on earlier validation using this weighted error; model fitting itself is unchanged.</p>
+                        <label for="forecast-minimum-improvement"><span>Required weighted-error reduction (%)</span><input id="forecast-minimum-improvement" name="forecast_minimum_improvement" type="number" min="0" max="99.999" step="any" value="10" required><small>Compared with the validation-selected baseline. Strict improvement is always required.</small></label>
+                        <label for="forecast-maximum-mae"><span>Maximum acceptable MAE (optional)</span><input id="forecast-maximum-mae" name="forecast_maximum_mae" type="number" min="0" step="any"><small>In the target’s stored units per day. Empty means no absolute error limit was supplied.</small></label>
+                        <label for="forecast-policy-confirmed"><input id="forecast-policy-confirmed" name="forecast_policy_confirmed" type="checkbox" value="yes" required><span>I set these criteria before evaluation. Meeting them on one historical holdout does not approve operational use.</span></label>
+                        <p id="forecast-guidance">Select a numeric measure target and a time column above. Use one complete observation per day, without gaps. Only past target values are used; all other columns are ignored.</p>
+                        <label for="forecast-available"><input id="forecast-available" name="forecast_available" type="checkbox" value="yes" required><span>I reviewed the issue date, history mode and fixed reporting delay. Targets through origin minus this delay are available and final at each origin. Variable delays, later revisions and historical data vintages are not supported or independently verified.</span></label>
+                    </fieldset>
                     <div class="semantic-table-wrap">
                         <table class="semantic-table">
                             <thead>
@@ -227,10 +261,11 @@
                         </table>
                     </div>
                     <label class="semantic-confirmation" for="semantic-confirmed">
-                        <input type="checkbox" id="semantic-confirmed">
-                        <span>I reviewed these meanings and confirm they match this dataset.</span>
+                        <input type="checkbox" id="semantic-confirmed" name="task_brief_confirmed" value="yes">
+                        <span>I reviewed the question, row meaning, planned result and column meanings, and confirm they match my task and dataset.</span>
                     </label>
                     <p class="readiness-privacy">The retained contract contains schema metadata only—never source row values.</p>
+                    <p class="readiness-privacy">The confirmed question and row description are retained with the analysis for its retention window. The audit manifest contains only a task fingerprint and fixed metadata, not these texts.</p>
                 </section>
 
                 <label class="pilot-consent form-wide">
@@ -359,6 +394,15 @@
         const semanticTime = document.getElementById('semantic-time-column');
         const semanticConfirmed = document.getElementById('semantic-confirmed');
         const semanticContractValue = document.getElementById('semantic-contract-value');
+        const analysisMode = document.getElementById('analysis-mode');
+        const taskType = document.getElementById('task-type');
+        const taskDeliverable = document.getElementById('task-deliverable');
+        const taskObservationUnit = document.getElementById('task-observation-unit');
+        const taskResultDescription = document.getElementById('task-result-description');
+        const taskBriefUrl = {{ url_for('vibedash.task_brief_review')|tojson }};
+        const forecastSettings = document.getElementById('forecast-settings');
+        const forecastAvailable = document.getElementById('forecast-available');
+        const forecastPolicyConfirmed = document.getElementById('forecast-policy-confirmed');
         const readinessUrl = {{ url_for('vibedash.dataset_readiness')|tojson }};
         const comparisonJobsUrl = {{ url_for('vibedash.create_period_comparison_job')|tojson }};
         const comparisonReadinessUrl = {{ url_for('vibedash.comparison_readiness')|tojson }};
@@ -384,6 +428,8 @@
         let readinessState = 'idle';
         let readinessRequest = null;
         let semanticProposal = null;
+        let analysisBusy = false;
+        let taskRevision = 0;
 
         document.querySelectorAll('a[href="#pilot-privacy"]').forEach((link) => {
             link.addEventListener('click', () => {
@@ -392,6 +438,9 @@
         });
 
         fileInput.addEventListener('change', async (event) => {
+            invalidateTaskConfirmation(true);
+            taskObservationUnit.value = '';
+            document.getElementById('forecast-origin').value = '';
             const selectedFile = event.target.files[0];
             fileName.textContent = selectedFile ? selectedFile.name : 'No file selected';
             fileName.classList.toggle('has-file', Boolean(selectedFile));
@@ -405,6 +454,7 @@
         document.querySelectorAll('[data-prompt]').forEach((button) => {
             button.addEventListener('click', () => {
                 prompt.value = button.dataset.prompt;
+                invalidateTaskConfirmation(true);
                 prompt.focus();
             });
         });
@@ -431,6 +481,8 @@
             semanticPanel.hidden = true;
             semanticColumns.replaceChildren();
             semanticConfirmed.checked = false;
+            forecastAvailable.checked = false;
+            forecastPolicyConfirmed.checked = false;
             semanticContractValue.value = '';
             hideSemanticError();
             updateAnalysisSubmitState();
@@ -438,6 +490,8 @@
 
         function updateAnalysisSubmitState() {
             submitButton.disabled = !(
+                !analysisBusy
+                &&
                 readinessState === 'allowed'
                 && semanticProposal
                 && semanticConfirmed.checked
@@ -454,6 +508,56 @@
             semanticError.hidden = false;
             semanticError.focus();
         }
+
+        function invalidateTaskConfirmation(resetForecast = false) {
+            taskRevision += 1;
+            if (resetForecast) {
+                forecastAvailable.checked = false;
+                forecastPolicyConfirmed.checked = false;
+            }
+            semanticConfirmed.checked = false;
+            semanticContractValue.value = '';
+            semanticStatus.textContent = 'Review changed';
+            semanticStatus.classList.remove('is-confirmed');
+            hideSemanticError();
+            updateAnalysisSubmitState();
+        }
+
+        function syncTaskResult() {
+            const forecasting = analysisMode.value === 'forecast';
+            forecastSettings.hidden = !forecasting;
+            forecastSettings.disabled = !forecasting;
+            submitButton.firstChild.textContent = forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ';
+            taskType.value = forecasting ? 'daily_forecast' : 'descriptive_analysis';
+            taskDeliverable.value = forecasting ? 'forecast_evaluation' : 'evidence_summary';
+            taskResultDescription.textContent = forecasting
+                ? 'A daily forecast evaluation against simple baselines, plus an exploratory future forecast.'
+                : 'A descriptive evidence summary with calculations and limitations.';
+        }
+
+        function showTaskQuestions(review) {
+            showSemanticError(review.message || 'Review the missing task information.');
+            const fields = {question: 'prompt', observation_unit: 'task-observation-unit',
+                deliverable: 'analysis-mode', task_type: 'analysis-mode', confirmed: 'semantic-confirmed'};
+            const list = document.createElement('ul');
+            (review.questions || []).forEach((question) => {
+                const item = document.createElement('li');
+                const link = document.createElement('a');
+                link.href = `#${fields[question.field] || 'semantic-heading'}`;
+                link.textContent = question.question;
+                link.addEventListener('click', () => document.getElementById(fields[question.field] || 'semantic-heading').focus());
+                item.append(link);
+                list.append(item);
+            });
+            semanticError.append(list);
+        }
+
+        analysisForm.addEventListener('input', (event) => {
+            if (event.target !== semanticConfirmed && event.target !== fileInput
+                && event.target.name !== 'pilot_metrics') {
+                invalidateTaskConfirmation(![forecastAvailable, forecastPolicyConfirmed].includes(event.target));
+            }
+        });
 
         function semanticRowState(row) {
             return {
@@ -519,7 +623,10 @@
         }
 
         function renderSemanticContract(proposal) {
+            syncTaskResult();
             semanticProposal = proposal;
+            forecastAvailable.checked = false;
+            forecastPolicyConfirmed.checked = false;
             semanticPanel.hidden = false;
             semanticColumns.replaceChildren();
             semanticContractValue.value = '';
@@ -591,6 +698,12 @@
         }
 
         semanticPanel.addEventListener('change', (event) => {
+            taskRevision += 1;
+            syncTaskResult();
+            if (![semanticConfirmed, forecastAvailable, forecastPolicyConfirmed].includes(event.target)) {
+                forecastAvailable.checked = false;
+                forecastPolicyConfirmed.checked = false;
+            }
             if (event.target !== semanticConfirmed) {
                 syncSemanticDependencies();
                 semanticConfirmed.checked = false;
@@ -674,6 +787,7 @@
                     signal: controller.signal,
                 });
                 const payload = await readResponse(response);
+                if (readinessRequest !== controller) return;
                 if (!response.ok) {
                     throw new Error(payload.error || 'The dataset preflight could not be completed.');
                 }
@@ -725,6 +839,7 @@
                 const error = new Error(job.error || 'The analysis could not be started.');
                 error.readiness = job.readiness;
                 error.semanticContract = job.semantic_contract_error === true;
+                error.taskBrief = job.task_brief;
                 throw error;
             }
             statusNode.textContent = 'Analysis queued. Waiting for an available worker…';
@@ -733,6 +848,7 @@
 
         analysisForm.addEventListener('submit', async (event) => {
             event.preventDefault();
+            if (analysisBusy) return;
             const selectedFile = fileInput.files[0];
             if (!selectedFile) return;
             if (readinessState !== 'allowed') {
@@ -745,15 +861,48 @@
                 updateAnalysisSubmitState();
                 return;
             }
+            if (analysisMode.value === 'forecast') {
+                const selectedTarget = Array.from(semanticColumns.querySelectorAll('tr'))
+                    .map(semanticRowState).find((column) => column.name === semanticTarget.value);
+                if (!selectedTarget || selectedTarget.role !== 'measure' || !semanticTime.value) {
+                    showSemanticError('Daily forecasting requires a numeric measure target and a time column. Select them above, then confirm the review again.');
+                    return;
+                }
+            }
+            if (!analysisForm.reportValidity()) return;
+            syncTaskResult();
             semanticContractValue.value = JSON.stringify(serializeSemanticContract());
+            const reviewedSemantics = semanticContractValue.value;
+            const revision = taskRevision;
             const originalSubmitNodes = Array.from(submitButton.childNodes, (node) => node.cloneNode(true));
+            analysisBusy = true;
             submitButton.disabled = true;
             loadingIndicator.hidden = false;
             loadingIndicator.classList.remove('has-error');
-            loadingIndicator.textContent = 'Calculating evidence and building the dashboard…';
+            loadingIndicator.textContent = 'Reviewing task context before starting analysis…';
             try {
+                const response = await fetch(taskBriefUrl, {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/json', 'Accept': 'application/json',
+                        'X-CSRF-Token': analysisForm.elements.csrf_token.value},
+                    body: JSON.stringify({task_type: taskType.value, question: prompt.value,
+                        observation_unit: taskObservationUnit.value, deliverable: taskDeliverable.value,
+                        confirmed: semanticConfirmed.checked}),
+                });
+                const review = await readResponse(response);
+                if (revision !== taskRevision || selectedFile !== fileInput.files[0]
+                    || !semanticConfirmed.checked || readinessState !== 'allowed'
+                    || JSON.stringify(serializeSemanticContract()) !== reviewedSemantics) {
+                    throw new Error('The request changed during review. Review and confirm it again before starting.');
+                }
+                if (!response.ok || review.status !== 'ready_for_dataset_review') {
+                    const error = new Error(review.error || review.message || 'The task review could not finish.');
+                    error.taskBrief = review.task_brief || review;
+                    throw error;
+                }
                 await queueAnalysis(analysisForm, loadingIndicator);
             } catch (error) {
+                analysisBusy = false;
                 if (error.readiness) renderReadiness(error.readiness);
                 if (error.semanticContract) {
                     semanticConfirmed.checked = false;
@@ -762,12 +911,14 @@
                     semanticStatus.classList.remove('is-confirmed');
                     showSemanticError(error.message);
                 }
+                if (error.taskBrief) showTaskQuestions(error.taskBrief);
                 loadingIndicator.textContent = error.message;
                 loadingIndicator.classList.add('has-error');
                 updateAnalysisSubmitState();
                 submitButton.replaceChildren(
                     ...originalSubmitNodes.map((node) => node.cloneNode(true)),
                 );
+                syncTaskResult();
             }
         });
 
@@ -1006,6 +1157,8 @@
         });
 
         window.addEventListener('pageshow', () => {
+            analysisBusy = false;
+            taskRevision += 1;
             demoSubmit.disabled = false;
             demoSubmit.classList.remove('is-loading');
             demoSubmitLabel.textContent = 'Run the live demo';

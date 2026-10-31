@@ -60,6 +60,79 @@
             <span class="evidence-badge">Traceable output</span>
         </section>
 
+        {% if dashboard_data.task_brief %}
+        <section class="dashboard-section" aria-labelledby="task-brief-heading">
+            <div class="section-heading"><div><h2 id="task-brief-heading">Confirmed task context</h2></div><p>User-confirmed, not independently validated</p></div>
+            <div class="readiness-issue" role="note">
+                <p>One row represents: {{ dashboard_data.task_brief.observation_unit }}</p>
+                <p>Planned result: {{ 'Daily forecast evaluation against simple baselines, with an exploratory future forecast' if dashboard_data.task_brief.deliverable == 'forecast_evaluation' else 'Descriptive evidence summary with calculations and limitations' }}.</p>
+                <p>These are the user’s definitions. Confirmation is not proof of correct business interpretation, data fitness, or operational usefulness.</p>
+            </div>
+        </section>
+        {% endif %}
+
+        {% if dashboard_data.forecast %}
+        {% set forecast = dashboard_data.forecast %}
+        <section class="dashboard-section forecast-evaluation" aria-labelledby="forecast-heading">
+            <div class="section-heading"><div><h2 id="forecast-heading">Daily forecast evaluation</h2></div><p>{{ forecast.task.target_column }} · {{ forecast.task.horizon }} days · past target values only</p></div>
+            {% if forecast.availability %}
+            <div class="readiness-issue" role="note">
+                <h3>Forecast origin and target availability</h3>
+                <p>Fixed target reporting delay: {{ forecast.availability.reporting_delay_days }} whole days. Final holdout origin: {{ forecast.holdout.forecast_origin }}; available training targets through {{ forecast.holdout.train_end }}.</p>
+                <p>Future forecast origin: {{ forecast.future_forecast_origin }} ({{ 'explicit end-of-day issue date' if forecast.availability.origin_source == 'explicit_task_date' else 'last date in the file' }}); refit uses targets only through {{ forecast.future_fit_through }}. The unavailable gap is bridged recursively without actual target updates.</p>
+                {% if forecast.availability.history_mode == 'available_history_only' %}
+                <p>Available-history mode: the last source date is {{ forecast.availability.latest_input_date }}, exactly origin minus delay. No target rows for unavailable days are required, invented or imputed. Validation and holdout outcomes stop at {{ forecast.availability.evaluation_outcomes_available_through }}.</p>
+                {% else %}
+                <p>Validation and holdout outcomes stop at {{ forecast.availability.evaluation_outcomes_available_through }}. The final {{ forecast.availability.unavailable_tail_rows }} unavailable target rows are excluded from model selection, scoring and future fitting.</p>
+                {% endif %}
+                <p>Method selection uses validation outcomes only through {{ forecast.availability.selection_outcomes_available_through }}, already released at the final holdout origin.</p>
+                <p>This is an asserted fixed-delay simulation, not verified release timestamps or historical data vintages. Variable delays and revised targets are unsupported. Input dates are not assumed to be current.</p>
+            </div>
+            {% endif %}
+            {% if forecast.decision_policy %}
+            <div class="readiness-issue issue-warning" role="note">
+                {% if forecast.business_evaluation.status == 'criteria_met_on_holdout' %}
+                <h3>Decision criteria met on this historical holdout only</h3>
+                {% elif forecast.business_evaluation.status == 'domain_constraint_failed' %}
+                <h3>Decision criteria blocked by a domain constraint</h3>
+                {% else %}
+                <h3>Decision criteria not met or not established</h3>
+                {% endif %}
+                <p>Decision: {{ forecast.decision_policy.decision }}</p>
+                <p>Weighted error: {{ '%.3f'|format(forecast.business_evaluation.weighted_absolute_error) }}. Reference baseline: {{ '%.3f'|format(forecast.business_evaluation.baseline_weighted_absolute_error) }}. Relative reduction: {% if forecast.business_evaluation.relative_improvement is not none %}{{ '%+.1f%%'|format(forecast.business_evaluation.relative_improvement * 100) }}{% else %}Not defined{% endif %}.</p>
+                <p>Underprediction weight: {{ forecast.decision_policy.underprediction_weight }}; overprediction weight: {{ forecast.decision_policy.overprediction_weight }}. Required reduction: {{ '%.1f%%'|format(forecast.decision_policy.minimum_improvement * 100) }}. Maximum MAE: {{ forecast.decision_policy.maximum_mae if forecast.decision_policy.maximum_mae is not none else 'Not supplied' }}.</p>
+                <ul><li>Strictly lower weighted error: {{ 'Met' if forecast.business_evaluation.checks.strictly_lower_weighted_error else 'Not met' }}</li><li>Required relative reduction: {{ 'Met' if forecast.business_evaluation.checks.minimum_improvement else 'Not met or undefined' }}</li><li>Absolute MAE limit: {{ ('Met' if forecast.business_evaluation.checks.maximum_mae else 'Not met') if forecast.decision_policy.maximum_mae is not none else 'Not supplied — not assessed' }}</li></ul>
+                <p>Criteria were fixed before evaluation. Error weights are relative penalties, not financial savings. This is not approval for operational use or evidence of future reliability.</p>
+            </div>
+            {% endif %}
+            <div class="readiness-issue issue-warning" role="note">
+                {% if forecast.domain_constraints.status == 'failed' %}
+                <h3>Forecast violates the confirmed count domain</h3><p>Negative count predictions were produced. Do not use this forecast operationally.</p>
+                {% elif forecast.predictive_support.status == 'no_holdout_improvement' %}
+                <h3>No improvement over the baseline</h3><p>The selected model had higher or equal MAE on the final holdout. Training completed, but an advantage was not demonstrated.</p>
+                {% elif forecast.predictive_support.status == 'baseline_selected' %}
+                <h3>Simple baseline retained</h3><p>Validation did not justify selecting a more complex model.</p>
+                {% elif forecast.predictive_support.status == 'observed_holdout_improvement' %}
+                <h3>Lower MAE on this holdout — exploratory result</h3><p>This historical improvement is not proof of future reliability or production readiness.</p>
+                {% else %}
+                <h3>Forecast support not established</h3><p>No supported evaluation status is available. Do not use this forecast operationally.</p>
+                {% endif %}
+                <p>Model: {{ forecast.model_name }}. Reference baseline: {{ forecast.baseline_name }}. Selected using three earlier validation periods, before the final holdout. Selection criterion: {{ forecast.selection_metric }}.</p>
+                <p>Holdout: {{ forecast.holdout.start }} to {{ forecast.holdout.end }}. Training ended {{ forecast.holdout.train_end }}. Errors use the target’s stored unit: {{ forecast.confirmed_task.target_unit }}.</p>
+                {% if not forecast.decision_policy %}<p>No decision criteria were supplied. Business suitability has not been assessed.</p>{% endif %}
+            </div>
+            <div class="kpi-grid">
+                <article class="kpi-card"><div class="kpi-label">Selected method MAE</div><strong>{{ "%.2f"|format(forecast.holdout.metrics.mae) }}</strong><small>Mean absolute error per day, not accuracy percent.</small></article>
+                <article class="kpi-card"><div class="kpi-label">Reference baseline MAE</div><strong>{{ "%.2f"|format(forecast.holdout.baseline_metrics.mae) }}</strong><small>Baseline selected on earlier validation only.</small></article>
+                <article class="kpi-card"><div class="kpi-label">MAE improvement vs baseline</div><strong>{% if forecast.holdout.mae_improvement is not none %}{{ "%+.1f%%"|format(forecast.holdout.mae_improvement * 100) }}{% else %}Not defined{% endif %}</strong><small>Negative means worse. Undefined when the baseline error is zero or the ratio is not representable.</small></article>
+            </div>
+            <article class="table-card"><h3>Final holdout predictions</h3><div class="table-scroll"><table><thead><tr><th>Date</th><th>Observed</th><th>Selected method</th><th>Baseline</th></tr></thead><tbody>{% for row in forecast.holdout.predictions %}<tr><td>{{ row.date }}</td><td>{{ "%.2f"|format(row.actual) }}</td><td>{{ "%.2f"|format(row.prediction) }}</td><td>{{ "%.2f"|format(row.baseline) }}</td></tr>{% endfor %}</tbody></table></div></article>
+            {% if forecast.domain_constraints.status != 'failed' %}
+            <article class="table-card"><h3>Exploratory future point forecast</h3><p>Separate refit through {{ forecast.future_fit_through }} after evaluation. Not approved for operational use. No calibrated prediction interval or automated monitoring is available.</p><div class="table-scroll"><table><thead><tr><th>Date</th><th>Point forecast</th></tr></thead><tbody>{% for row in forecast.future_forecast %}<tr><td>{{ row.date }}</td><td>{{ "%.2f"|format(row.prediction) }}</td></tr>{% endfor %}</tbody></table></div></article>
+            {% endif %}
+        </section>
+        {% endif %}
+
         {% if dashboard_data.readiness %}
         <section class="dashboard-section" aria-labelledby="readiness-heading">
             <div class="section-heading"><div><span>02</span><h2 id="readiness-heading">Dataset readiness</h2></div><p>{{ dashboard_data.readiness.summary }}</p></div>
