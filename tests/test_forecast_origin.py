@@ -7,7 +7,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from src.forecasting import ForecastTask, _forecast, forecast_series, validate_forecast_input
+from src.forecasting import CANDIDATES, ForecastTask, _forecast, forecast_series, validate_forecast_input
 from tests.test_forecasting import frame
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
 from tests.test_forecast_policy import POLICY_FORM
@@ -110,7 +110,8 @@ class ForecastOriginTests(unittest.TestCase):
         with patch('src.forecasting._forecast', side_effect=observe):
             report = forecast_series(frame(), self.task)
         self.assertEqual(report['status'], 'ok')
-        self.assertEqual([len(history) for history, _ in calls[:12]], [128, 135, 142] * 4)
+        self.assertEqual([len(history) for history, _ in calls[:3 * len(CANDIDATES)]],
+                         [128, 135, 142] * len(CANDIDATES))
         self.assertEqual(len(calls[-1][0]), 160)
         for history, horizon in calls:
             np.testing.assert_array_equal(history, values[:len(history)])

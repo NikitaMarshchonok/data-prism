@@ -118,6 +118,10 @@ class VibeDashForecastRouteTests(unittest.TestCase):
                 self.assertEqual(manifest['future_origin'], '2020-06-10')
                 self.assertEqual(manifest['future_fit_through'], '2020-06-08')
                 self.assertEqual(manifest['holdout_end'], '2020-06-08')
+                self.assertEqual(manifest['historical_backtest']['contract'], 'daily-rolling-backtest-v1')
+                self.assertEqual(manifest['historical_backtest']['summary']['scored_windows'], 3)
+                self.assertIn('Historical rolling-origin evaluation', html)
+                self.assertNotIn('evidence', json.dumps(manifest['historical_backtest']))
                 self.assertNotIn('predictions', json.dumps(manifest))
                 with owner.session_transaction() as browser: scope = browser['vibedash_analysis_scope_id']
                 job = AnalysisJobStore(web_app.app.config['VIBEDASH_JOB_STORE_PATH']).get(queued.get_json()['job_id'], scope)

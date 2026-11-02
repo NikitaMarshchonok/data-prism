@@ -1,6 +1,10 @@
 # Daily forecast evaluation
 
 This is the first bounded forecasting engine, not a production model service.
+An explicit local-only model snapshot and frozen-inference CLI is now available;
+see [FORECAST_MODEL_ARTIFACT.md](FORECAST_MODEL_ARTIFACT.md). Ordinary web runs do
+not save models; hosted persistence, live outcome monitoring and retraining
+remain unavailable.
 It is available through Python, a local CLI, and an opt-in VibeDash background
 job. The browser workflow binds the task to the reviewed semantic contract;
 Python/CLI callers explicitly identify the numeric target and daily time column.
@@ -11,8 +15,8 @@ The daily engine supports one series with one finite real numeric observation
 per calendar day. `daily-forecast-v1` retains the zero-delay convention: the
 target for a completed day is known at that day's end. `daily-forecast-v2` adds
 an explicitly asserted constant `reporting_delay_days` from 1 to 30 whole
-calendar days; zero or an omitted delay retains v1 settings and numerical
-behaviour. `daily-forecast-v3` adds an explicit `forecast_origin` date and an
+calendar days; zero or an omitted delay retains the v1 availability convention.
+`daily-forecast-v3` adds an explicit `forecast_origin` date and an
 available-history-only input convention. The horizon is the next 1–90 days
 after the forecast origin.
 
@@ -76,7 +80,8 @@ information boundary as a retrospective input with its tail removed.
 Integer targets outside exact float64 precision are rejected rather than
 silently losing integer information during model conversion.
 
-Only target lags are predictors. All other columns are unused, even if they
+Only past target history is used: learned predictors use lags, while historical
+constant baselines use summaries of the available prefix. All other columns are unused, even if they
 perfectly explain the target. For the bike example, neither the contemporaneous
 `casual`/`registered` components nor observed future weather enter the model.
 This narrow boundary avoids guessing covariate availability. It is not a
@@ -90,8 +95,8 @@ general proof that an arbitrary feature is safe for forecasting.
 2. End validation outcomes no later than holdout origin minus delay. On this
    earlier history, use three non-overlapping validation horizons, with an
    expanding training prefix. Each has the same length as the requested horizon.
-3. Compare last-value and seasonal-naive baselines, standardized lag Ridge,
-   and lag Random Forest. Lags are 1, the seasonal period, and twice that
+3. Compare last-value, seasonal-naive, historical-mean and historical-median
+   baselines, standardized lag Ridge, and lag Random Forest. Lags are 1, the seasonal period, and twice that
    period. Seasonal period defaults to seven days but is an explicit task
    assumption, not a detected seasonal property. Hyperparameters are fixed.
 4. Fit each learned transform/model on its available prefix only, ending at
@@ -112,6 +117,32 @@ general proof that an arbitrary feature is safe for forecasting.
    the censored tail or overwrite the original holdout metrics. A seasonal
    baseline advances its cycle through the gap; it does not reset at the first
    scored day.
+
+The candidate set is independently versioned from the input/availability
+contract. The default `daily-lag-candidates-v2` includes the four baselines before
+the two learned methods in the order above. Historical mean and median are
+calculated from the **whole available training prefix**, not the full uploaded
+series or the evaluation horizon. They remain constant across unavailable gap
+days and the scored horizon; invented gap targets are not added to their
+summary. Both are baseline choices, including when a business policy is present:
+they are evaluated using the declared loss, not labelled learned predictive
+support. The median is not claimed optimal under asymmetric error costs.
+On mostly-zero series a zero median may score well under MAE without being an
+estimate of expected total demand or an appropriate stocking/staffing decision.
+Point forecasts are not automatically conditional expectations; interpretation
+depends on the loss and estimator. Clarify the decision and underprediction
+costs rather than presenting a low MAE as business suitability.
+These simple constants may be inappropriate under nonstationarity; validation
+can select other methods, but it does not guarantee recovery after a regime shift.
+
+Python evaluation can explicitly request `candidate_suite="daily-lag-candidates-v1"`
+to reproduce the original two-baseline/four-candidate protocol. Unknown suites
+fail before fitting, with no automatic fallback. The browser/CLI default uses
+v2; this is a deliberate method-selection change, not a change to date cutoffs,
+input task contracts or stored historical reports. The suite and included
+baselines are recorded in new reports and aggregate audits; old audit records
+without these fields retain their original interpretation. No previously
+stored prediction is recomputed or relabelled automatically.
 
 The protocol follows the separation of past training data and future
 evaluation used in [scikit-learn's lagged-feature example](https://scikit-learn.org/stable/auto_examples/applications/plot_time_series_lagged_features.html)
@@ -171,9 +202,72 @@ The description is retained in the temporary owned job/session and result page;
 hashing it is not anonymization.
 
 For a target explicitly confirmed as a count, negative observations are rejected
-and negative future point forecasts are flagged and withheld from the displayed
-future table. The raw forecast is not clipped or rounded to manufacture a valid
-result. Non-negative output alone does not establish domain validity.
+before fitting. The web worker's `count-forecast-domain-v1` check now covers
+three returned scopes: the selected method on the final holdout, its reference
+baseline on that holdout, and the separate future point forecast. Every scope
+must contain the full expected horizon of finite real estimates; missing,
+short/long, boolean, non-numeric or non-finite output is rejected rather than
+labelled nonnegative by an empty/false negative-value check.
+
+A negative value in any scope sets domain status `failed`, records aggregate
+checked/negative counts and fixed scope names, blocks an otherwise successful
+business-criteria status, and withholds the displayed future table. A positive
+future forecast cannot rescue an invalid historical evaluation or reference.
+The original rows and metrics remain intact; no clipping, rounding, retry or
+post-holdout method reselection manufactures a valid result. Failed historical
+forecasts remain visible as evidence. The audit contains only aggregate scope
+counts, not offending values, dates or source rows.
+
+Earlier validation-fold predictions are not retained and are not certified by
+this check. Non-negative output alone does not establish domain validity,
+usefulness or calibrated expected demand. General numeric targets do not
+inherit non-negativity assumptions. Older retained domain metadata without the
+new contract does not establish that all three scopes were checked; stored
+historical reports are not retroactively recomputed or reclassified.
+
+### Delivery consistency, not acceptance
+
+Before accepting a newly calculated result, the web worker and local CLI run
+`forecast-result-integrity-v1`. The checker binds returned holdout dates and
+actuals to the uploaded chronological target series, independently recomputes
+method/reference MAE, RMSE and (when declared) asymmetric weighted error with
+scalar arithmetic, and checks the relative improvement, support label and
+business-policy flags. The future dates, available refit cutoff and complete
+finite point-forecast horizon must match the confirmed task and delay convention.
+It does not trust an existing `result_integrity` badge on a returned object.
+
+Material inconsistencies reject the result; the checker does not replace
+metrics, clip predictions, retry another method, change criteria or refit a
+model. No decision policy means no asserted business suitability. The recorded
+guard status is `consistent`, not `approved`, `reliable` or `production_ready`.
+Aggregate audit metadata records the contract and checked row counts, not
+per-day facts or predictions. Retained older reports without this marker are
+not retroactively certified. Direct Python calls to `forecast_series` remain
+raw evaluations; callers may explicitly use `validate_forecast_result` for the
+same delivery check. The synthetic outer benchmark retains its own scorer.
+
+Metric comparisons use relative tolerance `1e-9` and absolute tolerance `1e-12`
+for independent summation roundoff; zero/nonzero reference errors remain
+distinct and source facts/dates must match exactly. Decision predicates are
+checked on the verified reported metrics, so independent summation does not
+silently move an exact business threshold. This numerical tolerance is not an
+acceptance threshold or proof of exact real-arithmetic equality. The guard
+checks returned evidence, not fitting internals, all earlier validation scores,
+predictor availability, leakage freedom, usefulness or professional competence.
+Those require the separate temporal tests and independent real-case evaluation.
+
+### Historical evaluation on the uploaded series
+
+New completed web and CLI runs additionally include `historical_backtest`: three
+fixed nonoverlapping historical horizons, using the same task settings, policy
+and candidate suite. Each origin selects on its own released prefix; an
+independent scorer compares its future predictions with outer facts and all
+declared references. Outer errors never reselect the final future method.
+Insufficient history retains all three unevaluated slots; failed windows and
+candidate/domain failures remain visible. This is dependent historical evidence,
+not three independent certifications. The last window overlaps the main holdout.
+The complete cutoff rules, minimum history, failure statuses and privacy boundary
+are in [FORECAST_BACKTEST.md](FORECAST_BACKTEST.md).
 
 ### CLI and Python
 
@@ -193,7 +287,10 @@ named columns), performs no upload, leaves the input unchanged and prints
 strict JSON. Exit code 0 means the protocol completed, **not** that a learned
 model beat its baseline; inspect `predictive_support` and holdout metrics.
 Exit code 1 means an input, task or evaluation failure. The report includes
-actual holdout values and forecasts and should be treated as data-bearing.
+actual holdout values, historical outer-window facts/predictions and forecasts
+and should be treated as data-bearing. Inspect `historical_backtest.status`
+and its failed/scored counts separately: a successful main run can have too
+little history for all three additional windows or an unsuccessful window.
 
 ```python
 from src.forecasting import ForecastTask, forecast_series
@@ -265,8 +362,9 @@ method can fail to beat its reference on the final holdout. The status reports
 that outcome instead of claiming success or choosing a replacement after seeing
 the answers. Noise can yield a chance positive descriptive improvement. No IID
 permutation significance, calibrated prediction intervals, fairness assurance,
-automatic deployment, model persistence, outcome monitoring or retraining are
-claimed. The Python/CLI core accepts general numeric point forecasts; the web
+automatic deployment, hosted model persistence, outcome monitoring or retraining
+are claimed. Explicit local JSON snapshots are a separate experimental workflow,
+not cloud serving or operational approval. The Python/CLI core accepts general numeric point forecasts; the web
 adapter adds the explicitly confirmed count-domain check described above.
 Other target constraints are not inferred or silently imposed.
 

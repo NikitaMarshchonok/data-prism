@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from src.forecasting import ForecastTask, _forecast, forecast_series
+from src.forecasting import CANDIDATES, ForecastTask, _forecast, forecast_series
 from tests.test_forecasting import frame, TASK
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
 from tests.test_forecast_policy import POLICY_FORM
@@ -84,8 +84,9 @@ class ForecastAvailabilityTests(unittest.TestCase):
         with patch('src.forecasting._forecast', side_effect=observe):
             report = forecast_series(source, ForecastTask('demand', 'date', horizon, 7, delay))
         self.assertEqual(report['status'], 'ok')
-        self.assertEqual([len(item[0]) for item in calls[:12]], [117, 124, 131] * 4)
-        self.assertTrue(all(len(history) == 143 for history, _, _ in calls[12:-1]))
+        validation_calls = 3 * len(CANDIDATES)
+        self.assertEqual([len(item[0]) for item in calls[:validation_calls]], [117, 124, 131] * len(CANDIDATES))
+        self.assertTrue(all(len(history) == 143 for history, _, _ in calls[validation_calls:-1]))
         self.assertEqual(len(calls[-1][0]), 155)
         for history, steps, _ in calls:
             np.testing.assert_array_equal(history, values[:len(history)])

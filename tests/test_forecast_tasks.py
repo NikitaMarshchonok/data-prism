@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from src.semantic_contract import infer_semantic_contract, validate_semantic_contract
+from src.forecasting import forecast_series
 from vibedash.forecast_tasks import (
     ForecastTaskError, forecast_task_from_form, run_confirmed_forecast, forecast_audit_view,
 )
@@ -97,7 +98,8 @@ class ConfirmedForecastTaskTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'negative observations'):
             forecast_task_from_form(invalid, self.semantics, FORM)
         task = forecast_task_from_form(self.frame, self.semantics, FORM)
-        report = {'status': 'ok', 'future_forecast': [{'prediction': -1}]}
+        report = forecast_series(self.frame, task['settings'])
+        report['future_forecast'][0]['prediction'] = -1.
         with patch('vibedash.forecast_tasks.forecast_series', return_value=report):
             result = run_confirmed_forecast(self.frame, self.semantics, task)
         self.assertEqual(result['domain_constraints']['status'], 'failed')

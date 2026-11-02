@@ -52,7 +52,8 @@ class ForecastPolicyTests(unittest.TestCase):
                     fit.assert_not_called()
 
     def test_objective_changes_model_and_baseline_using_validation_only(self):
-        values = {'last_value': 9., 'seasonal_naive': 12., 'lag_ridge': 11.5, 'lag_random_forest': 8.}
+        values = {'last_value': 9., 'seasonal_naive': 12., 'historical_mean': 14.,
+                  'historical_median': 8., 'lag_ridge': 11.5, 'lag_random_forest': 8.}
         def predict(history, horizon, period, candidate):
             return np.repeat(values[candidate], horizon)
         data = frame(np.repeat(10., 160))
@@ -127,8 +128,9 @@ class ForecastPolicyTests(unittest.TestCase):
         data = daily_frame()
         semantics = confirmed(data)
         task = forecast_task_from_form(data, semantics, FORM | POLICY_FORM)
-        fake = {'status': 'ok', 'future_forecast': [{'prediction': -1}],
-                'business_evaluation': {'status': 'criteria_met_on_holdout'}}
+        fake = forecast_series(data, task['settings'], decision_policy=task['decision_policy'])
+        self.assertEqual(fake['business_evaluation']['status'], 'criteria_met_on_holdout')
+        fake['future_forecast'][0]['prediction'] = -1.
         with patch('vibedash.forecast_tasks.forecast_series', return_value=fake):
             result = run_confirmed_forecast(data, semantics, task)
         self.assertEqual(result['business_evaluation']['status'], 'domain_constraint_failed')

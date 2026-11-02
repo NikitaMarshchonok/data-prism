@@ -7,6 +7,8 @@ from tests import test_vibedash_standalone_export as export_fixture
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
 from tests.test_forecast_policy import POLICY_FORM
 from vibedash.forecast_tasks import forecast_task_from_form, run_confirmed_forecast
+from src.forecasting import ForecastTask
+from src.forecast_backtest import historical_forecast_backtest
 
 
 class ForecastResultRenderingTests(unittest.TestCase):
@@ -74,6 +76,45 @@ class ForecastResultRenderingTests(unittest.TestCase):
         self.assertIn('&lt;script&gt;untrusted decision&lt;/script&gt;', html)
         self.assertNotIn('<script>untrusted decision</script>', html)
         self.assertIn('not financial savings', html)
+
+    def test_rolling_evaluation_has_accessible_window_table_and_no_accuracy_claim(self):
+        html = self.render_forecast(self.forecast)
+        self.assertIn('Historical rolling-origin evaluation', html)
+        self.assertIn('Per-window errors and retained unsuccessful results', html)
+        self.assertIn('aria-label="Historical forecast comparison windows" tabindex="0"', html)
+        self.assertIn('scope="col"', html)
+        self.assertIn('scope="row"', html)
+        self.assertIn('3 of 3 windows scored', html)
+        self.assertIn('not an accuracy percentage', html)
+        self.assertIn('This does not reselect the final future model', html)
+
+    def test_short_history_and_failed_windows_are_not_rendered_as_success(self):
+        report = copy.deepcopy(self.forecast)
+        report['historical_backtest'] = historical_forecast_backtest(daily_frame().iloc[:70], ForecastTask('cnt', 'dteday', 7))
+        html = self.render_forecast(report)
+        self.assertIn('Not evaluated — insufficient history', html)
+        self.assertIn('Required: 79 daily rows; supplied: 70', html)
+        self.assertIn('Not scored', html)
+        report = copy.deepcopy(self.forecast)
+        backtest = report['historical_backtest']
+        backtest['status'] = 'completed_with_issues'
+        backtest['summary'].update(failed_windows=1, scored_windows=2)
+        backtest['windows'][0].update(status='error', metrics=None, baseline_metrics=None, comparison=None)
+        html = self.render_forecast(report)
+        self.assertIn('Evaluation has issues: 1 failed windows', html)
+        self.assertIn('Evaluation failed', html)
+        self.assertIn('Not scored', html)
+
+    def test_window_labels_are_escaped_and_weighted_errors_are_visible(self):
+        frame = daily_frame()
+        semantics = confirmed(frame)
+        report = run_confirmed_forecast(frame, semantics, forecast_task_from_form(frame, semantics, FORM | POLICY_FORM))
+        report['historical_backtest']['windows'][0]['model_name'] = '<script>untrusted method</script>'
+        html = self.render_forecast(report)
+        self.assertIn('&lt;script&gt;untrusted method&lt;/script&gt;', html)
+        self.assertNotIn('<script>untrusted method</script>', html)
+        self.assertIn('Weighted loss:', html)
+        self.assertIn('weighted absolute error under the declared preferences', html)
 
 
 if __name__ == '__main__':

@@ -127,6 +127,33 @@
                 <article class="kpi-card"><div class="kpi-label">MAE improvement vs baseline</div><strong>{% if forecast.holdout.mae_improvement is not none %}{{ "%+.1f%%"|format(forecast.holdout.mae_improvement * 100) }}{% else %}Not defined{% endif %}</strong><small>Negative means worse. Undefined when the baseline error is zero or the ratio is not representable.</small></article>
             </div>
             <article class="table-card"><h3>Final holdout predictions</h3><div class="table-scroll"><table><thead><tr><th>Date</th><th>Observed</th><th>Selected method</th><th>Baseline</th></tr></thead><tbody>{% for row in forecast.holdout.predictions %}<tr><td>{{ row.date }}</td><td>{{ "%.2f"|format(row.actual) }}</td><td>{{ "%.2f"|format(row.prediction) }}</td><td>{{ "%.2f"|format(row.baseline) }}</td></tr>{% endfor %}</tbody></table></div></article>
+            {% if forecast.historical_backtest %}
+            {% set backtest = forecast.historical_backtest %}
+            <article class="table-card rolling-backtest" aria-labelledby="rolling-backtest-heading">
+                <h3 id="rolling-backtest-heading">Historical rolling-origin evaluation</h3>
+                <p>Three predeclared issue dates, {{ backtest.protocol.horizon }} days each. Each run uses only the history available at that date, including the confirmed reporting delay. This does not reselect the final future model.</p>
+                {% if backtest.status == 'insufficient_history' %}
+                <p role="note">Not evaluated — insufficient history for all three windows. Required: {{ backtest.required_source_rows }} daily rows; supplied: {{ backtest.provided_source_rows }}. No shorter protocol was substituted.</p>
+                {% else %}
+                <p>{{ backtest.summary.scored_windows }} of {{ backtest.summary.scheduled_windows }} windows scored. Against the validation-selected reference: {{ backtest.summary.better }} better, {{ backtest.summary.tie }} tied, {{ backtest.summary.worse }} worse. These are window counts, not an accuracy percentage.</p>
+                {% if backtest.status != 'completed' %}<p role="note">Evaluation has issues: {{ backtest.summary.failed_windows }} failed windows, {{ backtest.summary.domain_failed_windows }} count-domain failures, {{ backtest.summary.candidate_failures }} candidate failures. Do not interpret incomplete results as acceptance.</p>{% endif %}
+                {% endif %}
+                <p>Comparison criterion: {{ 'weighted absolute error under the declared preferences' if backtest.protocol.objective == 'weighted_absolute_error' else 'MAE' }}. A lower error on these dependent historical windows is not proof of future reliability or business suitability.</p>
+                <div class="table-scroll" role="region" aria-label="Historical forecast comparison windows" tabindex="0"><table>
+                    <caption>Per-window errors and retained unsuccessful results</caption>
+                    <thead><tr><th scope="col">Issue date / scored period</th><th scope="col">Method</th><th scope="col">Method MAE</th><th scope="col">Reference MAE</th><th scope="col">Comparison</th></tr></thead>
+                    <tbody>{% for window in backtest.windows %}<tr>
+                        <th scope="row">{{ window.forecast_origin }}<br><small>{{ window.start }} to {{ window.end }}</small></th>
+                        <td>{{ window.model_name or 'Not evaluated' }}</td>
+                        <td>{% if window.metrics is not none %}{{ '%.3f'|format(window.metrics.mae) }}{% if backtest.protocol.objective == 'weighted_absolute_error' %}<br><small>Weighted loss: {{ '%.3f'|format(window.metrics.weighted_absolute_error) }}</small>{% endif %}{% else %}Not scored{% endif %}</td>
+                        <td>{% if window.baseline_metrics is not none %}{{ '%.3f'|format(window.baseline_metrics.mae) }}<br><small>{{ window.baseline_name }}</small>{% if backtest.protocol.objective == 'weighted_absolute_error' %}<br><small>Weighted loss: {{ '%.3f'|format(window.baseline_metrics.weighted_absolute_error) }}</small>{% endif %}{% else %}Not scored{% endif %}</td>
+                        <td>{% if window.comparison %}{{ {'better': 'Better', 'tie': 'Tied', 'worse': 'Worse'}.get(window.comparison.outcome, 'Not established') }}{% else %}Not scored{% endif %}{% if window.status not in ['scored', 'not_evaluated'] %}<br><small>{{ {'error': 'Evaluation failed', 'scored_domain_failure': 'Count-domain failure', 'scored_with_candidate_failures': 'Candidate failures'}.get(window.status, 'Not established') }}</small>{% endif %}
+                        {% if window.business_evaluation and window.business_evaluation.status != 'not_specified' %}<br><small>{{ 'Decision criteria met on this window only' if window.business_evaluation.status == 'criteria_met_on_holdout' else 'Decision criteria not met or blocked' }}</small>{% endif %}</td>
+                    </tr>{% endfor %}</tbody>
+                </table></div>
+                <p>Only one series and three historical origins are assessed. Missing evaluation is not success. No operational approval, confidence interval or live outcome monitoring is provided.</p>
+            </article>
+            {% endif %}
             {% if forecast.domain_constraints.status != 'failed' %}
             <article class="table-card"><h3>Exploratory future point forecast</h3><p>Separate refit through {{ forecast.future_fit_through }} after evaluation. Not approved for operational use. No calibrated prediction interval or automated monitoring is available.</p><div class="table-scroll"><table><thead><tr><th>Date</th><th>Point forecast</th></tr></thead><tbody>{% for row in forecast.future_forecast %}<tr><td>{{ row.date }}</td><td>{{ "%.2f"|format(row.prediction) }}</td></tr>{% endfor %}</tbody></table></div></article>
             {% endif %}

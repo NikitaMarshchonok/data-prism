@@ -87,3 +87,21 @@ Broader validation should add
 domain-specific golden datasets, repeated null simulations, fairness checks,
 and externally reviewed acceptance criteria before operational decisions are
 automated.
+
+## Separate rolling-origin forecasting report
+
+`evaluate_forecast_benchmark.py` additionally evaluates seven synthetic regimes
+over predeclared outer issue dates, independently scoring future forecasts and
+all declared simple references. The v1 suite keeps last-value and seasonal
+naive; v2 additionally includes historical mean and median. It retains failed runs and baseline wins, without
+changing this gate's five scenarios or thresholds. Its green integrity result
+does **not** establish predictive acceptance. The versioned protocol, failure
+semantics and limitations are in [FORECAST_BENCHMARK.md](FORECAST_BENCHMARK.md).
+
+Uploaded-series web/CLI runs now also use three fixed historical issue dates;
+see [FORECAST_BACKTEST.md](FORECAST_BACKTEST.md). They share the independent scalar
+scorer/reference builder in `src/forecast_scoring.py` with the synthetic benchmark,
+not the fitted engine's private metric/baseline implementation. Source-isolation,
+short-history, failure retention and per-window evidence have separate regression
+tests. This integration does not change gate thresholds or supply real-client
+acceptance evidence.

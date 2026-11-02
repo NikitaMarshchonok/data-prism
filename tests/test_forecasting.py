@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from src.forecasting import ForecastTask, _forecast, forecast_series
+from src.forecasting import CANDIDATES, ForecastTask, _forecast, forecast_series
 from src.ml_predictor import predict_target, _select_target
 
 
@@ -134,8 +134,9 @@ class ForecastingTests(unittest.TestCase):
         with patch("src.forecasting._forecast", side_effect=observe):
             report = forecast_series(frame(), TASK)
         self.assertEqual(report["status"], "ok")
-        self.assertEqual(lengths[:12], [132, 139, 146] * 4)
-        self.assertEqual(lengths[12:14], [153, 153])
+        validation_calls = 3 * len(CANDIDATES)
+        self.assertEqual(lengths[:validation_calls], [132, 139, 146] * len(CANDIDATES))
+        self.assertEqual(lengths[validation_calls:validation_calls + 2], [153, 153])
         self.assertEqual(lengths[-1], 160)
         self.assertEqual(len(report["future_forecast"]), 7)
         self.assertGreater(report["future_forecast"][0]["date"], report["future_fit_through"])

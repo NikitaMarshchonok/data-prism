@@ -10,6 +10,9 @@ from src.forecasting import (
 )
 from src.semantic_contract import validate_semantic_contract
 from src.forecast_policy import validate_forecast_policy, CONTRACT as DECISION_POLICY_CONTRACT
+from src.forecast_domain import evaluate_count_forecast
+from src.forecast_result import validate_forecast_result
+from src.forecast_backtest import historical_forecast_backtest, backtest_audit_view
 
 
 CONTRACT = 'confirmed-daily-forecast-task-v1'
@@ -139,16 +142,28 @@ def run_confirmed_forecast(frame, semantics, stored_task):
     if dict(stored_task) != expected:
         raise ForecastTaskError('The forecast task no longer matches the confirmed target, dates or units. Review it again.')
     report = forecast_series(frame, expected['settings'], decision_policy=expected.get('decision_policy'))
-    if report['status'] != 'ok':
+    if not isinstance(report, Mapping) or report.get('status') != 'ok':
         raise ForecastTaskError('The forecast evaluation could not complete; no model result was accepted.')
+    try:
+        integrity = validate_forecast_result(report, frame, expected['settings'],
+                                             decision_policy=expected.get('decision_policy'))
+    except ValueError as error:
+        raise ForecastTaskError('The forecast result is inconsistent with its source facts, dates or scoring policy; no result was accepted.') from error
+    report['result_integrity'] = integrity
     report['confirmed_task'] = expected
     report['domain_constraints'] = {'status': 'not_assessed'}
     if expected['target_unit'] == 'count':
-        invalid = any(row['prediction'] < 0 for row in report['future_forecast'])
-        report['domain_constraints'] = {'status': 'failed' if invalid else 'nonnegative_point_forecast',
-                                        'note': 'Count forecasts are expected values, not rounded integer observations.'}
-        if invalid and report.get('business_evaluation', {}).get('status') == 'criteria_met_on_holdout':
+        try:
+            report['domain_constraints'] = evaluate_count_forecast(report, expected['settings']['horizon'])
+        except ValueError as error:
+            raise ForecastTaskError('The count forecast output is incomplete or invalid; no domain-valid result was accepted.') from error
+        if (report['domain_constraints']['status'] == 'failed'
+                and report.get('business_evaluation', {}).get('status') == 'criteria_met_on_holdout'):
             report['business_evaluation']['status'] = 'domain_constraint_failed'
+    report['historical_backtest'] = historical_forecast_backtest(
+        frame, expected['settings'], decision_policy=expected.get('decision_policy'),
+        target_unit=expected['target_unit'], candidate_suite=report['candidate_suite'],
+    )
     return report
 
 
@@ -162,6 +177,11 @@ def forecast_audit_view(report):
             key: value for key, value in confirmed_metadata['decision_policy'].items() if key != 'decision'
         }
     return {'contract': report['contract'], 'confirmed_task': confirmed_metadata,
+            'historical_backtest': (backtest_audit_view(report['historical_backtest'])
+                                    if report.get('historical_backtest') else {'status': 'not_assessed'}),
+            'result_integrity': report.get('result_integrity', {'status': 'not_assessed'}),
+            'candidate_suite': report.get('candidate_suite', 'daily-lag-candidates-v1'),
+            'baseline_candidates': report.get('baseline_candidates', ['last_value', 'seasonal_naive']),
             'status': report['predictive_support']['status'], 'model_name': report['model_name'],
             'baseline_name': report['baseline_name'], 'validation_folds': report['cv_folds'],
             'holdout_start': report['holdout']['start'], 'holdout_end': report['holdout']['end'],

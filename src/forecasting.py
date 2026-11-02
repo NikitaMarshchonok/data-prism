@@ -5,6 +5,7 @@ imputation. Every validation forecast predicts its entire horizon recursively
 without observing the actual target inside that horizon.
 """
 from dataclasses import asdict, dataclass
+import math
 import re
 from typing import Mapping
 
@@ -25,7 +26,11 @@ DELAY_CONTRACT = "daily-forecast-v2"
 ORIGIN_CONTRACT = "daily-forecast-v3"
 AVAILABILITY_CONTRACT = "forecast-origin-availability-v1"
 ORIGIN_AVAILABILITY_CONTRACT = "forecast-origin-availability-v2"
-CANDIDATES = ("last_value", "seasonal_naive", "lag_ridge", "lag_random_forest")
+LEGACY_CANDIDATE_SUITE = "daily-lag-candidates-v1"
+CANDIDATE_SUITE = "daily-lag-candidates-v2"
+LEGACY_CANDIDATES = ("last_value", "seasonal_naive", "lag_ridge", "lag_random_forest")
+BASELINES = ("last_value", "seasonal_naive", "historical_mean", "historical_median")
+CANDIDATES = BASELINES + ("lag_ridge", "lag_random_forest")
 VALIDATION_FOLDS = 3
 MAX_ROWS = 5000
 
@@ -168,26 +173,44 @@ def _lags(period):
     return sorted({1, period, 2 * period})
 
 
+def _fit_lag_model(history, period, candidate):
+    """Shared fit definition for evaluation and explicit local model snapshots."""
+    lags = _lags(period)
+    start = max(lags)
+    X = np.asarray([[history[index - lag] for lag in lags]
+                    for index in range(start, len(history))])
+    y = history[start:]
+    if candidate == "lag_ridge":
+        model = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
+    elif candidate == "lag_random_forest":
+        model = RandomForestRegressor(n_estimators=60, min_samples_leaf=3,
+                                      max_depth=8, random_state=42, n_jobs=1)
+    else:
+        raise ValueError("Unknown learned forecast candidate.")
+    model.fit(X, y)
+    return model
+
+
 def _forecast(history, horizon, period, candidate):
     """Only the prefix is accepted: future actuals cannot enter recursion."""
     if candidate == "last_value":
         predicted = np.repeat(history[-1], horizon)
     elif candidate == "seasonal_naive":
         predicted = np.asarray([history[-period + (step % period)] for step in range(horizon)])
+    elif candidate == "historical_mean":
+        # Scale before summation so a finite average need not overflow merely
+        # because the unscaled sum does. No future/gap outcomes enter history.
+        mean = math.fsum(float(value) / len(history) for value in history)
+        predicted = np.repeat(mean, horizon)
+    elif candidate == "historical_median":
+        ordered = sorted(float(value) for value in history)
+        middle = len(ordered) // 2
+        median = (ordered[middle] if len(ordered) % 2 else
+                  ordered[middle - 1] / 2 + ordered[middle] / 2)
+        predicted = np.repeat(median, horizon)
     else:
         lags = _lags(period)
-        start = max(lags)
-        X = np.asarray([[history[index - lag] for lag in lags]
-                        for index in range(start, len(history))])
-        y = history[start:]
-        if candidate == "lag_ridge":
-            model = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
-        elif candidate == "lag_random_forest":
-            model = RandomForestRegressor(n_estimators=60, min_samples_leaf=3,
-                                          max_depth=8, random_state=42, n_jobs=1)
-        else:
-            raise ValueError("Unknown forecast candidate.")
-        model.fit(X, y)
+        model = _fit_lag_model(history, period, candidate)
         buffer = list(history)
         predictions = []
         for _ in range(horizon):
@@ -217,7 +240,7 @@ def _date(value):
     return value.strftime("%Y-%m-%d")
 
 
-def forecast_series(frame, task, *, decision_policy=None):
+def forecast_series(frame, task, *, decision_policy=None, candidate_suite=CANDIDATE_SUITE):
     """Evaluate, lock the selected method, then refit for future forecasts.
 
     Validation chooses both the method and the reference baseline, never the
@@ -225,6 +248,9 @@ def forecast_series(frame, task, *, decision_policy=None):
     deployment decision. Extra input columns are deliberately unused.
     """
     try:
+        if candidate_suite not in (LEGACY_CANDIDATE_SUITE, CANDIDATE_SUITE):
+            raise ValueError("Unknown forecast candidate suite; no automatic fallback is applied.")
+        candidates = LEGACY_CANDIDATES if candidate_suite == LEGACY_CANDIDATE_SUITE else CANDIDATES
         task = validate_forecast_task(task)
         policy = validate_forecast_policy(decision_policy) if decision_policy is not None else None
         objective = 'weighted_absolute_error' if policy is not None else 'mae'
@@ -253,7 +279,7 @@ def forecast_series(frame, task, *, decision_policy=None):
                   "validation_end": _date(dates[origin + h - 1]), "validation_rows": h}
                  for origin in origins]
         comparison = []
-        for candidate in CANDIDATES:
+        for candidate in candidates:
             try:
                 scores = [_metrics(values[origin:origin + h],
                                    predict_at(origin, candidate), policy)
@@ -267,7 +293,7 @@ def forecast_series(frame, task, *, decision_policy=None):
                                    "mean_mae": None, "mean_objective_loss": None, "fold_metrics": [], "selected": False,
                                    "reason": "Candidate could not complete all temporal folds."})
         successful = [row for row in comparison if row["status"] == "ok"]
-        baselines = [row for row in successful if row["model_name"] in CANDIDATES[:2]]
+        baselines = [row for row in successful if row["model_name"] in BASELINES]
         if not baselines:
             raise ValueError("No baseline completed temporal validation.")
         # Stable ordering favours the simple baseline on exact ties.
@@ -289,6 +315,8 @@ def forecast_series(frame, task, *, decision_policy=None):
         future = predict_at(evaluation_end + delay, name)
         return {
             "contract": _report_contract(task), "status": "ok", "task_type": "forecast",
+            "candidate_suite": candidate_suite,
+            "baseline_candidates": [name for name in candidates if name in BASELINES],
             "task": forecast_task_settings(task), "target_col": task.target_column, "frequency": "D",
             "availability": {"contract": ORIGIN_AVAILABILITY_CONTRACT if available_history else AVAILABILITY_CONTRACT,
                              "history_mode": "available_history_only" if available_history else "retrospective_complete_series",
@@ -317,7 +345,7 @@ def forecast_series(frame, task, *, decision_policy=None):
                                         for day, actual, pred, base in zip(dates[holdout_start:evaluation_end],
                                             values[holdout_start:evaluation_end], prediction, baseline_prediction)]},
             "predictive_support": {
-                "status": ("baseline_selected" if name in CANDIDATES[:2] else
+                "status": ("baseline_selected" if name in BASELINES else
                            "observed_holdout_improvement" if metrics["mae"] < baseline_metrics["mae"]
                            else "no_holdout_improvement"),
                 "statistical_significance": "not_assessed",
@@ -333,10 +361,11 @@ def forecast_series(frame, task, *, decision_policy=None):
                 f"One complete daily series with an asserted fixed reporting delay of {delay} whole calendar days.",
                 "Each origin is the end of a completed day; targets after origin minus delay are withheld from fitting and prediction inputs.",
                 "Three expanding-window validation folds select the method and baseline before the final holdout.",
+                "The versioned candidate suite is fixed before scoring; historical mean/median, when included, use only the available prefix and stay constant across the bridge and horizon.",
                 "Validation outcomes are released by the holdout origin; selection cannot see its unreleased pre-holdout gap.",
                 "Validation and holdout outcomes end at the final available cutoff; unreleased tail labels cannot influence selection or scoring.",
                 "Every fold and holdout recursively bridges the unavailable days and predicts the full horizon without actual target updates.",
-                "Only past target lags are used; all other columns are excluded, including future weather and target components.",
+                "Only past target history is used: learned methods use lags, and constant baselines use prefix summaries. All other columns are excluded, including future weather and target components.",
                 ("The explicit origin requires history ending exactly at origin minus delay; no unavailable-day placeholders or future observations are accepted."
                  if available_history else "Retrospective mode uses the last input date as origin and censors its unreleased tail."),
                 "Future forecasts refit the locked method on available targets only; origin is not inferred from the wall clock.",

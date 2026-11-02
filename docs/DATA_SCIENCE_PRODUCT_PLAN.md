@@ -127,9 +127,59 @@ per series/window, not only pooled averages; reproduce error calculations with
 an independent implementation. Compare bounded task outputs against an
 independent specialist's review before claiming a professional capability level.
 
-## 4. Model and outcome lifecycle — not implemented for this forecast engine
+First software evidence: a separate versioned rolling-origin benchmark now
+covers seven synthetic regimes, two stochastic seeds, three outer issue dates
+and two fixed reporting delays. It independently scores future forecasts,
+retains losses/failures and records source/data/protocol fingerprints. A completed
+protocol is not predictive acceptance. Approved real cases and independent
+specialist review remain outstanding; see [FORECAST_BENCHMARK.md](FORECAST_BENCHMARK.md).
 
-Persist a versioned, owner-scoped model artifact with preprocessing, input schema,
+The default forecast candidate suite now adds historical mean and median as
+prefix-only simple baselines, selected by the same predeclared validation loss.
+The original four-candidate suite remains explicit for reproducible v1 runs;
+the extended suite is evaluated separately as benchmark v2 on the same inspected
+synthetic cases. This is not unseen acceptance, and negative changes must remain
+visible rather than changing generators or thresholds to manufacture a gain.
+
+The web count-domain check also covers the final holdout method, its reference
+baseline and the separate future horizon. Positive future values cannot rescue
+negative historical forecasts. Incomplete/non-finite count outputs are rejected;
+negative finite outputs remain as failed evidence without clipping or reselection.
+An otherwise successful business-criteria status is blocked, not used to justify
+an invalid count result. This necessary output check is not domain certification
+and does not apply non-negativity to general numeric targets.
+
+New web/CLI results also pass an independent evidence-consistency check before
+delivery: source-bound holdout facts/dates, complete future dates, independently
+recomputed errors and matching support/business flags. A cached success marker
+cannot bypass rechecking. Inconsistent evidence is rejected, not silently
+rewritten. This guard does not certify fit isolation, real-world predictive
+value or the professional acceptance target; those remain separate work.
+
+New uploaded-series web and CLI runs now also evaluate the service procedure
+at three fixed historical issue dates, not just on one final holdout. Each call
+receives only its released prefix; outer errors and simple references are scored
+independently. Short history, failed windows, candidate failures, baseline wins
+and count-domain failures remain explicit. These results do not reselect the
+final future method or certify readiness. The last window overlaps the main
+holdout and is not additional unseen evidence. This implements the multi-origin
+evaluation workflow for the supported single-series task; approved real-client
+cases and specialist acceptance are still missing. See
+[FORECAST_BACKTEST.md](FORECAST_BACKTEST.md).
+
+## 4. Model and outcome lifecycle — first local slice; hosted lifecycle not implemented
+
+The CLI can now explicitly save a private, versioned declarative JSON snapshot
+of an evaluated daily model and its reference, then predict in a separate process
+without fitting or method reselection. Appended released actuals update lag
+context; scaler/coefficients/trees and mean/median constants remain frozen.
+Round-trip tests cover all six current candidate encodings, process restart,
+strict history binding and no-overwrite failure behaviour. This is local tooling,
+not owner-scoped cloud persistence, a promoted model or measured live quality.
+Web storage/retention and automatic saving are unchanged. See
+[FORECAST_MODEL_ARTIFACT.md](FORECAST_MODEL_ARTIFACT.md).
+
+Next, persist a versioned, owner-scoped model artifact with preprocessing, input schema,
 training cutoff, policy, dependencies and evaluation record. Support safe
 prediction on new input without retraining, with storage/retention and deletion
 rules. Never load arbitrary user-supplied serialized Python objects.

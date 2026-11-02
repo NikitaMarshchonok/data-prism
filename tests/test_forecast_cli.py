@@ -29,6 +29,9 @@ class ForecastCLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(report["contract"], "daily-forecast-v1")
         self.assertEqual(len(report["future_forecast"]), 7)
+        self.assertEqual(report['historical_backtest']['contract'], 'daily-rolling-backtest-v1')
+        self.assertEqual(report['historical_backtest']['summary']['scored_windows'], 3)
+        self.assertEqual(report['historical_backtest']['production_readiness'], 'not_established')
         json.dumps(report, allow_nan=False)
 
     def test_invalid_csv_headers_paths_and_encoding_do_not_echo_private_values(self):
