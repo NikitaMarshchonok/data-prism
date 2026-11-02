@@ -7,7 +7,8 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from src.forecasting import CANDIDATES, ForecastTask, _forecast, forecast_series, validate_forecast_input
+from src.forecasting import (CANDIDATES, ForecastTask, _forecast, forecast_series,
+                             validate_forecast_input, validate_forecast_date, _future_window)
 from tests.test_forecasting import frame
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
 from tests.test_forecast_policy import POLICY_FORM
@@ -88,6 +89,51 @@ class ForecastOriginTests(unittest.TestCase):
             self.assertEqual(forecast_series(data, task)['status'], 'error')
             with self.assertRaises(ValueError): validate_forecast_input(data, task)
             fit.assert_not_called()
+
+    def test_date_bounds_do_not_depend_on_pandas_inferred_resolution_or_exception(self):
+        # Emulate pandas 3's wider date_range on pandas 2 as well. The service
+        # must reject before relying on a library overflow or fitting a model.
+        wide_future = pd.DatetimeIndex(np.arange(np.datetime64('2262-04-11', 'us'),
+                                                np.datetime64('2262-04-18', 'us'),
+                                                np.timedelta64(1, 'D')))
+        for unit in ('ns', 'us', 'ms', 's'):
+            data = frame().assign(date=pd.date_range(end='2262-04-10', periods=160).as_unit(unit))
+            for origin in (None, '2262-04-10'):
+                task = ForecastTask('demand', 'date', 7, forecast_origin=origin)
+                with (self.subTest(unit=unit, origin=origin),
+                      patch('src.forecasting.pd.date_range', return_value=wide_future) as dates,
+                      patch('src.forecasting._forecast') as fit):
+                    with self.assertRaises(ValueError): validate_forecast_input(data, task)
+                    self.assertEqual(forecast_series(data, task)['status'], 'error')
+                    fit.assert_not_called()
+                    dates.assert_not_called()
+
+    def test_last_supported_day_is_inclusive_for_complete_forecast_horizon(self):
+        for unit in ('ns', 'us', 'ms', 's'):
+            data = frame().assign(date=pd.date_range(end='2262-04-04', periods=160).as_unit(unit))
+            task = ForecastTask('demand', 'date', 7, forecast_origin='2262-04-04')
+            with self.subTest(unit=unit):
+                self.assertEqual(validate_forecast_input(data, task), task)
+                self.assertEqual(_future_window(pd.DatetimeIndex(data.date), task)[2][-1].strftime('%Y-%m-%d'),
+                                 '2262-04-11')
+
+    def test_source_dates_and_origins_use_explicit_complete_day_bounds(self):
+        for value in ('1677-09-22', '2262-04-11'):
+            self.assertEqual(validate_forecast_date(value).isoformat(), value)
+        for value in ('1677-09-21', '2262-04-12', '9999-01-01'):
+            with self.subTest(value=value), self.assertRaises(ValueError): validate_forecast_date(value)
+        for end in ('1677-09-22', '2262-09-18'):
+            dates = np.arange(np.datetime64(end, 'us') - np.timedelta64(159, 'D'),
+                              np.datetime64(end, 'us') + np.timedelta64(1, 'D'), np.timedelta64(1, 'D'))
+            data = frame().assign(date=pd.DatetimeIndex(dates))
+            with patch('src.forecasting._forecast') as fit:
+                with self.assertRaises(ValueError): validate_forecast_input(data, ForecastTask('demand', 'date', 7))
+                self.assertEqual(forecast_series(data, ForecastTask('demand', 'date', 7))['status'], 'error')
+                fit.assert_not_called()
+
+    def test_release_cutoff_cannot_cross_lower_supported_bound(self):
+        task = ForecastTask('demand', 'date', 7, reporting_delay_days=1, forecast_origin='1677-09-22')
+        with self.assertRaises(ValueError): _future_window(pd.DatetimeIndex(['1677-09-22']), task)
 
     def test_minimum_available_history_reserves_selection_gap_and_training_embargo(self):
         size, delay, horizon = 30 + 4 * 3 + 2 * 10, 10, 3

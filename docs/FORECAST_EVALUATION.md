@@ -64,6 +64,13 @@ recent actuals may be present, but are intentionally censored. Explicit-origin
 input contains only available history, without missing-value placeholders.
 
 Dates must be timezone-naive midnight datetimes or ISO `YYYY-MM-DD` strings.
+The service explicitly supports complete calendar days from **1677-09-22 through
+2262-04-11 inclusive**. Every source date, issue date, release cutoff and the
+entire future horizon must lie within these bounds, before any fit. This retains
+the original nanosecond-compatible contract independently of pandas 2/3 or an
+input's second/millisecond/microsecond/nanosecond dtype. Coarser date resolution
+must not silently widen the accepted task range. The same rule applies to local
+model snapshots and frozen prediction.
 The engine sorts chronologically without modifying its input. Duplicate days,
 missing days, missing/non-finite targets, ambiguous columns, unsupported types,
 unknown task fields and insufficient history fail explicitly. It does not

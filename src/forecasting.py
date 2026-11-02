@@ -5,6 +5,7 @@ imputation. Every validation forecast predicts its entire horizon recursively
 without observing the actual target inside that horizon.
 """
 from dataclasses import asdict, dataclass
+from datetime import date, timedelta
 import math
 import re
 from typing import Mapping
@@ -33,6 +34,24 @@ BASELINES = ("last_value", "seasonal_naive", "historical_mean", "historical_medi
 CANDIDATES = BASELINES + ("lag_ridge", "lag_random_forest")
 VALIDATION_FOLDS = 3
 MAX_ROWS = 5000
+# Whole midnight dates representable by the original nanosecond-based contract.
+# pandas 3 can infer coarser units and a wider range; that must not silently
+# change which tasks pass our preflight or depend on an input column's dtype.
+MIN_DAILY_DATE = date(1677, 9, 22)
+MAX_DAILY_DATE = date(2262, 4, 11)
+
+
+def validate_forecast_date(value):
+    """Version-independent, timezone-free ISO business-date boundary."""
+    if not isinstance(value, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', value):
+        raise ValueError('Forecast dates must be explicit ISO YYYY-MM-DD dates.')
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError('Forecast date must be a valid supported daily date.') from error
+    if not MIN_DAILY_DATE <= parsed <= MAX_DAILY_DATE:
+        raise ValueError('Forecast dates must be from 1677-09-22 through 2262-04-11.')
+    return parsed
 
 
 @dataclass(frozen=True)
@@ -57,12 +76,7 @@ class ForecastTask:
         if type(self.reporting_delay_days) is not int or not 0 <= self.reporting_delay_days <= 30:
             raise ValueError("reporting_delay_days must be an integer from 0 to 30 days.")
         if self.forecast_origin is not None:
-            if not isinstance(self.forecast_origin, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', self.forecast_origin):
-                raise ValueError("forecast_origin must be an explicit ISO YYYY-MM-DD date.")
-            try:
-                pd.to_datetime(self.forecast_origin, format='%Y-%m-%d', errors='raise')
-            except (ValueError, OverflowError) as error:
-                raise ValueError("forecast_origin must be a valid supported daily date.") from error
+            validate_forecast_date(self.forecast_origin)
 
 
 def validate_forecast_task(value):
@@ -93,8 +107,13 @@ def forecast_task_settings(task):
 def _future_window(dates, task):
     """Validate requested dates before any fit, without consulting the clock."""
     try:
-        origin = pd.Timestamp(task.forecast_origin) if task.forecast_origin is not None else dates[-1]
-        cutoff = origin - pd.Timedelta(days=task.reporting_delay_days)
+        origin_day = validate_forecast_date(task.forecast_origin if task.forecast_origin is not None
+                                           else dates[-1].strftime('%Y-%m-%d'))
+        cutoff_day = origin_day - timedelta(days=task.reporting_delay_days)
+        last_day = origin_day + timedelta(days=task.horizon)
+        if cutoff_day < MIN_DAILY_DATE or last_day > MAX_DAILY_DATE:
+            raise ValueError('Forecast date window exceeds the explicit daily bounds.')
+        origin, cutoff = pd.Timestamp(origin_day), pd.Timestamp(cutoff_day)
         future = pd.date_range(origin + pd.Timedelta(days=1), periods=task.horizon, freq='D')
     except (ValueError, OverflowError) as error:
         raise ValueError('Forecast origin, cutoff and horizon must lie in the supported daily date range.') from error
@@ -130,7 +149,11 @@ def _series(frame, task):
         if not raw_time.str.fullmatch(r"\d{4}-\d{2}-\d{2}").all():
             raise ValueError("Time values must be ISO YYYY-MM-DD dates.")
         dates = pd.to_datetime(raw_time, format="%Y-%m-%d", errors="coerce")
-    if dates.isna().any() or not dates.eq(dates.dt.normalize()).all():
+    if dates.isna().any():
+        raise ValueError("Invalid or intraday dates are not supported by the daily contract.")
+    if (dates.lt(pd.Timestamp(MIN_DAILY_DATE)).any() or dates.gt(pd.Timestamp(MAX_DAILY_DATE)).any()):
+        raise ValueError('Forecast history must use dates from 1677-09-22 through 2262-04-11.')
+    if not dates.eq(dates.dt.normalize()).all():
         raise ValueError("Invalid or intraday dates are not supported by the daily contract.")
     if dates.duplicated().any():
         raise ValueError("Duplicate dates: aggregate to one observation per day explicitly.")

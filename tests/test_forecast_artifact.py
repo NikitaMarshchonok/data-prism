@@ -192,6 +192,24 @@ class ForecastArtifactTests(unittest.TestCase):
         artifact['reference']['value'] = 10.
         validate_artifact(resign(artifact))
 
+    def test_loaded_snapshot_and_frozen_issue_date_obey_the_same_date_bounds(self):
+        for origin in ('2262-04-10', '9999-01-01'):
+            with (self.subTest(origin=origin),
+                  patch('src.forecast_artifact._predict') as predict,
+                  self.assertRaises(ValueError)):
+                predict_artifact(self.artifact, forecast_origin=origin)
+            predict.assert_not_called()
+        artifact = copy.deepcopy(self.artifact)
+        artifact['task']['forecast_origin'] = '2262-04-10'
+        artifact['training'].update(start='2261-10-31', through='2262-04-08', issue_date='2262-04-10')
+        # Keep all metadata internally consistent except the overflowing future.
+        start = pd.Timestamp('2262-04-08') - pd.Timedelta(days=artifact['training']['rows'] - 1)
+        artifact['training']['start'] = start.strftime('%Y-%m-%d')
+        artifact['evaluation']['holdout'].update(start='2262-04-02', end='2262-04-08')
+        with patch('src.forecast_artifact._predict') as predict, self.assertRaises(ValueError):
+            validate_artifact(resign(artifact))
+        predict.assert_not_called()
+
     def test_existing_destination_and_symlinks_are_not_overwritten_and_no_temp_remains(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / 'existing.json'

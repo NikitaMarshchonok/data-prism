@@ -20,7 +20,7 @@ import sklearn
 from src.forecasting import (
     BASELINES, CANDIDATES, LEGACY_CANDIDATES, CANDIDATE_SUITE, LEGACY_CANDIDATE_SUITE,
     ForecastTask, _series, _lags, _fit_lag_model, validate_forecast_task,
-    forecast_task_settings,
+    forecast_task_settings, validate_forecast_date, _future_window,
 )
 from src.forecast_domain import evaluate_count_forecast
 from src.forecast_policy import validate_forecast_policy
@@ -220,12 +220,15 @@ def validate_artifact(artifact):
         value = training[key]
         if type(value) is not str or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
             raise ValueError('Invalid saved date.')
-        pd.to_datetime(value, format='%Y-%m-%d', errors='raise')
+        validate_forecast_date(value)
     if ((pd.Timestamp(training['through']) - pd.Timestamp(training['start'])).days + 1 != training['rows']
             or (pd.Timestamp(training['issue_date']) - pd.Timestamp(training['through'])).days != task.reporting_delay_days):
         raise ValueError('Saved training dates disagree with availability.')
     if task.forecast_origin is not None and task.forecast_origin != training['issue_date']:
         raise ValueError('Saved task issue date disagrees with training.')
+    saved_task = ForecastTask(task.target_column, task.time_column, task.horizon,
+                              task.seasonal_period, task.reporting_delay_days, training['issue_date'])
+    _future_window(pd.DatetimeIndex([training['through']]), saved_task)
     _keys(artifact['evaluation'], ('holdout', 'historical_backtest_status', 'production_readiness'))
     if artifact['evaluation']['production_readiness'] != 'not_established':
         raise ValueError('A local model cannot assert operational approval.')
@@ -323,9 +326,9 @@ def predict_artifact(artifact, *, history=None, forecast_origin=None):
         if artifact['target_unit'] == 'count' and (values < 0).any():
             raise ValueError('New count history contains negative observations.')
         cutoff, supplied_rows = dates[-1].strftime('%Y-%m-%d'), len(values)
+    _, _, days = _future_window(pd.DatetimeIndex([cutoff]), updated)
     output = _predict(artifact['model'], values, delay + task.horizon, task.seasonal_period)[delay:]
     reference = _predict(artifact['reference'], values, delay + task.horizon, task.seasonal_period)[delay:]
-    days = pd.date_range(pd.Timestamp(updated.forecast_origin) + pd.Timedelta(days=1), periods=task.horizon, freq='D')
     invalid = artifact['target_unit'] == 'count' and any(value < 0 for value in output + reference)
     return {'contract': PREDICTION_CONTRACT, 'status': 'domain_constraint_failed' if invalid else 'ok',
             'prediction_id': uuid.uuid4().hex, 'model_id': artifact['model_id'], 'model_sha256': artifact['sha256'],
