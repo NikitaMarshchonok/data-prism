@@ -90,6 +90,21 @@ automated.
 
 ## Separate rolling-origin forecasting report
 
+Local outcome lifecycle checks are separate from predictive acceptance:
+`tests/test_forecast_ledger.py` covers immutable issuance, matched-date arithmetic,
+unknown/partial quality, fixed-delay availability, atomic imports, duplicate facts,
+explicit revisions, shared overlapping facts, logical deletion and process restart.
+Controlled declarative predictors provide independent error oracles; they are
+not evidence that those parameters were selected on unseen client data. The
+journal does not certify historical issuance or release timestamps; see
+[FORECAST_OUTCOME_LEDGER.md](FORECAST_OUTCOME_LEDGER.md).
+
+The prepared server registry has separate scope/fence/retention/recovery tests in
+`tests/test_forecast_models.py`, plus an account-deletion HTTP regression case.
+These exercise a declared persistent test root with a known identity, not a
+physical hosting mount. They do not establish deployed durability or enable
+customer-facing model saving; see [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
+
 `evaluate_forecast_benchmark.py` additionally evaluates seven synthetic regimes
 over predeclared outer issue dates, independently scoring future forecasts and
 all declared simple references. The v1 suite keeps last-value and seasonal

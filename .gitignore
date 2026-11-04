@@ -12,6 +12,7 @@ data/
 datasets/
 outputs/
 *.forecast-model.json
+*.forecast-ledger/
 reports/
 tmp/
 backups/

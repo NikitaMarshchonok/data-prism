@@ -111,10 +111,21 @@ the current interpreter source matches it.
 
 ## Still required for the hosted lifecycle
 
-Owner-scoped server storage with explicit retention and account deletion,
-prediction/actual matching, durable measured-quality history, alert rules,
+The prepared internal scoped store is described in
+[FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md). It is not connected to a
+browser save route and does not make the current ephemeral deployment durable.
+
+An explicitly opt-in local prediction/actual journal is now available through
+`predict_forecast.py --ledger`; see [FORECAST_OUTCOME_LEDGER.md](FORECAST_OUTCOME_LEDGER.md).
+It stores frozen output/reference pairs, accepts partial reported actuals with
+explicit corrections, and computes paired errors. It does not change the
+stateless prediction object's `quality_on_new_outcomes=unknown`: only a separate
+journal evaluation knows which facts have subsequently been supplied.
+
+Customer-facing authenticated model saving/export and scheduled retention cleanup,
+hosted prediction/actual matching, durable hosted measured-quality history, alert rules,
 controlled candidate retraining, reviewable model promotion and rollback are not
-implemented here. `quality_on_new_outcomes` is always `unknown`; emitting a new
+implemented here. Without the explicit journal option, emitting a new
 prediction ID does not persist or monitor that prediction. Missing actuals cannot
 be called success. Real approved cases and specialist acceptance also remain
 outstanding. These local snapshots are experimental, not operationally approved.

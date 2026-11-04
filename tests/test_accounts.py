@@ -1638,6 +1638,38 @@ class AccountRouteIntegrationTests(unittest.TestCase):
                 self.assertNotIn("vibedash_account_id", session)
                 self.assertNotIn("vibedash_account_credential", session)
 
+    def test_account_delete_purges_prepared_model_registry_without_touching_other_owner(self):
+        from src.forecast_artifact import create_artifact
+        from src.forecasting import ForecastTask, forecast_series
+        from src.runtime_state import initialize_runtime_state
+        from tests.test_forecasting import frame
+        from vibedash.forecast_models import ForecastModelStore
+
+        client = web_app.app.test_client()
+        self.assertEqual(self._register(client, 'delete-model@example.com').status_code, 302)
+        with client.session_transaction() as browser:
+            account_id = browser['vibedash_account_id']
+        scope = account_scope_id(account_id, web_app.app.secret_key)
+        foreign = 'f' * 32
+        root = Path(self.directory.name)
+        identity = initialize_runtime_state(root)
+        models = ForecastModelStore(root, expected_state_id=identity['state_id'],
+                                    deployment_profile='production', state_durability='persistent')
+        task, data = ForecastTask('demand', 'date', 7), frame()
+        artifact = create_artifact(data, task, forecast_series(data, task))
+        models.register(scope, artifact, retention_days=7)
+        models.register(foreign, artifact, retention_days=7)
+        token = self._csrf(client, '/vibedash/account')
+        with patch('vibedash.routes.purge_account_artifacts', return_value={}):
+            response = client.post('/vibedash/account/delete', data={
+                'csrf_token': token, 'current_password': self.PASSWORD,
+                'delete_confirmation': 'DELETE'})
+        self.assertEqual(response.status_code, 302)
+        self.assertIsNone(web_app.app.extensions['vibedash_account_store'].get_account(account_id))
+        self.assertEqual(models.get(foreign, artifact['model_id']), artifact)
+        with sqlite3.connect(self.job_path) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM forecast_models WHERE scope_id=?', (scope,)).fetchone()[0], 0)
+
     def test_account_delete_requires_auth_csrf_confirmation_and_current_password(self):
         guest = web_app.app.test_client()
         self.assertEqual(

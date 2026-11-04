@@ -575,6 +575,11 @@ class AnalysisJobStore:
                     "DELETE FROM decision_cases WHERE scope_id = ?",
                     (normalized_scope_id,),
                 )
+            # Optional prepared model registry shares this database/fence.
+            # Keep account erasure atomic without requiring that feature to
+            # exist in older installations or changing the response contract.
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='forecast_models'").fetchone():
+                connection.execute('DELETE FROM forecast_models WHERE scope_id=?', (normalized_scope_id,))
             job_count = connection.execute(
                 "DELETE FROM analysis_jobs WHERE scope_id = ?",
                 (normalized_scope_id,),
