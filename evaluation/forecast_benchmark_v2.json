@@ -1,0 +1,10 @@
+{
+  "contract": "forecast-benchmark-v2",
+  "generator_version": 1,
+  "scenarios": ["constant", "weekly_exact", "noisy_weekly", "trend", "intermittent", "white_noise", "regime_change"],
+  "seeds": [17, 83],
+  "initial_history_days": 140,
+  "horizon_days": 7,
+  "outer_windows": 3,
+  "reporting_delays": [0, 2]
+}

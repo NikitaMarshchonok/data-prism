@@ -8,6 +8,16 @@ Data Prism turns CSV, TSV, Excel, JSON, and Parquet files into an interactive an
 
 The project is designed as a decision-support system: every important conclusion should be traceable to a metric, sample size, confidence estimate, baseline, or diagnostic—not just an LLM-generated narrative. A deterministic analytical quality gate measures known-signal detection and false discoveries on synthetic benchmark scenarios before changes are merged.
 
+The product direction is industry-independent: companies bring their own task
+and business context to a common intake with specialized, verified executors.
+This is not a promise to solve every task from any file. Current confirmed
+VibeDash workflows and their limits are exposed by `GET /vibedash/task-capabilities`;
+`GET /vibedash/task-intake?task_type=daily_forecast` provides read-only admission
+guidance, not dataset approval. The upload form also confirms the question,
+row meaning and planned supported result before queueing; this is structured
+user context, not automatic understanding of business intent. See the [product plan](docs/DATA_SCIENCE_PRODUCT_PLAN.md)
+for the agreed target, current boundaries and acceptance milestones.
+
 ![Data Prism evidence-first analytics workspace](docs/assets/data-prism-landing.jpg)
 
 ## What the system does
@@ -24,6 +34,7 @@ The project is designed as a decision-support system: every important conclusion
 | Statistical validation | Welch group comparisons, Pearson correlation, effect sizes, 95% confidence intervals, and Benjamini–Hochberg FDR correction |
 | Exploratory ML | Fixed-budget anomaly review ranking and gap-statistic-gated, subsample-stability-tested segmentation |
 | Predictive ML | Leakage-safe preprocessing, cross-validated model selection, untouched-holdout evaluation, naive-baseline comparison, and a holdout permutation support gate |
+| Daily forecasting (opt-in pilot, Python/CLI) | Confirmed single-series task, explicit issue date with available history or retrospective mode, fixed target reporting delay, isolated temporal evaluation and simple baselines; no production-readiness or automatic monitoring claim |
 | Model reliability | Per-class metrics, calibration, residual analysis, permutation importance, split stability, and supported subgroup checks |
 | Monitoring | Aggregate baseline profiles, PSI and categorical drift, missingness/schema changes, persistent history, and deduplicated alerts |
 | Interfaces | BI dashboard, prompt-to-dashboard workspace, session-scoped run and decision history, downloadable audit manifests, HTML/PDF reports, authenticated monitoring API, and cron/CI-ready CLI |
@@ -55,6 +66,10 @@ flowchart LR
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component boundaries, [docs/DATASET_READINESS.md](docs/DATASET_READINESS.md) for the pre-analysis contract, [docs/PILOT_DECISION_WORKFLOW.md](docs/PILOT_DECISION_WORKFLOW.md) for the evidence-to-outcome product experiment, and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for the supported deployment and persistence model.
+
+For the first bounded forecasting workflow and its evaluation limits, see
+[docs/FORECAST_EVALUATION.md](docs/FORECAST_EVALUATION.md). Dated data is no longer
+silently treated as independent random rows by the legacy predictive module.
 
 ## Reproducible product demo
 

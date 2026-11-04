@@ -1,5 +1,5 @@
 {
-  "contract_version": 1,
+  "contract_version": 2,
   "minimum_pass_rate": 1.0,
   "scenarios": {
     "saas_known_signals": {
@@ -22,9 +22,7 @@
         294
       ],
       "minimum_silhouette_score": 0.4,
-      "minimum_stability_score": 0.8,
-      "minimum_predictive_mae_improvement": 0.8,
-      "maximum_predictive_permutation_p_value": 0.05
+      "minimum_stability_score": 0.8
     },
     "null_noise_guardrail": {
       "seed": 2026,
@@ -34,6 +32,13 @@
       ],
       "maximum_significant_tests": 0,
       "minimum_candidate_tests": 10
+    },
+    "independent_predictive_signal": {
+      "minimum_predictive_mae_improvement": 0.8,
+      "maximum_predictive_permutation_p_value": 0.05
+    },
+    "daily_forecast_contract": {
+      "minimum_trend_mae_improvement": 0.8
     },
     "known_group_effect": {
       "seed": 314,
