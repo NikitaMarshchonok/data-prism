@@ -3,9 +3,11 @@ import argparse
 import csv
 import json
 from pathlib import Path
+import sqlite3
 
 from evaluate_forecast import read_forecast_csv
 from src.forecast_artifact import load_artifact, predict_artifact
+from src.forecast_ledger import ForecastLedger
 
 
 def main(argv=None):
@@ -14,14 +16,19 @@ def main(argv=None):
     parser.add_argument('--history-csv', type=Path,
                         help='Complete original training history plus new released daily actuals. Must preserve the original prefix.')
     parser.add_argument('--forecast-origin', help='Required with new history; explicit ISO end-of-day issue date.')
+    parser.add_argument('--ledger', type=Path,
+                        help='Opt in to recording this frozen forecast in an already initialized private local journal. Contains predictions and matched actuals; no web storage.')
     args = parser.parse_args(argv)
     try:
         if args.history_csv is not None and args.forecast_origin is None:
             raise ValueError('New history requires an explicit issue date.')
         artifact = load_artifact(args.model)
         history = read_forecast_csv(args.history_csv) if args.history_csv is not None else None
-        report = predict_artifact(artifact, history=history, forecast_origin=args.forecast_origin)
-    except (OSError, ValueError, TypeError, UnicodeError, csv.Error, FloatingPointError, OverflowError):
+        if args.ledger is None:
+            report = predict_artifact(artifact, history=history, forecast_origin=args.forecast_origin)
+        else:
+            report = ForecastLedger(args.ledger).issue(artifact, history=history, forecast_origin=args.forecast_origin)
+    except (OSError, ValueError, TypeError, UnicodeError, csv.Error, sqlite3.Error, FloatingPointError, OverflowError):
         report = {'status': 'error', 'message': 'Unable to validate the local model or its available history; no prediction was accepted.'}
     print(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False))
     return 0 if report['status'] == 'ok' else 1
