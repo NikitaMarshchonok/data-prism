@@ -3,6 +3,7 @@ VibeDash Flask routes
 """
 import csv
 import io
+import json
 import os
 import re
 import secrets
@@ -40,6 +41,7 @@ try:
         profiles_from_semantic_contract,
         validate_semantic_contract,
     )
+    from src.forecast_artifact import create_artifact
     from .spec import create_saas_demo_viz_spec, parse_prompt_to_viz_spec
     from .generator_bridge import generate_dashboard_data as bridge_generate_dashboard_data
     from .exporter import (
@@ -65,6 +67,7 @@ try:
     )
     from .decision_brief import build_decision_brief
     from .forecast_tasks import ForecastTaskError, forecast_task_from_form, run_confirmed_forecast, forecast_audit_view
+    from .forecast_models import ForecastModelStore, RETENTION_CONTRACT, retention_days, storage_settings
     from .task_capabilities import (
         TaskAdmissionError, capability_catalog, assess_task_request,
         resolve_analysis_task, validate_stored_task_routing,
@@ -360,6 +363,48 @@ if vibedash_bp:
 
     def _decision_case_store():
         return DecisionCaseStore(current_app.config['VIBEDASH_JOB_STORE_PATH'])
+
+
+    def _forecast_model_completion(frame, forecast, *, job_id, scope_id):
+        """Prepare an optional artifact without putting its parameters in the report."""
+        try:
+            settings = storage_settings(current_app.config)
+            if settings is None or forecast['domain_constraints']['status'] == 'failed':
+                return None
+            task = forecast['confirmed_task']
+            artifact = create_artifact(
+                frame, task['settings'], forecast,
+                decision_policy=task.get('decision_policy'), target_unit=task['target_unit'],
+                model_id=job_id,
+            )
+            store = ForecastModelStore(**settings)
+        except Exception:
+            # The evaluated report is still useful. Do not log model data or
+            # exception messages (which can contain target names or paths).
+            current_app.logger.warning(
+                'Forecast model could not be prepared', extra={'event': 'forecast_model_prepare_failed'},
+            )
+            return None
+
+        def retain(connection):
+            if storage_settings(current_app.config) != settings:
+                return
+            # An optional model write must not lose a valid report. Roll
+            # back only the retention attempt, including failures after INSERT.
+            connection.execute('SAVEPOINT retain_forecast_model')
+            try:
+                store.register_completed_job(
+                    connection, job_id=job_id, scope_id=scope_id, artifact=artifact,
+                )
+            except Exception:
+                connection.execute('ROLLBACK TO retain_forecast_model')
+                current_app.logger.warning(
+                    'Forecast model could not be retained', extra={'event': 'forecast_model_retention_failed'},
+                )
+            finally:
+                connection.execute('RELEASE retain_forecast_model')
+
+        return retain
 
 
     def _decision_csrf_token():
@@ -781,6 +826,10 @@ if vibedash_bp:
     ):
         """Build and persist one dashboard through the shared analysis path."""
         validate_stored_task_routing(payload)
+        keep_days = retention_days(payload)
+        if keep_days is not None and (not isinstance(run_id, str) or not JOB_ID_PATTERN.fullmatch(run_id)):
+            raise ForecastTaskError('Model saving requires a queued forecast evaluation.')
+        on_complete = None
         stored_filename = payload.get('stored_filename', '')
         if not isinstance(stored_filename, str) or not re.fullmatch(
             r'vibedash-[0-9a-f]{32}\.csv', stored_filename
@@ -867,6 +916,11 @@ if vibedash_bp:
             dashboard_data['forecast'] = run_confirmed_forecast(
                 source_df, semantic_contract, payload.get('forecast_task'),
             )
+            if keep_days is not None:
+                on_complete = _forecast_model_completion(
+                    source_df, dashboard_data['forecast'],
+                    job_id=run_id, scope_id=_session_persist_scope(scope_id),
+                )
         dashboard_data['decision_brief'] = build_decision_brief(
             dashboard_data,
             readiness,
@@ -921,6 +975,7 @@ if vibedash_bp:
             'viz_spec': viz_spec,
             'truncated': truncated,
             'manifest': audit_manifest,
+            'on_complete': on_complete,
         }
 
 
@@ -944,6 +999,7 @@ if vibedash_bp:
         return {
             'session_id': result['session_id'],
             'manifest': result['manifest'],
+            'on_complete': result.get('on_complete'),
         }
 
 
@@ -1173,6 +1229,7 @@ if vibedash_bp:
                              pilot_csrf_token=_decision_csrf_token(),
                              auth_csrf_token=_auth_csrf_token(),
                              account=account,
+                             forecast_model_storage_available=bool(account and storage_settings(current_app.config)),
                              ollama_available=ollama_available)
 
 
@@ -1312,11 +1369,24 @@ if vibedash_bp:
             security_activity = store.list_security_events(account['id'], limit=20)
         except Exception:
             security_activity_unavailable = True
+        saved_models = []
+        model_storage = storage_settings(current_app.config)
+        model_list_unavailable = False
+        if model_storage is not None:
+            try:
+                saved_models = ForecastModelStore(**model_storage).list_for_scope(
+                    account_scope_id(account['id'], current_app.secret_key),
+                )
+            except Exception:
+                model_list_unavailable = True
         return render_template(
             'vibedash_account.html',
             account=account,
             security_activity=security_activity,
             security_activity_unavailable=security_activity_unavailable,
+            model_storage_available=model_storage is not None,
+            saved_models=saved_models,
+            model_list_unavailable=model_list_unavailable,
             auth_csrf_token=_auth_csrf_token(),
             error=error,
             success=success,
@@ -1357,6 +1427,37 @@ if vibedash_bp:
         if isinstance(error, AccountExportTooLargeError):
             return 413
         return 500
+
+
+    @vibedash_bp.post('/account/models/<model_id>/export.json')
+    def forecast_model_export(model_id):
+        """Download only a retained model owned by the authenticated account."""
+        account = _current_account()
+        settings = storage_settings(current_app.config)
+        status = 404
+        if account is not None and settings is not None and JOB_ID_PATTERN.fullmatch(model_id):
+            if not _valid_auth_csrf_token(request.form.get('csrf_token')):
+                status = 400
+            else:
+                try:
+                    model = ForecastModelStore(**settings).get(
+                        account_scope_id(account['id'], current_app.secret_key), model_id,
+                    )
+                    if model is not None:
+                        serialized = json.dumps(model, ensure_ascii=False, sort_keys=True,
+                                                separators=(',', ':'), allow_nan=False).encode('utf-8')
+                        response = make_response(serialized)
+                        _set_account_export_headers(response)
+                        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+                        response.headers['Content-Disposition'] = f'attachment; filename="{model_id}.forecast-model.json"'
+                        return response
+                except ScopeClosedError:
+                    pass
+                except Exception:
+                    status = 503
+        response = make_response(jsonify(error='Saved model is unavailable.'), status)
+        _set_account_export_headers(response)
+        return response
 
 
     @vibedash_bp.post('/account/export.json')
@@ -2137,7 +2238,23 @@ if vibedash_bp:
         # deletion commits while validation runs, the later durable insert
         # must hit that scope's fence rather than silently becoming guest
         # work after the account cookie is invalidated.
-        request_scope = _analysis_scope_id()
+        model_choices = request.form.getlist('forecast_model_retention_days')
+        keep_days = None
+        if len(model_choices) > 1:
+            return jsonify(error='Choose at most one model retention period.'), 422
+        if model_choices and model_choices[0] != '':
+            choice = model_choices[0]
+            if mode != 'forecast' or re.fullmatch(r'[1-9]|[12][0-9]|30', choice) is None:
+                return jsonify(error='Model saving requires a forecast and an explicit 1–30 day retention period.'), 422
+            account = _current_account()
+            if account is None:
+                return jsonify(error='Sign in to save a model, or choose not to save it.'), 401
+            if storage_settings(current_app.config) is None:
+                return jsonify(error='Model saving is unavailable. Choose not to save and evaluate the forecast again.'), 503
+            keep_days = int(choice)
+            request_scope = account_scope_id(account['id'], current_app.secret_key)
+        else:
+            request_scope = _analysis_scope_id()
 
         demo_dataset = request.form.get('demo_dataset', '').strip()
         upload_directory = Path(current_app.config['UPLOAD_FOLDER'])
@@ -2215,6 +2332,8 @@ if vibedash_bp:
                 raise ForecastTaskError('An explicit daily forecast task requires reviewed and confirmed decision criteria.')
             if forecast_task and len(dataframe) > current_app.config['MAX_ROWS_PREVIEW']:
                 raise ForecastTaskError('Forecast history cannot be truncated to the dashboard preview limit.')
+            if keep_days is not None and forecast_task['target_unit'] not in ('number', 'count'):
+                raise ForecastTaskError('Model saving supports only number and count targets. Choose not to save this forecast.')
             task_brief = bind_task_brief(brief_draft, semantic_contract['sha256']) if brief_draft is not None else None
         except (SemanticContractError, ForecastTaskError, TaskBriefError) as error:
             upload_path.unlink(missing_ok=True)
@@ -2233,6 +2352,8 @@ if vibedash_bp:
             }
             if forecast_task:
                 job_payload.update(analysis_kind='daily_forecast', forecast_task=forecast_task)
+            if keep_days is not None:
+                job_payload['forecast_model_retention'] = {'contract': RETENTION_CONTRACT, 'days': keep_days}
             if task_brief is not None:
                 job_payload['task_brief'] = task_brief
             job = store.create(
@@ -2597,6 +2718,18 @@ if vibedash_bp:
             or not isinstance(session_data.get('prompt'), str)
         ):
             return jsonify({'error': 'Analysis result is unavailable for this analysis.'}), 409
+        model_retention_requested = 'forecast_model_retention' in job['payload']
+        saved_model = None
+        if model_retention_requested:
+            settings = storage_settings(current_app.config)
+            account = _current_account()
+            if settings is not None and account is not None:
+                scope = account_scope_id(account['id'], current_app.secret_key)
+                if scope == job['scope_id']:
+                    try:
+                        saved_model = ForecastModelStore(**settings).get_summary(scope, job_id)
+                    except Exception:
+                        pass  # The report remains available if the model store cannot be read.
         return render_template(
             'vibedash_evidence.html',
             session_id=job['session_id'],
@@ -2610,6 +2743,8 @@ if vibedash_bp:
                 if job.get('manifest') else None
             ),
             analysis_job_id=job['id'],
+            model_retention_requested=model_retention_requested,
+            saved_model=saved_model,
             decision_csrf_token=_decision_csrf_token(),
             pilot_feedback_available=feedback_available(
                 current_app.config['VIBEDASH_JOB_STORE_PATH'], job['id'],

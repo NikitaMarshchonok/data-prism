@@ -256,8 +256,10 @@ def validate_artifact(artifact):
     return task
 
 
-def create_artifact(frame, task, report, *, decision_policy=None, target_unit='number'):
+def create_artifact(frame, task, report, *, decision_policy=None, target_unit='number', model_id=None):
     """Refit the already selected method once and bind it to verified evidence."""
+    if model_id is not None and (not isinstance(model_id, str) or not re.fullmatch(r'[0-9a-f]{32}', model_id)):
+        raise ValueError('Invalid server model identifier.')
     task = validate_forecast_task(task)
     if decision_policy is not None:
         decision_policy = validate_forecast_policy(decision_policy)
@@ -282,7 +284,7 @@ def create_artifact(frame, task, report, *, decision_policy=None, target_unit='n
                       task.seasonal_period)[task.reporting_delay_days:]
     if not np.allclose(future, [row['prediction'] for row in report['future_forecast']], rtol=1e-9, atol=1e-12):
         raise ValueError('Saved predictor does not reproduce the evaluated future refit.')
-    artifact = {'contract': CONTRACT, 'model_id': uuid.uuid4().hex,
+    artifact = {'contract': CONTRACT, 'model_id': model_id if model_id is not None else uuid.uuid4().hex,
                 'task': forecast_task_settings(task), 'candidate_suite': report['candidate_suite'],
                 'target_unit': target_unit, 'model': model, 'reference': reference,
                 'training': {'start': dates[0].strftime('%Y-%m-%d'), 'through': dates[-1].strftime('%Y-%m-%d'),

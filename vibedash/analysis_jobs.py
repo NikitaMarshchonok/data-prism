@@ -296,6 +296,8 @@ class AnalysisJobStore:
         job_id: str,
         session_id: str,
         manifest: Dict[str, Any] | None = None,
+        *,
+        on_complete: Callable[[sqlite3.Connection], None] | None = None,
     ) -> bool:
         normalized_id = _validated_job_id(job_id)
         try:
@@ -322,6 +324,8 @@ class AnalysisJobStore:
             )
             if cursor.rowcount == 1:
                 mark_stage(connection, normalized_id, 'completed_at', timestamp)
+                if on_complete is not None:
+                    on_complete(connection)
         return cursor.rowcount == 1
 
     def fail(self, job_id: str, error_code: str = "analysis_failed") -> bool:
@@ -625,11 +629,15 @@ class AnalysisJobStore:
     def purge_terminal(self, retention_hours: int) -> int:
         if not isinstance(retention_hours, int) or retention_hours < 1:
             raise ValueError("retention_hours must be a positive integer.")
-        cutoff = (
-            datetime.now(timezone.utc) - timedelta(hours=retention_hours)
-        ).isoformat(timespec="milliseconds")
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(hours=retention_hours)).isoformat(timespec="milliseconds")
         with self._connection() as connection:
             purge_metrics(connection)
+            # Model expiry is independent of job history and still applies
+            # when the operator switches off new model saving.
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='forecast_models'").fetchone():
+                connection.execute('DELETE FROM forecast_models WHERE expires_at<=?',
+                                   (now.isoformat(timespec='microseconds'),))
             cursor = connection.execute(
                 """
                 DELETE FROM analysis_jobs
@@ -750,15 +758,18 @@ class AnalysisJobDispatcher:
                 )
                 try:
                     result = processor(job)
+                    completion_options = {}
                     if isinstance(result, str):
                         session_id = result
                         manifest = None
                     elif isinstance(result, dict):
                         session_id = result.get("session_id")
                         manifest = result.get("manifest")
+                        if result.get("on_complete") is not None:
+                            completion_options["on_complete"] = result["on_complete"]
                     else:
                         raise RuntimeError("Analysis processor returned no result.")
-                    if not store.complete(job_id, session_id, manifest):
+                    if not store.complete(job_id, session_id, manifest, **completion_options):
                         raise RuntimeError("Analysis job completion transition failed.")
                 except Exception:
                     store.fail(job_id)

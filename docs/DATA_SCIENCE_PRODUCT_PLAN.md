@@ -193,14 +193,16 @@ to a required scope in the shared analysis SQLite database. It checks production
 storage declarations and runtime identity, requires explicit 1–30-day retention,
 denies expired/foreign reads and inference, and uses the existing account-deletion
 fence. Offline restore tests preserve model predictions and the original expiry.
-No browser save flow, hosted model export, periodic expiry cleanup or physical
-durability was added. The current ephemeral deployment is not automatically
-eligible. See [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
+An authenticated, default-off web flow now binds explicit retention consent to
+the forecast job, saves only on successful completion, and offers an owned JSON
+download in account settings. Expiry cleanup runs on VibeDash requests. This is
+implemented and tested but the current ephemeral deployment is not eligible.
+Provisioning and verifying real persistent infrastructure remain operator work.
+See [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
 
-Next, connect authenticated opt-in model saving, authorized export and retention
-cleanup to verified persistent infrastructure. The model itself retains
-preprocessing, schema, training cutoff, policy, dependencies and evaluation;
-never load arbitrary user-supplied serialized Python objects.
+Next, support web inference on explicitly available new history using a retained
+model, then connect that issued forecast to its future actuals. Never load
+arbitrary user-supplied serialized Python objects.
 
 Record prediction IDs, origin and horizon; accept matched actuals only once they
 become available. Score each horizon against its contemporaneous baseline;

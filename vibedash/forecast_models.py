@@ -1,8 +1,8 @@
-"""Owner-scoped model storage preparation; deliberately not wired to HTTP.
+"""Owner-scoped storage for frozen forecast models.
 
 Uses the existing analysis database and deletion fence. Persistent infrastructure
 is operator-declared and mount continuity checked, not physically proven here.
-No imported Python objects, automatic web saving, activation or retraining.
+No imported Python objects, implicit saving, activation or retraining.
 """
 from datetime import datetime, timedelta, timezone
 import json
@@ -14,6 +14,7 @@ from .analysis_jobs import AnalysisJobStore, _validated_job_id, _validated_scope
 
 
 CONTRACT = 'scoped-forecast-model-store-v1'
+RETENTION_CONTRACT = 'forecast-model-retention-v1'
 MAX_MODELS_PER_SCOPE = 10
 MAX_MODELS_TOTAL = 100
 MAX_BYTES_PER_SCOPE = 16 * 1024 * 1024
@@ -41,11 +42,50 @@ def _serialized(artifact):
     return json.dumps(artifact, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
 
 
+def storage_settings(config):
+    """Resolve opt-in web storage without creating a database or a registry."""
+    if (config.get('VIBEDASH_MODEL_STORAGE_ENABLED') is not True
+            or config.get('DATA_PRISM_STATE_DIRECTORY_CONFIGURED') is not True):
+        return None
+    root = config.get('DATA_PRISM_STATE_DIR')
+    database = config.get('VIBEDASH_JOB_STORE_PATH')
+    if not root or not database:
+        return None
+    root = Path(root).expanduser().absolute()
+    database = Path(database).expanduser().absolute()
+    if database != root / 'jobs' / 'analysis_jobs.sqlite3':
+        return None
+    if root.is_symlink() or database.parent.is_symlink() or database.is_symlink():
+        return None
+    settings = {
+        'state_directory': root,
+        'deployment_profile': config.get('DATA_PRISM_DEPLOYMENT_PROFILE'),
+        'state_durability': config.get('DATA_PRISM_STATE_DURABILITY'),
+        'expected_state_id': config.get('DATA_PRISM_EXPECTED_STATE_ID'),
+    }
+    contract = evaluate_runtime_storage_contract(
+        **settings, state_directory_configured=True,
+    )
+    return settings if contract['production_state_satisfied'] else None
+
+
+def retention_days(payload):
+    """Validate the closed, server-created consent record; absent means no opt-in."""
+    if 'forecast_model_retention' not in payload:
+        return None
+    record = payload['forecast_model_retention']
+    if (payload.get('analysis_kind') != 'daily_forecast' or type(record) is not dict
+            or set(record) != {'contract', 'days'} or record['contract'] != RETENTION_CONTRACT
+            or type(record['days']) is not int or not 1 <= record['days'] <= 30):
+        raise ValueError('Invalid forecast model retention record.')
+    return record['days']
+
+
 class ForecastModelStore:
     """Internal server API: scope must come from authenticated server context.
 
-    A scope string alone is not authentication. There is intentionally no web
-    route, guest fallback, account migration or customer opt-in in this slice.
+    A scope string alone is not authentication. Web callers must supply
+    an authenticated account scope, never a request-supplied or guest scope.
     """
 
     def __init__(self, state_directory, *, expected_state_id, deployment_profile, state_durability):
@@ -109,6 +149,12 @@ class ForecastModelStore:
 
     def register(self, scope_id, artifact, *, retention_days):
         """Explicit immutable registration; duplicates never extend retention."""
+        prepared = self._prepare_registration(artifact, retention_days)
+        return self._guard(scope_id, lambda connection, scope:
+                           self._register(connection, scope, prepared))
+
+    @staticmethod
+    def _prepare_registration(artifact, retention_days):
         if type(retention_days) is not int or not 1 <= retention_days <= 30:
             raise ValueError('Choose an explicit retention of 1–30 days.')
         serialized = _serialized(artifact)
@@ -116,31 +162,57 @@ class ForecastModelStore:
         size = len(serialized.encode('utf-8'))
         if size > MAX_ARTIFACT_BYTES:
             raise ValueError('Model exceeds the artifact byte budget.')
-        def save(connection, scope):
-            now = _now()
-            row = connection.execute('SELECT * FROM forecast_models WHERE scope_id=? AND model_id=?',
-                                     (scope, artifact['model_id'])).fetchone()
-            if row is not None:
-                self._artifact(row)
-                if row['artifact_sha256'] != artifact['sha256'] or row['artifact_json'] != serialized:
-                    raise ValueError('A saved model cannot be replaced in place.')
-                if row['expires_at'] <= _timestamp(now):
-                    raise ValueError('An expired model must be purged before explicit registration.')
-                return self._summary(row) | {'created': False}
-            counts = connection.execute('''SELECT count(*) AS total, coalesce(sum(artifact_bytes), 0) AS bytes,
-                coalesce(sum(CASE WHEN scope_id=? THEN 1 ELSE 0 END), 0) AS owned,
-                coalesce(sum(CASE WHEN scope_id=? THEN artifact_bytes ELSE 0 END), 0) AS owned_bytes
-                FROM forecast_models''', (scope, scope)).fetchone()
-            if (counts['total'] >= MAX_MODELS_TOTAL or counts['owned'] >= MAX_MODELS_PER_SCOPE
-                    or counts['bytes'] + size > MAX_BYTES_TOTAL or counts['owned_bytes'] + size > MAX_BYTES_PER_SCOPE):
-                raise ForecastModelCapacityError('Retained model capacity reached; nothing was evicted.')
-            connection.execute('INSERT INTO forecast_models VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                               (scope, artifact['model_id'], CONTRACT, artifact['sha256'], serialized,
-                                size, _timestamp(now), _timestamp(now + timedelta(days=retention_days))))
-            saved = connection.execute('SELECT * FROM forecast_models WHERE scope_id=? AND model_id=?',
-                                       (scope, artifact['model_id'])).fetchone()
-            return self._summary(saved) | {'created': True}
-        return self._guard(scope_id, save)
+        return artifact, serialized, size, retention_days
+
+    def _register(self, connection, scope, prepared):
+        artifact, serialized, size, days = prepared
+        now = _now()
+        row = connection.execute('SELECT * FROM forecast_models WHERE scope_id=? AND model_id=?',
+                                 (scope, artifact['model_id'])).fetchone()
+        if row is not None:
+            self._artifact(row)
+            if row['artifact_sha256'] != artifact['sha256'] or row['artifact_json'] != serialized:
+                raise ValueError('A saved model cannot be replaced in place.')
+            if row['expires_at'] <= _timestamp(now):
+                raise ValueError('An expired model must be purged before explicit registration.')
+            return self._summary(row) | {'created': False}
+        counts = connection.execute('''SELECT count(*) AS total, coalesce(sum(artifact_bytes), 0) AS bytes,
+            coalesce(sum(CASE WHEN scope_id=? THEN 1 ELSE 0 END), 0) AS owned,
+            coalesce(sum(CASE WHEN scope_id=? THEN artifact_bytes ELSE 0 END), 0) AS owned_bytes
+            FROM forecast_models''', (scope, scope)).fetchone()
+        if (counts['total'] >= MAX_MODELS_TOTAL or counts['owned'] >= MAX_MODELS_PER_SCOPE
+                or counts['bytes'] + size > MAX_BYTES_TOTAL or counts['owned_bytes'] + size > MAX_BYTES_PER_SCOPE):
+            raise ForecastModelCapacityError('Retained model capacity reached; nothing was evicted.')
+        connection.execute('INSERT INTO forecast_models VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                           (scope, artifact['model_id'], CONTRACT, artifact['sha256'], serialized,
+                            size, _timestamp(now), _timestamp(now + timedelta(days=days))))
+        saved = connection.execute('SELECT * FROM forecast_models WHERE scope_id=? AND model_id=?',
+                                   (scope, artifact['model_id'])).fetchone()
+        return self._summary(saved) | {'created': True}
+
+    def register_completed_job(self, connection, *, job_id, scope_id, artifact):
+        """Retain only inside the owned job's completion transaction."""
+        job_id, scope = _validated_job_id(job_id), _validated_scope_id(scope_id)
+        self._check_storage()
+        db = connection.execute('PRAGMA database_list').fetchone()
+        if not connection.in_transaction or not db or Path(db[2]).resolve() != self.database_path.resolve():
+            raise ValueError('Model registration requires the analysis completion transaction.')
+        row = connection.execute('''SELECT payload_json FROM analysis_jobs
+            WHERE id=? AND scope_id=? AND status='completed'
+              AND NOT EXISTS (SELECT 1 FROM deleted_scopes WHERE scope_id=?)''',
+            (job_id, scope, scope)).fetchone()
+        payload = json.loads(row['payload_json']) if row is not None else {}
+        days = retention_days(payload)
+        if days is None:
+            raise ValueError('Model registration requires an opted-in, completed forecast job.')
+        prepared = self._prepare_registration(artifact, days)
+        artifact = prepared[0]
+        task = payload['forecast_task']
+        if (artifact['model_id'] != job_id or artifact['task'] != task['settings']
+                or artifact['target_unit'] != task['target_unit']
+                or artifact['decision_policy'] != task.get('decision_policy')):
+            raise ValueError('Model does not match the completed forecast task.')
+        return self._register(connection, scope, prepared)
 
     @staticmethod
     def _summary(row):
@@ -148,14 +220,23 @@ class ForecastModelStore:
                 'created_at': row['created_at'], 'expires_at': row['expires_at'],
                 'artifact_bytes': row['artifact_bytes'], 'production_readiness': 'not_established'}
 
-    def get(self, scope_id, model_id):
+    def _read(self, scope_id, model_id, *, summary_only):
         model_id = _validated_job_id(model_id)
         def read(connection, scope):
             row = connection.execute('''SELECT * FROM forecast_models
                 WHERE scope_id=? AND model_id=? AND expires_at>?''',
                 (scope, model_id, _timestamp(_now()))).fetchone()
-            return self._artifact(row) if row is not None else None
+            if row is None:
+                return None
+            artifact = self._artifact(row)
+            return self._summary(row) if summary_only else artifact
         return self._guard(scope_id, read)
+
+    def get(self, scope_id, model_id):
+        return self._read(scope_id, model_id, summary_only=False)
+
+    def get_summary(self, scope_id, model_id):
+        return self._read(scope_id, model_id, summary_only=True)
 
     def list_for_scope(self, scope_id, *, limit=10):
         if type(limit) is not int or not 1 <= limit <= MAX_MODELS_PER_SCOPE:

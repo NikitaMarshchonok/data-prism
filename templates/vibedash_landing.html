@@ -251,6 +251,23 @@
                         <label for="forecast-policy-confirmed"><input id="forecast-policy-confirmed" name="forecast_policy_confirmed" type="checkbox" value="yes" required><span>I set these criteria before evaluation. Meeting them on one historical holdout does not approve operational use.</span></label>
                         <p id="forecast-guidance">Select a numeric measure target and a time column above. Use one complete observation per day, without gaps. Only past target values are used; all other columns are ignored.</p>
                         <label for="forecast-available"><input id="forecast-available" name="forecast_available" type="checkbox" value="yes" required><span>I reviewed the issue date, history mode and fixed reporting delay. Targets through origin minus this delay are available and final at each origin. Variable delays, later revisions and historical data vintages are not supported or independently verified.</span></label>
+                        <div class="forecast-model-choice">
+                            {% if forecast_model_storage_available %}
+                            <label for="forecast-model-retention">Save the evaluated model to your account (optional)</label>
+                            <select id="forecast-model-retention" name="forecast_model_retention_days" aria-describedby="forecast-model-storage-help" autocomplete="off">
+                                <option value="" selected>Do not save</option>
+                                <option value="1">Save for 1 day</option>
+                                <option value="7">Save for 7 days</option>
+                                <option value="14">Save for 14 days</option>
+                                <option value="30">Save for 30 days</option>
+                            </select>
+                            <p id="forecast-model-storage-help">For number or count targets. The saved JSON contains fitted parameters, recent target values and decision settings, not the full CSV. It is available in Account settings until expiry. Your forecast report has a separate retention period.</p>
+                            {% elif account %}
+                            <p>Model saving is unavailable on this deployment. You can still evaluate the forecast without saving a model.</p>
+                            {% else %}
+                            <p>Model saving requires a signed-in account and persistent storage. You can still evaluate the forecast without saving a model.</p>
+                            {% endif %}
+                        </div>
                     </fieldset>
                     <div class="semantic-table-wrap">
                         <table class="semantic-table">
@@ -403,6 +420,7 @@
         const forecastSettings = document.getElementById('forecast-settings');
         const forecastAvailable = document.getElementById('forecast-available');
         const forecastPolicyConfirmed = document.getElementById('forecast-policy-confirmed');
+        const forecastModelRetention = document.getElementById('forecast-model-retention');
         const readinessUrl = {{ url_for('vibedash.dataset_readiness')|tojson }};
         const comparisonJobsUrl = {{ url_for('vibedash.create_period_comparison_job')|tojson }};
         const comparisonReadinessUrl = {{ url_for('vibedash.comparison_readiness')|tojson }};
@@ -439,6 +457,7 @@
 
         fileInput.addEventListener('change', async (event) => {
             invalidateTaskConfirmation(true);
+            if (forecastModelRetention) forecastModelRetention.value = '';
             taskObservationUnit.value = '';
             document.getElementById('forecast-origin').value = '';
             const selectedFile = event.target.files[0];
@@ -525,6 +544,7 @@
 
         function syncTaskResult() {
             const forecasting = analysisMode.value === 'forecast';
+            if (!forecasting && forecastModelRetention) forecastModelRetention.value = '';
             forecastSettings.hidden = !forecasting;
             forecastSettings.disabled = !forecasting;
             submitButton.firstChild.textContent = forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ';

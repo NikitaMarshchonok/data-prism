@@ -1,9 +1,10 @@
-# Prepared owner-scoped forecast model store
+# Owner-scoped forecast model store
 
-`scoped-forecast-model-store-v1` prepares server-side storage for evaluated
-declarative daily models. It is an **internal Python API, not an enabled web
-feature**. It does not automatically retain browser uploads or models, add an
-HTTP model-import endpoint, migrate local journals, or change current hosting.
+`scoped-forecast-model-store-v1` stores evaluated declarative daily models.
+The browser can explicitly request retention and download an owned model on a
+qualified deployment. The web feature is **off by default**. It does not
+implicitly retain models, accept model uploads, migrate local journals, or
+change the current hosting.
 
 ## Scope and storage preconditions
 
@@ -28,13 +29,35 @@ changing environment labels on the existing free/ephemeral deployment.
 
 All operations require a validated scope. The caller must derive that scope
 from authenticated server context; a user-provided scope string is not
-authentication and must never be accepted as authority by a future route.
-This slice does not implement that route, account opt-in, CSRF handling, team
-roles or guest access. Model IDs alone never authorize a read, inference,
-listing or deletion. The same ID may be independently retained by two scopes.
-A future save route must bind the artifact to the user's owned, evaluated job
-and create it from that job's validated data; the low-level scope argument does
-not prove dataset ownership or training provenance by itself.
+authentication. Model IDs alone never authorize a read, inference, listing or
+deletion. No team roles or guest retention are provided. The low-level scope
+argument does not prove dataset ownership or training provenance by itself.
+
+## Browser flow (opt-in)
+
+Only enable `VIBEDASH_MODEL_STORAGE_ENABLED=true` after providing and
+verifying persistent production storage. The web gate requires the declared
+runtime root and the configured job database to be the same state tree. It
+refuses a missing/mismatched identity, demo/ephemeral state or a different job
+database. The shipped Render configuration stays unchanged.
+
+1. Sign in and start a daily forecast for a confirmed number or count target.
+   Leave **Do not save** selected for ordinary evaluation, or choose a
+   retention period. Replacing the file or leaving forecast mode resets this
+   choice. The CSRF-protected queue request binds a nonempty choice to the
+   authenticated account scope and the job; it accepts no owner or artifact
+   from the client.
+2. The worker prepares a frozen artifact from that job's validated data and
+   evaluated forecast. Its model ID is the server-issued job ID. The model
+   insert runs inside the successful completion transaction. An interrupted
+   or failed job cannot leave a model behind. A model-only failure rolls back
+   that attempt without losing an otherwise valid forecast report.
+3. The result links to the saved model only if it can be read now. Account
+   settings lists retained models and can download each JSON via a
+   CSRF-protected, owner-scoped POST. Responses are private, no-store
+   attachments. The artifact is not embedded in the forecast HTML, standalone
+   report or aggregate audit manifest. Downloaded copies remain outside
+   server expiry or erasure.
 
 ## Immutability, retention and inference
 
@@ -53,11 +76,12 @@ retraining. New candidate training requires a separate model identity and a
 future explicit review workflow.
 
 Reads and inference deny an expired artifact immediately, including exactly at
-its expiry timestamp. They do not renew it. `purge_expired(scope)` explicitly
-removes expired rows for that owner; there is **no scheduled cleanup in this
-slice**. Until wired to an operator/application lifecycle, expired payloads may
-remain physically stored but are inaccessible through this API. Re-registration
-after expiry requires explicit purge and a new retention choice.
+its expiry timestamp. They do not renew it. The existing VibeDash
+request-triggered retention sweep deletes expired models from the shared
+database, even after the feature flag is switched off. There is no idle
+background timer, so an idle instance may still physically retain expired
+rows until its next VibeDash request. Job/report retention is separate and
+does not extend or shorten a model's selected expiry.
 
 Capacity is bounded to 10 retained models and 16 MiB of serialized artifact
 payload per scope; globally 100 models and 128 MiB. The existing 4 MiB limit per
@@ -90,9 +114,8 @@ partially deleting model rows. No filesystem model copies are created.
 This is logical deletion, not secure erasure of SQLite pages/WAL, historical
 backups or downloads. Old backups may contain subsequently deleted/expired data;
 backup retention and restoration controls remain essential. The current
-metadata-only account export does **not** add these data-bearing models. A future
-customer-facing save flow must implement its own explicitly authorized model
-export/retention UX before enabling registration through HTTP.
+metadata-only account export does **not** add these data-bearing models. They
+have a separate explicit download.
 
 The existing offline runtime backup includes this table as part of the shared
 database. A round-trip test verifies the artifact, frozen predictions and
@@ -110,8 +133,8 @@ outside this server deletion/backup boundary.
 
 ## Remaining customer-facing work
 
-Authenticated opt-in save/load UI/API, authorized model export, a periodic
-retention worker, hosted prediction/outcome matching with series identity,
-prospective issuance provenance, predeclared alerts and controlled model
-promotion/rollback remain outstanding. The deployed ephemeral service is not
-silently upgraded or represented as a durable model service by this module.
+Web inference on new history, idle-time retention scheduling, hosted
+prediction/outcome matching with series identity, prospective issuance
+provenance, predeclared alerts and controlled model promotion/rollback remain
+outstanding. The deployed ephemeral service is not silently upgraded or
+represented as a durable model service by this module.
