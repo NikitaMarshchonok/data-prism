@@ -59,6 +59,9 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .export-card, .recovery-card, .security-activity-card { background: rgba(24, 43, 51, .72); border: 1px solid var(--border); border-radius: 12px; margin-top: 34px; padding: 22px; }
 .export-card h2, .recovery-card h2, .security-activity-card h2 { font-size: 20px; margin: 0 0 8px; }
 .export-card .form-help { margin-bottom: 8px; }
+.saved-model-list { list-style: none; padding: 0; }
+.saved-model-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; border-top: 1px solid var(--border); padding: 12px 0; }
+.saved-model-list .button { min-height: 44px; }
 .export-form .button { margin-top: 10px; }
 .security-activity-list { list-style: none; margin: 18px 0 0; padding: 0; }
 .security-activity-list li { align-items: baseline; border-top: 1px solid var(--border); display: flex; gap: 18px; justify-content: space-between; padding: 12px 0; }

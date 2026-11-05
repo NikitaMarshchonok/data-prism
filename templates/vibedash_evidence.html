@@ -75,6 +75,17 @@
         {% set forecast = dashboard_data.forecast %}
         <section class="dashboard-section forecast-evaluation" aria-labelledby="forecast-heading">
             <div class="section-heading"><div><h2 id="forecast-heading">Daily forecast evaluation</h2></div><p>{{ forecast.task.target_column }} · {{ forecast.task.horizon }} days · past target values only</p></div>
+            {% if model_retention_requested and not export_mode %}
+            <div class="readiness-issue" role="note">
+                {% if saved_model %}
+                <h3>Model saved to your account</h3>
+                <p>Available until <time datetime="{{ saved_model.expires_at }}">{{ saved_model.expires_at[:16]|replace('T', ' ') }} UTC</time>. <a href="{{ url_for('vibedash.account_settings') }}#saved-model-{{ saved_model.model_id }}">Download from Account settings</a>. Saving does not approve operational use.</p>
+                {% else %}
+                <h3>No saved model is available</h3>
+                <p>Saving did not complete, access has expired, or model storage is unavailable. The forecast evaluation below remains available.</p>
+                {% endif %}
+            </div>
+            {% endif %}
             {% if forecast.availability %}
             <div class="readiness-issue" role="note">
                 <h3>Forecast origin and target availability</h3>

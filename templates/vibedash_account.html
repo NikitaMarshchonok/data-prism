@@ -91,6 +91,31 @@
                 {% endif %}
             </section>
 
+            {% if model_storage_available %}
+            <section class="export-card" aria-labelledby="saved-forecast-models">
+                <h2 id="saved-forecast-models">Saved forecast models</h2>
+                <p class="form-help">Only models you chose to save appear here. Downloads contain fitted parameters and recent target values. Keep them private; they are not approved for operational use.</p>
+                {% if model_list_unavailable %}
+                <p role="status">Saved models are temporarily unavailable.</p>
+                {% elif saved_models %}
+                <ul class="saved-model-list">
+                    {% for model in saved_models %}
+                    <li id="saved-model-{{ model.model_id }}">
+                        <span>Model <code>{{ model.model_id[:12] }}</code><br>
+                            Saved <time datetime="{{ model.created_at }}">{{ model.created_at[:16]|replace('T', ' ') }} UTC</time><br>
+                            Expires <time datetime="{{ model.expires_at }}">{{ model.expires_at[:16]|replace('T', ' ') }} UTC</time></span>
+                        <form method="post" action="{{ url_for('vibedash.forecast_model_export', model_id=model.model_id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                            <button type="submit" class="button button-secondary" aria-label="Download model {{ model.model_id[:12] }} as JSON">Download JSON</button>
+                        </form>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p>No saved forecast models. Choose a retention period when you run a daily forecast to save one.</p>
+                {% endif %}
+            </section>
+            {% endif %}
             <section class="export-card" aria-labelledby="account-export-title">
                 <h2 id="account-export-title">Export account data</h2>
                 <p class="form-help">Download the newest 50 jobs, newest 100 decision cases, and retained security activity owned by this account.</p>

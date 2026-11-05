@@ -99,8 +99,11 @@ not evidence that those parameters were selected on unseen client data. The
 journal does not certify historical issuance or release timestamps; see
 [FORECAST_OUTCOME_LEDGER.md](FORECAST_OUTCOME_LEDGER.md).
 
-The prepared server registry has separate scope/fence/retention/recovery tests in
+The server registry has separate scope/fence/retention/recovery tests in
 `tests/test_forecast_models.py`, plus an account-deletion HTTP regression case.
+The opt-in web path is tested in `tests/test_vibedash_forecast_model_web.py`,
+including no-consent, failed completion, rollback, owner-only download and
+expiry independent of job-history retention.
 These exercise a declared persistent test root with a known identity, not a
 physical hosting mount. They do not establish deployed durability or enable
 customer-facing model saving; see [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).

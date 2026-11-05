@@ -111,9 +111,9 @@ the current interpreter source matches it.
 
 ## Still required for the hosted lifecycle
 
-The prepared internal scoped store is described in
-[FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md). It is not connected to a
-browser save route and does not make the current ephemeral deployment durable.
+The [scoped store and opt-in web download](FORECAST_MODEL_STORE.md) use the
+same artifact contract. Web storage remains off by default and does not make
+the current ephemeral deployment durable.
 
 An explicitly opt-in local prediction/actual journal is now available through
 `predict_forecast.py --ledger`; see [FORECAST_OUTCOME_LEDGER.md](FORECAST_OUTCOME_LEDGER.md).
@@ -122,7 +122,7 @@ explicit corrections, and computes paired errors. It does not change the
 stateless prediction object's `quality_on_new_outcomes=unknown`: only a separate
 journal evaluation knows which facts have subsequently been supplied.
 
-Customer-facing authenticated model saving/export and scheduled retention cleanup,
+Hosted inference, idle-time retention cleanup,
 hosted prediction/actual matching, durable hosted measured-quality history, alert rules,
 controlled candidate retraining, reviewable model promotion and rollback are not
 implemented here. Without the explicit journal option, emitting a new
