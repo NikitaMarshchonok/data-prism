@@ -200,9 +200,14 @@ implemented and tested but the current ephemeral deployment is not eligible.
 Provisioning and verifying real persistent infrastructure remain operator work.
 See [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
 
-Next, support web inference on explicitly available new history using a retained
-model, then connect that issued forecast to its future actuals. Never load
-arbitrary user-supplied serialized Python objects.
+Account settings now also supports transient web inference on explicitly
+available new history using an owned, retained model. It checks the unchanged
+training prefix, reporting cutoff and a later issue date, then compares frozen
+model and reference predictions without refitting. It does not retain the
+uploaded history or issue a durable prediction record. Never load arbitrary
+user-supplied serialized Python objects.
+
+Next, bind an explicitly retained forecast to its future actuals.
 
 Record prediction IDs, origin and horizon; accept matched actuals only once they
 become available. Score each horizon against its contemporaneous baseline;

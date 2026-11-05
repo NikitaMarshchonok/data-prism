@@ -62,6 +62,18 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .saved-model-list { list-style: none; padding: 0; }
 .saved-model-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; border-top: 1px solid var(--border); padding: 12px 0; }
 .saved-model-list .button { min-height: 44px; }
+.model-inference { flex: 1 0 100%; min-width: 0; }
+.model-inference summary { min-height: 44px; padding: 10px 0; color: var(--accent); cursor: pointer; font-weight: 650; }
+.model-inference summary:focus-visible, .model-inference :is(h3, p)[autofocus]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.model-inference-form :is(input[type="date"], input[type="file"]) { min-width: 0; min-height: 44px; }
+.model-inference-form .form-help { overflow-wrap: anywhere; }
+.model-availability { display: flex; align-items: center; min-height: 44px; gap: 10px; }
+.model-availability input { flex: none; width: 20px; height: 20px; accent-color: var(--accent); }
+.model-prediction { border-top: 1px solid var(--border); margin-bottom: 18px; padding-top: 12px; }
+.model-prediction h3 { margin: 0; }
+.model-prediction table { width: 100%; table-layout: fixed; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.model-prediction :is(caption, th, td) { text-align: left; padding: 6px 4px; overflow-wrap: anywhere; }
+.model-prediction :is(th, td) { border-bottom: 1px solid var(--border); }
 .export-form .button { margin-top: 10px; }
 .security-activity-list { list-style: none; margin: 18px 0 0; padding: 0; }
 .security-activity-list li { align-items: baseline; border-top: 1px solid var(--border); display: flex; gap: 18px; justify-content: space-between; padding: 12px 0; }

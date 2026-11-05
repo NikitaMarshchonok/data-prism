@@ -29,6 +29,10 @@ class ForecastModelCapacityError(ValueError):
     """Explicit capacity is exhausted; no retained model is silently removed."""
 
 
+class ForecastModelNotFound(ValueError):
+    """No unexpired model exists in the authenticated scope."""
+
+
 def _now():
     return datetime.now(timezone.utc)
 
@@ -238,26 +242,40 @@ class ForecastModelStore:
     def get_summary(self, scope_id, model_id):
         return self._read(scope_id, model_id, summary_only=True)
 
-    def list_for_scope(self, scope_id, *, limit=10):
+    def list_for_scope(self, scope_id, *, limit=10, include_input_contract=False):
         if type(limit) is not int or not 1 <= limit <= MAX_MODELS_PER_SCOPE:
             raise ValueError('Invalid model list limit.')
         def read(connection, scope):
             rows = connection.execute('''SELECT * FROM forecast_models WHERE scope_id=? AND expires_at>?
                 ORDER BY created_at DESC, model_id LIMIT ?''', (scope, _timestamp(_now()), limit)).fetchall()
+            models = []
             for row in rows:
-                self._artifact(row)
-            return [self._summary(row) for row in rows]
+                artifact = self._artifact(row)
+                summary = self._summary(row)
+                if include_input_contract:
+                    summary['input_contract'] = {
+                        'time_column': artifact['task']['time_column'],
+                        'target_column': artifact['task']['target_column'],
+                        'target_unit': artifact['target_unit'],
+                        'training_start': artifact['training']['start'],
+                        'trained_through': artifact['training']['through'],
+                        'original_issue_date': artifact['training']['issue_date'],
+                        'reporting_delay_days': artifact['task'].get('reporting_delay_days', 0),
+                    }
+                models.append(summary)
+            return models
         return self._guard(scope_id, read)
 
-    def predict(self, scope_id, model_id, *, history=None, forecast_origin=None):
+    def predict(self, scope_id, model_id, *, history=None, forecast_origin=None, require_new_history=False):
         model_id = _validated_job_id(model_id)
         def predict(connection, scope):
             row = connection.execute('''SELECT * FROM forecast_models
                 WHERE scope_id=? AND model_id=? AND expires_at>?''',
                 (scope, model_id, _timestamp(_now()))).fetchone()
             if row is None:
-                raise ValueError('No retained model is available in this scope.')
-            return predict_artifact(self._artifact(row), history=history, forecast_origin=forecast_origin)
+                raise ForecastModelNotFound('No retained model is available in this scope.')
+            return predict_artifact(self._artifact(row), history=history, forecast_origin=forecast_origin,
+                                    require_new_history=require_new_history)
         # Ownership and the deletion fence stay held through frozen inference.
         # This does not persist the returned predictions or match actuals.
         return self._guard(scope_id, predict)

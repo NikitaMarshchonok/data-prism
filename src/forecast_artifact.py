@@ -32,6 +32,14 @@ PREDICTION_CONTRACT = 'local-frozen-forecast-v1'
 MAX_ARTIFACT_BYTES = 4 * 1024 * 1024
 
 
+class ForecastHistoryError(ValueError):
+    """A safe input error, distinct from unavailable/corrupt model state."""
+
+    def __init__(self, message, *, field='history'):
+        super().__init__(message)
+        self.field = field
+
+
 def _canonical(value):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False,
                       allow_nan=False).encode('utf-8')
@@ -308,11 +316,21 @@ def create_artifact(frame, task, report, *, decision_policy=None, target_unit='n
     return json.loads(_canonical(artifact))
 
 
-def predict_artifact(artifact, *, history=None, forecast_origin=None):
+def predict_artifact(artifact, *, history=None, forecast_origin=None, require_new_history=False):
     """Frozen parameters; optionally append released actuals, never refit/select."""
     task = validate_artifact(artifact)
     training, delay = artifact['training'], task.reporting_delay_days
     origin = training['issue_date'] if forecast_origin is None else forecast_origin
+    if require_new_history:
+        try:
+            new_origin = validate_forecast_date(forecast_origin)
+        except ValueError:
+            raise ForecastHistoryError('Enter a valid issue date in YYYY-MM-DD format.', field='origin') from None
+        if new_origin <= validate_forecast_date(training['issue_date']):
+            raise ForecastHistoryError('Choose an issue date later than the saved model’s original issue date.',
+                                       field='origin')
+        if history is None:
+            raise ForecastHistoryError('Upload the full original history with newly available daily observations.')
     updated = ForecastTask(task.target_column, task.time_column, task.horizon, task.seasonal_period, delay, origin)
     if history is None:
         if origin != training['issue_date']:
@@ -320,13 +338,21 @@ def predict_artifact(artifact, *, history=None, forecast_origin=None):
         values, cutoff = training['tail'], training['through']
         supplied_rows = training['rows']
     else:
-        dates, values = _series(history, updated)
+        try:
+            dates, values = _series(history, updated)
+        except ValueError:
+            if require_new_history:
+                raise ForecastHistoryError(
+                    'Use the saved date and target columns, one finite value per day without gaps, '
+                    'and end exactly at the issue date minus the model’s reporting delay.'
+                ) from None
+            raise
         count = training['rows']
         if (len(values) < count or dates[0].strftime('%Y-%m-%d') != training['start']
                 or _history_digest(dates[:count], values[:count]) != training['history_sha256']):
-            raise ValueError('New history must preserve the complete original training prefix.')
+            raise ForecastHistoryError('New history must preserve the complete original training prefix.')
         if artifact['target_unit'] == 'count' and (values < 0).any():
-            raise ValueError('New count history contains negative observations.')
+            raise ForecastHistoryError('New count history contains negative observations.')
         cutoff, supplied_rows = dates[-1].strftime('%Y-%m-%d'), len(values)
     _, _, days = _future_window(pd.DatetimeIndex([cutoff]), updated)
     output = _predict(artifact['model'], values, delay + task.horizon, task.seasonal_period)[delay:]
