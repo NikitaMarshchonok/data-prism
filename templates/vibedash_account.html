@@ -100,6 +100,8 @@
                 {% elif saved_models %}
                 <ul class="saved-model-list">
                     {% for model in saved_models %}
+                    {% set run = forecast_run if forecast_run and forecast_run.model_id == model.model_id else none %}
+                    {% set prefix = 'forecast-' ~ model.model_id %}
                     <li id="saved-model-{{ model.model_id }}">
                         <span>Model <code>{{ model.model_id[:12] }}</code><br>
                             Saved <time datetime="{{ model.created_at }}">{{ model.created_at[:16]|replace('T', ' ') }} UTC</time><br>
@@ -108,6 +110,50 @@
                             <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
                             <button type="submit" class="button button-secondary" aria-label="Download model {{ model.model_id[:12] }} as JSON">Download JSON</button>
                         </form>
+                        <details class="model-inference"{% if run %} open{% endif %}>
+                            <summary aria-label="Forecast on updated history for model {{ model.model_id[:12] }}">Forecast on updated history</summary>
+                            {% if run and run.prediction %}
+                            {% set result = run.prediction %}
+                            <section class="model-prediction" aria-labelledby="{{ prefix }}-result">
+                                <h3 id="{{ prefix }}-result" tabindex="-1" autofocus>New forecast ready</h3>
+                                <p>Issue date: <strong>{{ result.forecast_origin }}</strong>. History available through {{ result.available_through }}; model trained through {{ result.trained_through }}.</p>
+                                <p>Parameters and reference method unchanged. Accuracy on new outcomes is unknown. This forecast is not saved and is not approved for operational use.</p>
+                                <table>
+                                    <caption>Daily predictions for {{ model.input_contract.target_column }} ({{ model.input_contract.target_unit }})</caption>
+                                    <thead><tr><th scope="col">Date</th><th scope="col">Model</th><th scope="col">Baseline</th></tr></thead>
+                                    <tbody>
+                                        {% for point in result.predictions %}
+                                        <tr><th scope="row">{{ point.date }}</th><td>{{ '%.8g'|format(point.prediction) }}</td><td>{{ '%.8g'|format(point.baseline) }}</td></tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                                <p class="form-help">Model: {{ result.model_name }}. Baseline: {{ result.baseline_name }}. Values rounded for display.</p>
+                            </section>
+                            {% endif %}
+                            <form class="model-inference-form" method="post" enctype="multipart/form-data" action="{{ url_for('vibedash.forecast_model_predict', model_id=model.model_id) }}#saved-model-{{ model.model_id }}">
+                                <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                                <p class="form-help">Use the saved model without retraining. The uploaded history and the result are not retained in your account.</p>
+                                {% if run and run.error %}
+                                <p id="{{ prefix }}-error" class="notice notice-error" role="alert" tabindex="-1" autofocus>
+                                    {{ run.error }}
+                                    {% if run.field %}<a href="#{{ prefix }}-{{ run.field }}">Review this field</a>{% endif %}
+                                </p>
+                                {% endif %}
+                                <label for="{{ prefix }}-origin">New issue date (required)</label>
+                                <input id="{{ prefix }}-origin" name="forecast_origin" type="date" value="{{ run.origin if run else '' }}" required
+                                    aria-describedby="{{ prefix }}-origin-help{% if run and run.field == 'origin' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'origin' %} aria-invalid="true"{% endif %}>
+                                <p id="{{ prefix }}-origin-help" class="form-help">Use a date later than {{ model.input_contract.original_issue_date }}. Your last observation must be on the new issue date minus {{ model.input_contract.reporting_delay_days }} days.</p>
+                                <label for="{{ prefix }}-history">Updated history CSV (required)</label>
+                                <input id="{{ prefix }}-history" name="history_csv" type="file" accept=".csv,text/csv" required
+                                    aria-describedby="{{ prefix }}-history-help{% if run and run.field == 'history' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'history' %} aria-invalid="true"{% endif %}>
+                                <p id="{{ prefix }}-history-help" class="form-help">Keep the complete history from {{ model.input_contract.training_start }} through {{ model.input_contract.trained_through }} unchanged, then append the newly available daily values. Use columns <code>{{ model.input_contract.time_column }}</code> and <code>{{ model.input_contract.target_column }}</code>. UTF-8 CSV, up to 2 MiB and 5,000 rows.</p>
+                                <label class="model-availability" for="{{ prefix }}-availability">
+                                    <input id="{{ prefix }}-availability" name="history_available" type="checkbox" value="yes" required{% if run and run.field == 'availability' %} aria-describedby="{{ prefix }}-error" aria-invalid="true"{% endif %}>
+                                    <span>I confirm these observations were available by the new issue date.</span>
+                                </label>
+                                <button type="submit" class="button button-primary">Run forecast</button>
+                            </form>
+                        </details>
                     </li>
                     {% endfor %}
                 </ul>

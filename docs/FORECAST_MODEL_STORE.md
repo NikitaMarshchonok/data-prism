@@ -98,10 +98,41 @@ stateless with `quality_on_new_outcomes=unknown` and
 `production_readiness=not_established`. It is **not** written to the local
 forecast journal or a hosted outcome ledger by this API.
 
-List summaries contain only model ID/hash, store contract, byte count and
-creation/expiry timestamps, plus the unchanged non-approval status. They exclude
-parameters, policy text, source schema names and training tails. Explicit `get`
-returns the data-bearing artifact to an already authorized internal caller.
+Default list summaries contain only model ID/hash, store contract, byte count
+and creation/expiry timestamps, plus the unchanged non-approval status. The
+owner's Account page also receives the date and target column names, target
+unit, training dates and reporting delay needed for the input form. It does not
+receive fitted parameters, policy text or training target values. Explicit
+`get` returns the artifact to an already authorized caller.
+
+### Forecast on updated history
+
+In Account settings, expand **Forecast on updated history** on a retained
+model. Submit the original training history unchanged plus at least one newly
+available daily value, choose an explicit issue date later than the original,
+and confirm that the observations were available then. The submitted dates
+must end exactly at issue date minus the saved reporting delay. A delay of
+two days and issue date of June 13, for example, require history through June 11.
+The confirmation is a user assertion, not independently verified release or
+issuance provenance.
+
+The form sends a CSRF-protected POST to
+`/vibedash/account/models/<model_id>/predict`. It accepts one comma-delimited
+UTF-8 CSV (optional BOM), up to 2 MiB, 5,000 records, and 64 uniquely named
+columns. Malformed record widths, duplicate headers, missing/duplicate days,
+nonfinite targets, changed training prefixes and unavailable tails fail
+without imputation or truncation. Authentication, the persistent-store gate
+and ownership are checked before reading the CSV; ownership and expiry are
+checked again under the scope fence at inference.
+
+The response shows the frozen model and its original reference side by side.
+New history updates lag context, not fitted parameters or model selection.
+Invalid negative count predictions are withheld. The private, no-store
+response does not persist the file, report, prediction ID or outcome record.
+The request parser may temporarily spool multipart input; the application
+does not save a working upload or extend the model's retention. Reloading the
+account does not recover the result. This flow remains off on the current
+ephemeral deployment.
 
 ## Deletion, recovery and data boundary
 
@@ -133,8 +164,8 @@ outside this server deletion/backup boundary.
 
 ## Remaining customer-facing work
 
-Web inference on new history, idle-time retention scheduling, hosted
-prediction/outcome matching with series identity, prospective issuance
+Idle-time retention scheduling, durable issuance of user-approved forecasts,
+hosted prediction/outcome matching with series identity, prospective issuance
 provenance, predeclared alerts and controlled model promotion/rollback remain
 outstanding. The deployed ephemeral service is not silently upgraded or
 represented as a durable model service by this module.

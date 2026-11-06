@@ -122,7 +122,7 @@ explicit corrections, and computes paired errors. It does not change the
 stateless prediction object's `quality_on_new_outcomes=unknown`: only a separate
 journal evaluation knows which facts have subsequently been supplied.
 
-Hosted inference, idle-time retention cleanup,
+Durable hosted issuance, idle-time retention cleanup,
 hosted prediction/actual matching, durable hosted measured-quality history, alert rules,
 controlled candidate retraining, reviewable model promotion and rollback are not
 implemented here. Without the explicit journal option, emitting a new

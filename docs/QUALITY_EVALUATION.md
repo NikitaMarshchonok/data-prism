@@ -104,6 +104,9 @@ The server registry has separate scope/fence/retention/recovery tests in
 The opt-in web path is tested in `tests/test_vibedash_forecast_model_web.py`,
 including no-consent, failed completion, rollback, owner-only download and
 expiry independent of job-history retention.
+Transient web inference tests in `tests/test_vibedash_forecast_prediction.py`
+verify frozen model/baseline parity, full history and cutoff constraints,
+owner/expiry isolation, invalid-output withholding and no persisted run.
 These exercise a declared persistent test root with a known identity, not a
 physical hosting mount. They do not establish deployed durability or enable
 customer-facing model saving; see [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
