@@ -584,6 +584,8 @@ class AnalysisJobStore:
             # exist in older installations or changing the response contract.
             if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='forecast_models'").fetchone():
                 connection.execute('DELETE FROM forecast_models WHERE scope_id=?', (normalized_scope_id,))
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='forecast_outcomes'").fetchone():
+                connection.execute('DELETE FROM forecast_outcomes WHERE scope_id=?', (normalized_scope_id,))
             job_count = connection.execute(
                 "DELETE FROM analysis_jobs WHERE scope_id = ?",
                 (normalized_scope_id,),
@@ -637,6 +639,9 @@ class AnalysisJobStore:
             # when the operator switches off new model saving.
             if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='forecast_models'").fetchone():
                 connection.execute('DELETE FROM forecast_models WHERE expires_at<=?',
+                                   (now.isoformat(timespec='microseconds'),))
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='forecast_outcomes'").fetchone():
+                connection.execute('DELETE FROM forecast_outcomes WHERE expires_at<=?',
                                    (now.isoformat(timespec='microseconds'),))
             cursor = connection.execute(
                 """

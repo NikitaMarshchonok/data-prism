@@ -64,7 +64,8 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .saved-model-list .button { min-height: 44px; }
 .model-inference { flex: 1 0 100%; min-width: 0; }
 .model-inference summary { min-height: 44px; padding: 10px 0; color: var(--accent); cursor: pointer; font-weight: 650; }
-.model-inference summary:focus-visible, .model-inference :is(h3, p)[autofocus]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.model-inference summary:focus-visible, :is(.model-inference, .model-prediction) :is(h3, p)[autofocus]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.saved-forecast-list li + li { margin-top: 8px; }
 .model-inference-form :is(input[type="date"], input[type="file"]) { min-width: 0; min-height: 44px; }
 .model-inference-form .form-help { overflow-wrap: anywhere; }
 .model-availability { display: flex; align-items: center; min-height: 44px; gap: 10px; }

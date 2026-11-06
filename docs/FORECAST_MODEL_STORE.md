@@ -127,17 +127,51 @@ checked again under the scope fence at inference.
 
 The response shows the frozen model and its original reference side by side.
 New history updates lag context, not fitted parameters or model selection.
-Invalid negative count predictions are withheld. The private, no-store
-response does not persist the file, report, prediction ID or outcome record.
-The request parser may temporarily spool multipart input; the application
-does not save a working upload or extend the model's retention. Reloading the
-account does not recover the result. This flow remains off on the current
-ephemeral deployment.
+Invalid negative count predictions are withheld. By default the private,
+no-store response shows the forecast for that request only. The request parser
+may temporarily spool multipart input. The application does not retain the
+history file or extend model retention.
+
+### Save a forecast and compare it with daily actuals
+
+Check **Save this forecast to check it against actuals** on the updated-history
+form to retain its model and baseline values. Saving uses the same authenticated
+persistent-state gate and SQLite deletion fence as the model. An issue date
+must be on or before the server's current UTC day. The record distinguishes the
+declared issue date from the server timestamp at first save. A historical issue
+date does not prove that the predictions were made before outcomes were known.
+
+The first successful save freezes one output per account, model and issue date.
+Repeating the same output returns its original ID without changing expiry.
+A different output for the same issue date is rejected. Records expire 150 days
+after the first save, independently of model or job expiry. This covers the
+supported 90-day horizon and 30-day reporting delay with 30 days left to report
+the latest actual. Up to 20 forecasts per account and 200 in total can be active.
+The frozen JSON payload is capped at 64 KiB. The application does not evict
+active forecasts to admit new ones.
+
+Under **Saved forecasts**, select a forecast and upload a UTF-8 CSV with the
+header `date,actual`, up to 16 KiB and 90 rows. Each date must be unique within
+the file and belong to this forecast. Today in UTC must be on or after the
+date plus the frozen reporting delay. Values must be finite decimals in the
+supported numeric range. Count values must be non-negative. The server keeps
+only normalized facts and their receipt timestamps. Repeated identical values
+are idempotent. A conflicting value or invalid date rejects the entire batch.
+Actuals are attached to the selected forecast ID and are never copied to
+overlapping forecasts. A corrections workflow remains future work.
+
+The account view shows date coverage and compares MAE, RMSE and, when declared
+in the original task, weighted absolute error. Both predictions are scored on
+exactly the same reported dates. With no facts, accuracy is unknown. Partial
+coverage is explicit and full coverage means that all expected dates have
+reported facts. Neither the source of the actuals nor their original release
+timing is independently verified. These comparisons do not promote or retrain
+the model. The ephemeral deployment does not meet the storage gate.
 
 ## Deletion, recovery and data boundary
 
 The table shares the analysis database and `run_if_scope_open` write fence.
-Existing account-scope erasure deletes that scope's model rows atomically with
+Existing account-scope erasure deletes that scope's model, forecast and actual rows atomically with
 its jobs/cases/metrics and permanently fences new writes. Foreign owners remain
 untouched. Active jobs or a cleanup failure prevent that transaction from
 partially deleting model rows. No filesystem model copies are created.
@@ -145,8 +179,10 @@ partially deleting model rows. No filesystem model copies are created.
 This is logical deletion, not secure erasure of SQLite pages/WAL, historical
 backups or downloads. Old backups may contain subsequently deleted/expired data;
 backup retention and restoration controls remain essential. The current
-metadata-only account export does **not** add these data-bearing models. They
-have a separate explicit download.
+metadata-only account export excludes model snapshots, forecasts and facts.
+Model snapshots have a separate explicit download. Retained forecast data is
+visible through the owner-only account view. Expiry cleanup on VibeDash traffic
+also removes forecasts and actuals when the feature is off.
 
 The existing offline runtime backup includes this table as part of the shared
 database. A round-trip test verifies the artifact, frozen predictions and
@@ -164,8 +200,6 @@ outside this server deletion/backup boundary.
 
 ## Remaining customer-facing work
 
-Idle-time retention scheduling, durable issuance of user-approved forecasts,
-hosted prediction/outcome matching with series identity, prospective issuance
-provenance, predeclared alerts and controlled model promotion/rollback remain
-outstanding. The deployed ephemeral service is not silently upgraded or
-represented as a durable model service by this module.
+Idle-time retention scheduling, shared series identity, corrections, prospective
+issuance provenance, predeclared alerts and controlled model promotion/rollback
+remain outstanding.

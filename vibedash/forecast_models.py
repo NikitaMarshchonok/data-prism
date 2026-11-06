@@ -11,6 +11,7 @@ from pathlib import Path
 from src.forecast_artifact import MAX_ARTIFACT_BYTES, predict_artifact, validate_artifact
 from src.runtime_storage import evaluate_runtime_storage_contract
 from .analysis_jobs import AnalysisJobStore, _validated_job_id, _validated_scope_id
+from .forecast_outcomes import forecast_view, merge_actuals, store_forecast
 
 
 CONTRACT = 'scoped-forecast-model-store-v1'
@@ -110,6 +111,13 @@ class ForecastModelStore:
             )''')
             connection.execute('''CREATE INDEX IF NOT EXISTS idx_forecast_models_expiry
                 ON forecast_models(scope_id, expires_at)''')
+            connection.execute('''CREATE TABLE IF NOT EXISTS forecast_outcomes (
+                scope_id TEXT NOT NULL, prediction_id TEXT NOT NULL, model_id TEXT NOT NULL,
+                forecast_origin TEXT NOT NULL, registered_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                forecast_json TEXT NOT NULL, actuals_json TEXT NOT NULL,
+                PRIMARY KEY(scope_id, prediction_id),
+                UNIQUE(scope_id, model_id, forecast_origin)
+            )''')
 
     def _check_storage(self):
         contract = evaluate_runtime_storage_contract(
@@ -266,7 +274,8 @@ class ForecastModelStore:
             return models
         return self._guard(scope_id, read)
 
-    def predict(self, scope_id, model_id, *, history=None, forecast_origin=None, require_new_history=False):
+    def predict(self, scope_id, model_id, *, history=None, forecast_origin=None,
+                require_new_history=False, retain_forecast=False):
         model_id = _validated_job_id(model_id)
         def predict(connection, scope):
             row = connection.execute('''SELECT * FROM forecast_models
@@ -274,11 +283,44 @@ class ForecastModelStore:
                 (scope, model_id, _timestamp(_now()))).fetchone()
             if row is None:
                 raise ForecastModelNotFound('No retained model is available in this scope.')
-            return predict_artifact(self._artifact(row), history=history, forecast_origin=forecast_origin,
-                                    require_new_history=require_new_history)
-        # Ownership and the deletion fence stay held through frozen inference.
-        # This does not persist the returned predictions or match actuals.
+            artifact = self._artifact(row)
+            report = predict_artifact(artifact, history=history, forecast_origin=forecast_origin,
+                                      require_new_history=require_new_history)
+            if retain_forecast:
+                report['retained_prediction_id'] = store_forecast(connection, scope, report, artifact, _now())
+            return report
+        # Keep ownership, inference and optional persistence under the deletion fence.
         return self._guard(scope_id, predict)
+
+    def list_forecasts(self, scope_id):
+        def read(connection, scope):
+            return [dict(row) for row in connection.execute('''
+                SELECT prediction_id, forecast_origin
+                FROM forecast_outcomes WHERE scope_id=? AND expires_at>?
+                ORDER BY registered_at DESC, prediction_id''', (scope, _timestamp(_now())))]
+        return self._guard(scope_id, read)
+
+    def get_forecast(self, scope_id, prediction_id, *, actuals=None):
+        """Read one forecast or apply a fully validated batch and return the new view."""
+        prediction_id = _validated_job_id(prediction_id)
+
+        def read_or_update(connection, scope):
+            now = _now()
+            row = connection.execute('''SELECT * FROM forecast_outcomes
+                WHERE scope_id=? AND prediction_id=? AND expires_at>?''',
+                (scope, prediction_id, _timestamp(now))).fetchone()
+            if row is None:
+                return None
+            payload = json.loads(row['forecast_json'])
+            recorded = json.loads(row['actuals_json'])
+            merged = recorded if actuals is None else merge_actuals(payload, recorded, actuals, now)
+            view = forecast_view(row, payload, merged)
+            if merged != recorded:
+                connection.execute('''UPDATE forecast_outcomes SET actuals_json=?
+                    WHERE scope_id=? AND prediction_id=?''',
+                    (json.dumps(merged, allow_nan=False), scope, prediction_id))
+            return view
+        return self._guard(scope_id, read_or_update)
 
     def delete(self, scope_id, model_id):
         model_id = _validated_job_id(model_id)
