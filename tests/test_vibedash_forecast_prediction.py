@@ -115,6 +115,17 @@ class ForecastPredictionWebTests(unittest.TestCase):
         response.request.input_stream.close()
         return response
 
+    def _correct(self, url, *, client=None, **fields):
+        client = self.owner if client is None else client
+        client.get('/vibedash/')
+        with client.session_transaction() as session:
+            csrf = session['vibedash_auth_csrf_token']
+        return client.post(url + '/correct', data={
+            'csrf_token': csrf, 'correction_date': '2020-06-14:1',
+            'correction_value': '12.5', 'correction_reason': 'Reconciled source',
+            **fields,
+        })
+
     def test_owned_forecast_matches_frozen_model_and_retains_nothing(self):
         artifact = self._export(self.owner, self.model_id).get_json()
         expected = predict_artifact(artifact, history=self.frame, forecast_origin='2020-06-13')
@@ -298,9 +309,96 @@ class ForecastPredictionWebTests(unittest.TestCase):
             self.assertEqual(self.owner.get(url).status_code, 404)
         self.assertEqual(self._outcomes(), [])
 
+    def test_correction_preserves_prior_actual_and_rescores_both_predictions(self):
+        url = self._save()
+        saved, = self._outcomes()
+        first = json.loads(saved['forecast_json'])['report']['predictions'][0]
+        self.assertEqual(self._post_actuals(url, [(first['date'], 10)]).status_code, 303)
+        original = json.loads(self._outcomes()[0]['actuals_json'])[first['date']]
+        html = self.owner.get(url).get_data(as_text=True)
+        self.assertIn('Correct a saved actual', html)
+        self.assertIn(f'value="{first["date"]}:1"', html)
+        self.assertNotIn('Actual correction history', html)
+
+        actual = first['prediction'] + 7.5
+        response = self._correct(url, correction_value=str(actual), correction_reason='Reconciled <ticket>')
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers['Cache-Control'], 'private, no-store')
+        page = self.owner.get(url)
+        self.assertEqual(page.headers['Cache-Control'], 'private, no-store')
+        html = page.get_data(as_text=True)
+        baseline_error = abs(actual - first['baseline'])
+        self.assertIn(f'<th scope="row">MAE</th><td>7.5</td><td>{baseline_error:.8g}</td>', html)
+        self.assertIn(f'<th scope="row">RMSE</th><td>7.5</td><td>{baseline_error:.8g}</td>', html)
+        self.assertIn(f'value="{first["date"]}:2"', html)
+        self.assertIn('Actual correction history', html)
+        self.assertIn('Reconciled &lt;ticket&gt;', html)
+        self.assertIn(f'Model error {abs(10 - first["prediction"]):.8g}', html)
+        self.assertIn(f'baseline error {abs(10 - first["baseline"]):.8g}', html)
+        self.assertIn('Model error 7.5', html)
+        updated, = self._outcomes()
+        history = json.loads(updated['actuals_json'])[first['date']]
+        self.assertEqual(history['value'], actual)
+        self.assertEqual(history['superseded'], [original])
+        self.assertEqual(updated['forecast_json'], saved['forecast_json'])
+        self.assertEqual(updated['expires_at'], saved['expires_at'])
+        self.assertEqual(self._post_actuals(url, [(first['date'], 10)]).status_code, 422)
+        self.assertEqual(self._outcomes(), [updated])
+
+    def test_correction_replays_and_stale_or_invalid_updates(self):
+        url = self._save()
+        self.assertEqual(self._post_actuals(url, [('2020-06-14', 10)]).status_code, 303)
+        before = self._outcomes()
+        for fields in (
+            {'correction_value': '-1'}, {'correction_value': 'nan'}, {'correction_value': '10'},
+            {'correction_reason': ' '}, {'correction_reason': 'x' * 301},
+            {'correction_reason': ['first', 'second']}, {'correction_date': '2020-06-15:1'},
+        ):
+            with self.subTest(fields=fields):
+                response = self._correct(url, **fields)
+                self.assertEqual(response.status_code, 422)
+                self.assertIn('aria-invalid="true"', response.get_data(as_text=True))
+        self.assertEqual(self._outcomes(), before)
+
+        self.assertEqual(self._correct(url).status_code, 303)
+        after = self._outcomes()
+        self.assertEqual(self._correct(url).status_code, 303)
+        self.assertEqual(self._correct(url, correction_value='13').status_code, 409)
+        self.assertEqual(self._correct(url, correction_reason='Another reason').status_code, 409)
+        with patch('vibedash.forecast_outcomes.MAX_ACTUAL_CORRECTIONS', 1):
+            self.assertEqual(self._correct(url, correction_date='2020-06-14:2',
+                                           correction_value='13').status_code, 422)
+        self.assertEqual(self._outcomes(), after)
+        self.assertEqual(self._correct(url, correction_date='2020-06-14:2',
+                                       correction_value='13').status_code, 303)
+        actual = json.loads(self._outcomes()[0]['actuals_json'])['2020-06-14']
+        self.assertEqual([version['value'] for version in actual['superseded']], [10., 12.5])
+        self.assertEqual(actual['value'], 13.)
+
+    def test_correction_requires_owner_csrf_and_unexpired_forecast(self):
+        url = self._save()
+        self.assertEqual(self._post_actuals(url, [('2020-06-14', 10)]).status_code, 303)
+        stranger = web_app.app.test_client()
+        self.assertEqual(self._register(stranger, 'stranger@example.com').status_code, 302)
+        before = self._outcomes()
+        with patch('vibedash.routes.correction_from_form') as parse:
+            self.assertEqual(self._correct(url, client=stranger).status_code, 404)
+            self.assertEqual(self._correct(url, client=web_app.app.test_client()).status_code, 404)
+            self.assertEqual(self._correct(url, csrf_token=['a', 'b']).status_code, 400)
+            self.assertEqual(self._correct(url, correction_reason='x' * 9000).status_code, 413)
+            with patch.dict(web_app.app.config, VIBEDASH_MODEL_STORAGE_ENABLED=False):
+                self.assertEqual(self._correct(url).status_code, 404)
+            self.assertEqual(self._outcomes(), before)
+            with sqlite3.connect(self.job_path) as connection:
+                connection.execute("UPDATE forecast_outcomes SET expires_at='2000-01-01T00:00:00+00:00'")
+            self.assertEqual(self._correct(url).status_code, 404)
+        parse.assert_not_called()
+        self.assertEqual(self._outcomes(), [])
+
     def test_account_erasure_purges_saved_forecasts_and_facts(self):
         url = self._save()
         self.assertEqual(self._post_actuals(url, [('2020-06-14', 10)]).status_code, 303)
+        self.assertEqual(self._correct(url).status_code, 303)
         with self.owner.session_transaction() as session:
             csrf = session['vibedash_auth_csrf_token']
         response = self.owner.post('/vibedash/account/delete', data={

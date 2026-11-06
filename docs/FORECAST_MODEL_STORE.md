@@ -155,10 +155,21 @@ header `date,actual`, up to 16 KiB and 90 rows. Each date must be unique within
 the file and belong to this forecast. Today in UTC must be on or after the
 date plus the frozen reporting delay. Values must be finite decimals in the
 supported numeric range. Count values must be non-negative. The server keeps
-only normalized facts and their receipt timestamps. Repeated identical values
+normalized facts and their receipt timestamps. Repeated identical values
 are idempotent. A conflicting value or invalid date rejects the entire batch.
 Actuals are attached to the selected forecast ID and are never copied to
-overlapping forecasts. A corrections workflow remains future work.
+overlapping forecasts.
+
+To revise a saved actual, open **Correct a saved actual**, select its date and
+current value, enter the corrected value and provide a brief reason of up to
+300 characters. The submission is bound to the version visible in the form.
+A concurrent correction makes a stale form fail rather than overwrite the
+new value. An identical retry of the most recent correction is idempotent.
+The forecast retains up to 90 corrections across its dates. Each prior value,
+receipt time and recorded reason stays in the forecast's correction history.
+History shows absolute errors for each version against the original model and
+baseline. The aggregate scores use the current value for each date. Forecast
+values, scope and expiry stay fixed through corrections.
 
 The account view shows date coverage and compares MAE, RMSE and, when declared
 in the original task, weighted absolute error. Both predictions are scored on
@@ -200,6 +211,6 @@ outside this server deletion/backup boundary.
 
 ## Remaining customer-facing work
 
-Idle-time retention scheduling, shared series identity, corrections, prospective
+Idle-time retention scheduling, shared series identity, prospective
 issuance provenance, predeclared alerts and controlled model promotion/rollback
 remain outstanding.

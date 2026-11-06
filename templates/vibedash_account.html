@@ -229,9 +229,69 @@
                         <label for="actuals-file">Daily actuals CSV (required)</label>
                         <input id="actuals-file" name="actuals_csv" type="file" accept=".csv,text/csv" required
                             aria-describedby="actuals-help{% if actuals_error %} actuals-error{% endif %}"{% if actuals_error %} aria-invalid="true"{% endif %}>
-                        <p id="actuals-help" class="form-help">UTF-8, up to 16 KiB. Use the header <code>date,actual</code> and one row per forecast date you can report. Dates are eligible after the {{ check.reporting_delay_days }}-day reporting delay, using today in UTC. Saved values cannot be replaced by a later upload.</p>
+                        <p id="actuals-help" class="form-help">UTF-8, up to 16 KiB. Use the header <code>date,actual</code> and one row per forecast date you can report. Dates are eligible after the {{ check.reporting_delay_days }}-day reporting delay, using today in UTC. Use the correction form to revise a saved value.</p>
                         <button type="submit" class="button button-primary">Add actuals</button>
                     </form>
+                    {% if check.matched_count or correction_error %}
+                    <details class="model-inference actual-correction"{% if correction_error %} open{% endif %}>
+                        <summary>Correct a saved actual</summary>
+                        <form class="model-inference-form" method="post"
+                            action="{{ url_for('vibedash.forecast_outcome_correct', prediction_id=check.prediction_id, _anchor='forecast-quality') }}">
+                            <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                            {% if correction_error %}
+                            <p class="notice notice-error" role="alert" tabindex="-1" autofocus>
+                                {% if correction_error.field %}<a href="#correction-{{ correction_error.field }}">Review the correction</a>
+                                {% else %}{{ correction_error.message }}{% endif %}
+                            </p>
+                            {% endif %}
+                            <label for="correction-date">Date and current actual (required)</label>
+                            <select id="correction-date" name="correction_date" required
+                                {% if correction_error and correction_error.field == 'date' %}aria-invalid="true" aria-describedby="correction-date-error"{% endif %}>
+                                <option value="">Choose a date</option>
+                                {% for point in check.points if point.actual is not none %}
+                                <option value="{{ point.date }}:{{ point.revision }}">{{ point.date }} · {{ point.actual }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if correction_error and correction_error.field == 'date' %}
+                            <p id="correction-date-error" class="form-help">{{ correction_error.message }}</p>
+                            {% endif %}
+                            <label for="correction-value">Corrected actual (required)</label>
+                            <input id="correction-value" name="correction_value" type="text" inputmode="decimal" maxlength="100" required
+                                {% if correction_error and correction_error.field == 'value' %}aria-invalid="true" aria-describedby="correction-value-error"{% endif %}>
+                            {% if correction_error and correction_error.field == 'value' %}
+                            <p id="correction-value-error" class="form-help">{{ correction_error.message }}</p>
+                            {% endif %}
+                            <label for="correction-reason">Reason for correction (required)</label>
+                            <input id="correction-reason" name="correction_reason" type="text" maxlength="300" required
+                                aria-describedby="correction-help{% if correction_error and correction_error.field == 'reason' %} correction-reason-error{% endif %}"
+                                {% if correction_error and correction_error.field == 'reason' %}aria-invalid="true"{% endif %}>
+                            {% if correction_error and correction_error.field == 'reason' %}
+                            <p id="correction-reason-error" class="form-help">{{ correction_error.message }}</p>
+                            {% endif %}
+                            <p id="correction-help" class="form-help">The correction and reason are saved in this forecast’s history. Keep the reason brief and omit sensitive information.</p>
+                            <button type="submit" class="button button-primary">Save correction</button>
+                        </form>
+                    </details>
+                    {% endif %}
+                    {% if check.corrections %}
+                    <details class="model-inference actual-correction">
+                        <summary>Actual correction history</summary>
+                        <p class="form-help">The score above uses the current value for each date. This history shows the absolute error for each version against the same saved predictions.</p>
+                        {% for item in check.corrections %}
+                        <h4>{{ item.date }}</h4>
+                        <ol>
+                            {% for version in item.versions %}
+                            <li>
+                                <strong>{{ version.value }}{% if loop.last %} (current){% endif %}</strong> ·
+                                <time datetime="{{ version.received_at }}">{{ version.received_at[:19]|replace('T', ' ') }} UTC</time><br>
+                                Model error {{ '%.8g'|format(version.model_error) }} · baseline error {{ '%.8g'|format(version.baseline_error) }}<br>
+                                {{ version.reason if version.reason is not none else 'Original reported actual' }}
+                            </li>
+                            {% endfor %}
+                        </ol>
+                        {% endfor %}
+                    </details>
+                    {% endif %}
                 </section>
                 {% endif %}
             </section>

@@ -109,6 +109,8 @@ verify frozen model/baseline parity, full history and cutoff constraints,
 owner/expiry isolation, invalid-output withholding and default transient
 results. They also exercise opt-in retention, immutable retries, paired error
 arithmetic, partial coverage, early or conflicting facts, and account erasure.
+Correction cases check scoring with the latest actual, preserved prior values,
+safe retries and rejection of stale forms.
 These exercise a declared persistent test root with a known identity, not a
 physical hosting mount. They do not establish deployed durability or enable
 customer-facing model saving; see [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).

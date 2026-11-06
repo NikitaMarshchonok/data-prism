@@ -11,7 +11,7 @@ from pathlib import Path
 from src.forecast_artifact import MAX_ARTIFACT_BYTES, predict_artifact, validate_artifact
 from src.runtime_storage import evaluate_runtime_storage_contract
 from .analysis_jobs import AnalysisJobStore, _validated_job_id, _validated_scope_id
-from .forecast_outcomes import forecast_view, merge_actuals, store_forecast
+from .forecast_outcomes import correct_actual, forecast_view, merge_actuals, store_forecast
 
 
 CONTRACT = 'scoped-forecast-model-store-v1'
@@ -300,8 +300,10 @@ class ForecastModelStore:
                 ORDER BY registered_at DESC, prediction_id''', (scope, _timestamp(_now())))]
         return self._guard(scope_id, read)
 
-    def get_forecast(self, scope_id, prediction_id, *, actuals=None):
-        """Read one forecast or apply a fully validated batch and return the new view."""
+    def get_forecast(self, scope_id, prediction_id, *, actuals=None, correction=None):
+        """Read a forecast or atomically apply one type of outcome update."""
+        if actuals is not None and correction is not None:
+            raise ValueError('Apply either actuals or a correction.')
         prediction_id = _validated_job_id(prediction_id)
 
         def read_or_update(connection, scope):
@@ -313,12 +315,16 @@ class ForecastModelStore:
                 return None
             payload = json.loads(row['forecast_json'])
             recorded = json.loads(row['actuals_json'])
-            merged = recorded if actuals is None else merge_actuals(payload, recorded, actuals, now)
+            merged = recorded
+            if actuals is not None:
+                merged = merge_actuals(payload, recorded, actuals, now)
+            elif correction is not None:
+                merged = correct_actual(payload, recorded, *correction, now=now)
             view = forecast_view(row, payload, merged)
             if merged != recorded:
                 connection.execute('''UPDATE forecast_outcomes SET actuals_json=?
                     WHERE scope_id=? AND prediction_id=?''',
-                    (json.dumps(merged, allow_nan=False), scope, prediction_id))
+                    (json.dumps(merged, ensure_ascii=False, allow_nan=False), scope, prediction_id))
             return view
         return self._guard(scope_id, read_or_update)
 

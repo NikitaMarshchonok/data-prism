@@ -17,6 +17,8 @@ MAX_FORECAST_BYTES = 64 * 1024
 MAX_ACTUALS_BYTES = 16 * 1024
 MAX_ACTUALS_REQUEST_BYTES = MAX_ACTUALS_BYTES + 64 * 1024
 MAX_ACTUAL_MAGNITUDE = 2 ** 53 - 1
+MAX_ACTUAL_CORRECTIONS = 90
+MAX_CORRECTION_REASON_LENGTH = 300
 MAX_SCORED_PREDICTION_MAGNITUDE = 1e150  # Leave room for 90 squared errors in float64.
 DECIMAL_NUMBER = re.compile(r'[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?')
 
@@ -27,6 +29,50 @@ class ForecastOutcomeError(ValueError):
 
 class ForecastActualsTooLarge(ForecastOutcomeError):
     """Actuals upload exceeds the web budget."""
+
+
+class ForecastCorrectionError(ForecastOutcomeError):
+    def __init__(self, message, *, field=None, status=422):
+        super().__init__(message)
+        self.field = field
+        self.status = status
+
+
+def _parse_actual(value):
+    value = value.strip()
+    if len(value) > 100 or not DECIMAL_NUMBER.fullmatch(value):
+        raise ForecastOutcomeError('Actuals must be finite decimal numbers.')
+    try:
+        precise = Decimal(value)
+        number = float(precise)
+        if precise.copy_abs() > MAX_ACTUAL_MAGNITUDE or (precise and not number):
+            raise ForecastOutcomeError('An actual is outside the supported numeric range.')
+        return number
+    except InvalidOperation:
+        raise ForecastOutcomeError('An actual is outside the supported numeric range.') from None
+
+
+def correction_from_form(form):
+    dates = form.getlist('correction_date')
+    if len(dates) != 1 or not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}:[1-9][0-9]{0,2}', dates[0]):
+        raise ForecastCorrectionError('Select one saved actual to correct.', field='date')
+    day, revision = dates[0].split(':')
+    try:
+        validate_forecast_date(day)
+    except ValueError:
+        raise ForecastCorrectionError('Select one saved actual to correct.', field='date') from None
+    values = form.getlist('correction_value')
+    if len(values) != 1:
+        raise ForecastCorrectionError('Enter one corrected value.', field='value')
+    try:
+        value = _parse_actual(values[0])
+    except ForecastOutcomeError as error:
+        raise ForecastCorrectionError(str(error), field='value') from None
+    reasons = form.getlist('correction_reason')
+    reason = reasons[0].strip() if len(reasons) == 1 else ''
+    if not 1 <= len(reason) <= MAX_CORRECTION_REASON_LENGTH or not reason.isprintable():
+        raise ForecastCorrectionError('Enter a reason using 1–300 printable characters.', field='reason')
+    return day, int(revision), value, reason
 
 
 def load_actuals(upload):
@@ -50,17 +96,7 @@ def load_actuals(upload):
                 raise ForecastOutcomeError('Use dates in YYYY-MM-DD format.') from None
             if day in actuals:
                 raise ForecastOutcomeError('Provide each actual date only once per upload.')
-            value = row[1].strip()
-            if len(value) > 100 or not DECIMAL_NUMBER.fullmatch(value):
-                raise ForecastOutcomeError('Actuals must be finite decimal numbers.')
-            try:
-                precise = Decimal(value)
-                number = float(precise)
-                if precise.copy_abs() > MAX_ACTUAL_MAGNITUDE or (precise and not number):
-                    raise ForecastOutcomeError('An actual is outside the supported numeric range.')
-                actuals[day] = number
-            except InvalidOperation:
-                raise ForecastOutcomeError('An actual is outside the supported numeric range.') from None
+            actuals[day] = _parse_actual(row[1])
     except (UnicodeError, csv.Error):
         raise ForecastOutcomeError('Use a valid comma-delimited UTF-8 CSV.') from None
     if not actuals:
@@ -115,8 +151,24 @@ def store_forecast(connection, scope, report, artifact, now):
 
 def forecast_view(row, payload, actuals):
     report = payload['report']
-    points = [dict(point, actual=actuals.get(point['date'], {}).get('value'))
-              for point in report['predictions']]
+    points = []
+    corrections = []
+    for point in report['predictions']:
+        actual = actuals.get(point['date'], {})
+        prior = actual.get('superseded', [])
+        points.append(dict(point, actual=actual.get('value'), revision=len(prior) + 1))
+        if prior:
+            corrections.append({
+                'date': point['date'],
+                'versions': [
+                    {
+                        'value': item['value'], 'received_at': item['received_at'], 'reason': item.get('reason'),
+                        'model_error': abs(item['value'] - point['prediction']),
+                        'baseline_error': abs(item['value'] - point['baseline']),
+                    }
+                    for item in [*prior, actual]
+                ],
+            })
     matched = [point for point in points if point['actual'] is not None]
     model_scores = baseline_scores = None
     if matched:
@@ -137,6 +189,7 @@ def forecast_view(row, payload, actuals):
         'model_name': report['model_name'],
         'baseline_name': report['baseline_name'],
         'points': points,
+        'corrections': corrections,
         'matched_count': len(matched),
         'model_scores': model_scores,
         'baseline_scores': baseline_scores,
@@ -159,3 +212,35 @@ def merge_actuals(payload, recorded, actuals, now):
             raise ForecastOutcomeError('An uploaded value conflicts with a saved actual. The batch was not applied.')
         merged.setdefault(day, {'value': value, 'received_at': stamp})
     return merged
+
+
+def correct_actual(payload, recorded, day, expected_revision, value, reason, *, now):
+    """Append a revision only if the owner saw the latest version."""
+    current = recorded.get(day)
+    if current is None:
+        raise ForecastCorrectionError('Select a date with a saved actual.', field='date')
+    if validate_forecast_date(day) > now.date() - timedelta(days=payload['reporting_delay_days']):
+        raise ForecastCorrectionError('This actual is too early under the reporting delay.', field='date')
+    if payload['target_unit'] == 'count' and value < 0:
+        raise ForecastCorrectionError('Count actuals cannot be negative.', field='value')
+    prior = current.get('superseded', [])
+    current_revision = len(prior) + 1
+    if expected_revision != current_revision:
+        # The same correction can be retried after a lost response.
+        if (expected_revision == current_revision - 1 and expected_revision >= 1
+                and current['value'] == value and current.get('reason') == reason):
+            return recorded
+        raise ForecastCorrectionError('This actual has changed. Reload the forecast before correcting it.',
+                                      field='date', status=409)
+    if current['value'] == value:
+        raise ForecastCorrectionError('Enter a value different from the current actual.', field='value')
+    if sum(len(item.get('superseded', [])) for item in recorded.values()) >= MAX_ACTUAL_CORRECTIONS:
+        raise ForecastCorrectionError('This forecast has reached its correction limit.')
+    return recorded | {
+        day: {
+            'value': value,
+            'received_at': now.isoformat(timespec='microseconds'),
+            'reason': reason,
+            'superseded': [*prior, {key: val for key, val in current.items() if key != 'superseded'}],
+        },
+    }

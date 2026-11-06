@@ -212,11 +212,16 @@ and coverage are available even after the model expires. This web flow uses
 the persistent-state gate. Reported actuals and declared historical issue dates
 are user assertions. See [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
 
-Next, define a shared series identity and versioned actual corrections. Verify
-restart recovery on provisioned infrastructure and evaluate prospectively
-recorded forecasts with client data. Distinguish drift from measured quality
-loss, then test an explicit alert policy and candidate retraining with review,
-promotion and rollback.
+Owners can explicitly correct a fact for a saved forecast. The account keeps
+each previous value, reason and receipt time and shows its errors against the
+same saved predictions. Corrections rescore both methods and require the
+latest actual version.
+
+Next, define a shared series identity so overlapping forecasts can use a
+reviewed common fact source. Verify restart recovery on provisioned
+infrastructure and evaluate prospectively recorded forecasts with client
+data. Distinguish drift from measured quality loss, then test an explicit
+alert policy and candidate retraining with review, promotion and rollback.
 
 ## Pilot value decision
 
