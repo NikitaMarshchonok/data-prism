@@ -74,6 +74,7 @@ try:
         ForecastActualsTooLarge, ForecastCorrectionError, ForecastOutcomeError, MAX_ACTUALS_REQUEST_BYTES,
         RETENTION_DAYS as FORECAST_RETENTION_DAYS, correction_from_form, load_actuals,
     )
+    from .forecast_series import ForecastSeriesError, series_from_form
     from .forecast_prediction import ForecastHistoryTooLarge, MAX_HISTORY_REQUEST_BYTES, load_prediction_history
     from .task_capabilities import (
         TaskAdmissionError, capability_catalog, assess_task_request,
@@ -1382,6 +1383,7 @@ if vibedash_bp:
         model_storage = storage_settings(current_app.config)
         model_list_unavailable = False
         saved_forecasts = []
+        saved_series = []
         forecast_list_unavailable = False
         if model_storage is not None:
             try:
@@ -1396,6 +1398,7 @@ if vibedash_bp:
                     model_list_unavailable = True
                 try:
                     saved_forecasts = model_store.list_forecasts(scope)
+                    saved_series = model_store.list_series(scope)
                 except Exception:
                     forecast_list_unavailable = True
         rendered = render_template(
@@ -1409,6 +1412,7 @@ if vibedash_bp:
             forecast_run=forecast_run,
             forecast_retention_days=FORECAST_RETENTION_DAYS,
             saved_forecasts=saved_forecasts,
+            saved_series=saved_series,
             forecast_list_unavailable=forecast_list_unavailable,
             forecast_outcome=forecast_outcome,
             actuals_error=actuals_error,
@@ -1541,6 +1545,7 @@ if vibedash_bp:
             consent = request.form.getlist('retain_forecast')
             if consent not in ([], ['yes']):
                 raise ForecastOutcomeError('Choose whether to save the forecast using the checkbox.')
+            series_choice = series_from_form(request.form, retain=bool(consent))
             files = request.files.getlist('history_csv')
             if len(files) != 1:
                 raise ForecastHistoryError('Choose one UTF-8 CSV file with the full updated history.')
@@ -1549,13 +1554,16 @@ if vibedash_bp:
             finally:
                 files[0].close()
             prediction = store.predict(scope, model_id, history=history, forecast_origin=origin,
-                                       require_new_history=True, retain_forecast=bool(consent))
+                                       require_new_history=True, retain_forecast=bool(consent),
+                                       series_choice=series_choice)
         except (ScopeClosedError, ForecastModelNotFound):
             return unavailable()
         except (ForecastHistoryTooLarge, RequestEntityTooLarge):
             return show_run(413, error='The history CSV must be no larger than 2 MiB.', field='history')
         except ForecastHistoryError as error:
             return show_run(422, error=str(error), field=error.field)
+        except ForecastSeriesError as error:
+            return show_run(422, error=str(error), field='series')
         except ForecastOutcomeError as error:
             return show_run(422, error=str(error), field='retention')
         except Exception:

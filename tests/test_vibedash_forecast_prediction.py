@@ -95,12 +95,22 @@ class ForecastPredictionWebTests(unittest.TestCase):
             connection.row_factory = sqlite3.Row
             return [dict(row) for row in connection.execute('SELECT * FROM forecast_outcomes')]
 
-    def _save(self):
-        response = self._post(retain_forecast='yes')
+    def _save(self, **fields):
+        response = self._post(retain_forecast='yes', **fields)
         self.assertEqual(response.status_code, 200)
-        self.assertIn('Open saved forecast and add actuals', response.get_data(as_text=True))
-        saved, = self._outcomes()
-        return '/vibedash/account/forecasts/' + saved['prediction_id']
+        html = response.get_data(as_text=True)
+        self.assertIn('Open saved forecast and add actuals', html)
+        for row in self._outcomes():
+            url = '/vibedash/account/forecasts/' + row['prediction_id']
+            if f'href="{url}#forecast-quality">Open saved forecast' in html:
+                return url
+        self.fail('The saved forecast link was not found.')
+
+    def _series_rows(self, table='forecast_series'):
+        self.assertIn(table, ('forecast_series', 'forecast_series_links', 'forecast_series_actuals'))
+        with sqlite3.connect(self.job_path) as connection:
+            connection.row_factory = sqlite3.Row
+            return [dict(row) for row in connection.execute(f'SELECT * FROM {table}')]
 
     def _post_actuals(self, url, rows, *, client=None, **fields):
         client = self.owner if client is None else client
@@ -407,3 +417,99 @@ class ForecastPredictionWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self._outcomes(), [])
         self.assertEqual(self.owner.get(url).status_code, 404)
+
+    def test_shared_actuals_and_corrections_rescore_overlapping_forecasts_only(self):
+        first_url = self._save(new_series_label='Store A orders', series_confirmed='yes')
+        series, = self._series_rows()
+        self.assertEqual(self._post_actuals(first_url, [('2020-06-14', 300), ('2020-06-15', 301)]).status_code, 303)
+        updated_history = pd.concat([self.frame, pd.DataFrame({
+            'dteday': ['2020-06-12'], 'cnt': [325], 'casual': [30],
+        })], ignore_index=True)
+        second_model = self._queue(forecast_model_retention_days='7', forecast_reporting_delay='2',
+                                   forecast_origin='2020-06-10')
+        self.assertEqual(self._complete(second_model)['status'], 'completed')
+        with patch.object(self, 'url', f'/vibedash/account/models/{second_model}/predict'):
+            second_url = self._save(frame=updated_history, forecast_origin='2020-06-14',
+                                    series_id=series['series_id'], series_confirmed='yes')
+            isolated_url = self._save()
+        self.assertIn('2 of 7 forecast dates matched', self.owner.get(first_url).get_data(as_text=True))
+        linked = self.owner.get(second_url).get_data(as_text=True)
+        self.assertIn('1 of 7 forecast dates matched', linked)
+        self.assertIn('Store A orders', linked)
+        self.assertIn('0 of 7 forecast dates matched', self.owner.get(isolated_url).get_data(as_text=True))
+        self.assertEqual(self._post_actuals(second_url, [('2020-06-14', 300)]).status_code, 422)
+        response = self._correct(second_url, correction_date='2020-06-15:1', correction_value='310')
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(self._correct(first_url, correction_date='2020-06-15:1',
+                                       correction_value='311').status_code, 409)
+        for url, values in ((first_url, {'2020-06-14': 300, '2020-06-15': 310}),
+                            (second_url, {'2020-06-15': 310})):
+            row = next(row for row in self._outcomes() if url.endswith(row['prediction_id']))
+            points = [p for p in json.loads(row['forecast_json'])['report']['predictions'] if p['date'] in values]
+            model = sum(abs(values[p['date']] - p['prediction']) for p in points) / len(points)
+            baseline = sum(abs(values[p['date']] - p['baseline']) for p in points) / len(points)
+            html = self.owner.get(url).get_data(as_text=True)
+            self.assertIn(f'<th scope="row">MAE</th><td>{model:.8g}</td><td>{baseline:.8g}</td>', html)
+            self.assertIn('Reconciled source', html)
+            self.assertEqual(row['actuals_json'], '{}')
+        self.assertIn('0 of 7 forecast dates matched', self.owner.get(isolated_url).get_data(as_text=True))
+        self.assertEqual(len(self._series_rows('forecast_series_actuals')), 2)
+
+    def test_series_selection_is_explicit_scoped_compatible_and_immutable(self):
+        for fields in ({'new_series_label': 'No opt-in', 'series_confirmed': 'yes'},
+                       {'retain_forecast': 'yes', 'new_series_label': 'Not confirmed'},
+                       {'retain_forecast': 'yes', 'series_id': 'a' * 32,
+                        'new_series_label': 'Both', 'series_confirmed': 'yes'}):
+            self.assertEqual(self._post(**fields).status_code, 422)
+        self.assertEqual(self._outcomes(), [])
+        first_url = self._save(new_series_label='Store A orders', series_confirmed='yes')
+        series, = self._series_rows()
+        self.assertEqual(self._save(new_series_label='store a orders', series_confirmed='yes'), first_url)
+        self.assertEqual(self._save(series_id=series['series_id'], series_confirmed='yes'), first_url)
+        self.assertEqual(self._post(retain_forecast='yes').status_code, 422)
+        self.assertEqual(self._post(retain_forecast='yes', new_series_label='Different',
+                                    series_confirmed='yes').status_code, 422)
+        with sqlite3.connect(self.job_path) as connection:
+            foreign_id = 'b' * 32
+            connection.execute('INSERT INTO forecast_series VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                               ('c' * 64, foreign_id, 'Foreign label', 'foreign label', 'dteday', 'cnt', 'count', 2))
+        response = self._post(retain_forecast='yes', series_id=foreign_id, series_confirmed='yes')
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn('Foreign label', response.get_data(as_text=True))
+        incompatible = self._queue(forecast_model_retention_days='7', forecast_reporting_delay='1',
+                                   forecast_origin='2020-06-09')
+        self.assertEqual(self._complete(incompatible)['status'], 'completed')
+        with patch.object(self, 'url', f'/vibedash/account/models/{incompatible}/predict'):
+            response = self._post(retain_forecast='yes', forecast_origin='2020-06-12',
+                                  series_id=series['series_id'], series_confirmed='yes')
+        self.assertEqual(response.status_code, 422)
+        self.assertIn('unavailable or incompatible', response.get_data(as_text=True))
+        self.assertEqual(len(self._outcomes()), 1)
+        self.assertEqual(len(self._series_rows('forecast_series_links')), 1)
+
+    def test_shared_facts_follow_remaining_date_coverage_and_account_erasure(self):
+        first_url = self._save(new_series_label='Store A orders', series_confirmed='yes')
+        series, = self._series_rows()
+        frame = pd.concat([self.frame, pd.DataFrame({
+            'dteday': ['2020-06-12'], 'cnt': [325], 'casual': [30],
+        })], ignore_index=True)
+        second_url = self._save(frame=frame, forecast_origin='2020-06-14',
+                                series_id=series['series_id'], series_confirmed='yes')
+        self.assertEqual(self._post_actuals(first_url, [('2020-06-14', 300), ('2020-06-15', 301)]).status_code, 303)
+        self.assertEqual(self._correct(first_url, correction_date='2020-06-15:1',
+                                       correction_value='305').status_code, 303)
+        with sqlite3.connect(self.job_path) as connection:
+            connection.execute("UPDATE forecast_outcomes SET expires_at='2000-01-01T00:00:00+00:00' WHERE prediction_id=?",
+                               (first_url.rsplit('/', 1)[1],))
+        with patch.dict(web_app.app.config, VIBEDASH_MODEL_STORAGE_ENABLED=False):
+            self.assertEqual(self.owner.get(first_url).status_code, 404)
+        self.assertEqual([row['day'] for row in self._series_rows('forecast_series_actuals')], ['2020-06-15'])
+        self.assertIn('Reconciled source', self.owner.get(second_url).get_data(as_text=True))
+        with self.owner.session_transaction() as session:
+            csrf = session['vibedash_auth_csrf_token']
+        response = self.owner.post('/vibedash/account/delete', data={
+            'csrf_token': csrf, 'current_password': self.PASSWORD, 'delete_confirmation': 'DELETE',
+        })
+        self.assertEqual(response.status_code, 302)
+        for table in ('forecast_series', 'forecast_series_links', 'forecast_series_actuals'):
+            self.assertEqual(self._series_rows(table), [])

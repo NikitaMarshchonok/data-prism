@@ -161,7 +161,29 @@
                                         aria-describedby="{{ prefix }}-retention-help{% if run and run.field == 'retention' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'retention' %} aria-invalid="true"{% endif %}>
                                     <span>Save this forecast to check it against actuals</span>
                                 </label>
-                                <p id="{{ prefix }}-retention-help" class="form-help">Optional. Saves the forecast values, baseline and any actuals you add for up to {{ forecast_retention_days }} days from first save.</p>
+                                <p id="{{ prefix }}-retention-help" class="form-help">Optional. Saves this forecast and baseline for up to {{ forecast_retention_days }} days from first save.</p>
+                                <details class="actual-correction"{% if run and run.field == 'series' %} open{% endif %}>
+                                    <summary>Share actuals across forecasts</summary>
+                                    <p id="{{ prefix }}-series-help" class="form-help">Optional when saving. Choose a series or enter a new name. Use the same series only for the same business measure and population. Omit sensitive information from the name. Actuals and corrections apply to every linked forecast that covers the date.</p>
+                                    <label for="{{ prefix }}-series">Existing daily series</label>
+                                    <select id="{{ prefix }}-series" name="series_id"
+                                        aria-describedby="{{ prefix }}-series-help{% if run and run.field == 'series' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'series' %} aria-invalid="true"{% endif %}>
+                                        <option value="">No existing series selected</option>
+                                        {% for series in saved_series if series.time_column == model.input_contract.time_column
+                                            and series.target_column == model.input_contract.target_column
+                                            and series.target_unit == model.input_contract.target_unit
+                                            and series.reporting_delay_days == model.input_contract.reporting_delay_days %}
+                                        <option value="{{ series.series_id }}">{{ series.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <label for="{{ prefix }}-series-name">New series name</label>
+                                    <input id="{{ prefix }}-series-name" name="new_series_label" type="text" maxlength="80"
+                                        aria-describedby="{{ prefix }}-series-help">
+                                    <label class="model-availability" for="{{ prefix }}-series-confirmed">
+                                        <input id="{{ prefix }}-series-confirmed" name="series_confirmed" type="checkbox" value="yes">
+                                        <span>I confirm this forecast and the shared actuals represent the same daily series.</span>
+                                    </label>
+                                </details>
                                 <button type="submit" class="button button-primary">Run forecast</button>
                             </form>
                         </details>
@@ -192,6 +214,10 @@
                 <section class="model-prediction" id="forecast-quality" aria-labelledby="forecast-quality-title">
                     <h3 id="forecast-quality-title">Forecast with issue date {{ check.forecast_origin }}</h3>
                     <p class="form-help">First saved {{ check.registered_at[:16]|replace('T', ' ') }} UTC. Expires {{ check.expires_at[:16]|replace('T', ' ') }} UTC. The issue date is user-declared. The saved timestamp records when Data Prism received the forecast.</p>
+                    {% if check.series_label %}
+                    <p><strong>Shared daily series</strong> · {{ check.series_label }}</p>
+                    <p class="form-help">Adding or correcting an actual here updates all forecasts linked to this series that cover its date. Each forecast uses its own saved predictions and baseline. Shared actuals are kept while a saved forecast covers their dates.</p>
+                    {% endif %}
                     <p><strong>{{ check.matched_count }} of {{ check.points|length }} forecast dates matched.</strong>
                         {% if check.matched_count == 0 %}Accuracy is unknown until actuals are added.
                         {% elif check.matched_count < check.points|length %}Partial results cover the matched dates only.

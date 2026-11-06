@@ -157,19 +157,43 @@ date plus the frozen reporting delay. Values must be finite decimals in the
 supported numeric range. Count values must be non-negative. The server keeps
 normalized facts and their receipt timestamps. Repeated identical values
 are idempotent. A conflicting value or invalid date rejects the entire batch.
-Actuals are attached to the selected forecast ID and are never copied to
-overlapping forecasts.
+By default, actuals belong to the selected forecast. Uploads are always
+validated against the selected forecast's dates.
 
 To revise a saved actual, open **Correct a saved actual**, select its date and
 current value, enter the corrected value and provide a brief reason of up to
 300 characters. The submission is bound to the version visible in the form.
-A concurrent correction makes a stale form fail rather than overwrite the
-new value. An identical retry of the most recent correction is idempotent.
-The forecast retains up to 90 corrections across its dates. Each prior value,
+A stale form fails after a concurrent correction. An identical retry of the
+most recent correction is idempotent. The forecast retains up to 90
+corrections across its dates. Each prior value,
 receipt time and recorded reason stays in the forecast's correction history.
 History shows absolute errors for each version against the original model and
 baseline. The aggregate scores use the current value for each date. Forecast
 values, scope and expiry stay fixed through corrections.
+
+### Share actuals across forecasts of one daily series
+
+While saving a forecast, expand **Share actuals across forecasts**. Choose
+an existing account-owned series or create one with a new name, then confirm
+that the forecasts represent the same business measure and population. The
+service checks an exact match of time column, target column, unit and reporting
+delay. A series has a stable ID. Its name is a label and an account-level
+case-insensitive uniqueness check. Confirmation of the business meaning and
+population comes from the account owner.
+
+The binding is fixed at first save. Existing isolated forecasts keep their
+own facts. In a shared series, one versioned fact per date feeds every linked
+forecast that covers it. Each forecast compares that fact with its own frozen
+model and baseline predictions. A correction submitted in one forecast is
+visible in the other forecasts' scores and history for that date. The limit
+of 90 retained corrections applies across the shared series. Series actuals
+feed evaluation, while inference takes its input from the uploaded history.
+
+A shared fact and its revisions expire when the last forecast covering that
+date is purged. The series label and ID are purged with its last forecast.
+SQLite cleanup follows parent forecast deletion inside the same transaction.
+Keep serving instances on the same application version so linked forecast
+views use the shared actuals store.
 
 The account view shows date coverage and compares MAE, RMSE and, when declared
 in the original task, weighted absolute error. Both predictions are scored on
@@ -211,6 +235,6 @@ outside this server deletion/backup boundary.
 
 ## Remaining customer-facing work
 
-Idle-time retention scheduling, shared series identity, prospective
+Idle-time retention scheduling, prospective
 issuance provenance, predeclared alerts and controlled model promotion/rollback
 remain outstanding.

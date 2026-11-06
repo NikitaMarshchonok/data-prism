@@ -108,7 +108,7 @@ def store_forecast(connection, scope, report, artifact, now):
     if validate_forecast_date(report['forecast_origin']) > now.date():
         raise ForecastOutcomeError('Choose an issue date on or before today in UTC to save a forecast.')
     if report['status'] != 'ok':
-        return None
+        return None, False
     if any(abs(point[key]) > MAX_SCORED_PREDICTION_MAGNITUDE
            for point in report['predictions'] for key in ('prediction', 'baseline')):
         raise ForecastOutcomeError('Forecast values exceed the supported scoring range. Run without saving.')
@@ -134,7 +134,7 @@ def store_forecast(connection, scope, report, artifact, now):
     if existing is not None:
         if json.loads(existing['forecast_json']) != payload:
             raise ForecastOutcomeError('A different forecast from this model already exists for this issue date.')
-        return existing['prediction_id']
+        return existing['prediction_id'], False
     total, owned = connection.execute(
         'SELECT count(*), count(CASE WHEN scope_id=? THEN 1 END) FROM forecast_outcomes',
         (scope,)).fetchone()
@@ -146,7 +146,7 @@ def store_forecast(connection, scope, report, artifact, now):
         VALUES (?, ?, ?, ?, ?, ?, ?, '{}')''',
         (scope, prediction_id, report['model_id'], report['forecast_origin'], stamp,
          (now + timedelta(days=RETENTION_DAYS)).isoformat(timespec='microseconds'), serialized))
-    return prediction_id
+    return prediction_id, True
 
 
 def forecast_view(row, payload, actuals):
@@ -214,7 +214,7 @@ def merge_actuals(payload, recorded, actuals, now):
     return merged
 
 
-def correct_actual(payload, recorded, day, expected_revision, value, reason, *, now):
+def correct_actual(payload, recorded, day, expected_revision, value, reason, *, now, correction_count=None):
     """Append a revision only if the owner saw the latest version."""
     current = recorded.get(day)
     if current is None:
@@ -234,8 +234,10 @@ def correct_actual(payload, recorded, day, expected_revision, value, reason, *, 
                                       field='date', status=409)
     if current['value'] == value:
         raise ForecastCorrectionError('Enter a value different from the current actual.', field='value')
-    if sum(len(item.get('superseded', [])) for item in recorded.values()) >= MAX_ACTUAL_CORRECTIONS:
-        raise ForecastCorrectionError('This forecast has reached its correction limit.')
+    if correction_count is None:
+        correction_count = sum(len(item.get('superseded', [])) for item in recorded.values())
+    if correction_count >= MAX_ACTUAL_CORRECTIONS:
+        raise ForecastCorrectionError('The correction limit for these actuals has been reached.')
     return recorded | {
         day: {
             'value': value,
