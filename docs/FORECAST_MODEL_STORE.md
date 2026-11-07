@@ -219,13 +219,13 @@ Model snapshots have a separate explicit download. Retained forecast data is
 visible through the owner-only account view. Expiry cleanup on VibeDash traffic
 also removes forecasts and actuals when the feature is off.
 
-The existing offline runtime backup includes this table as part of the shared
-database. A round-trip test verifies the artifact, frozen predictions and
-original expiry after restore. Backup and restore still require an explicit
-offline assertion and all writers stopped; a test in temporary directories is
-not evidence that the deployed host has persistent storage or a tested recovery
-operation. A model may already be expired when a backup is restored: recovery
-does not restart retention.
+The offline runtime backup includes models, forecasts, shared actuals and
+correction history in the analysis database. Local recovery tests verify the
+model, frozen predictions, paired scores and original expiry. A fresh
+application process also signs in and applies a correction to the restored
+series. Follow the [backup and recovery runbook](BACKUP_RECOVERY.md) for
+the offline window and a rehearsal on the provisioned infrastructure.
+Retention continues from the original expiry timestamps after restore.
 
 Artifacts contain target lags, fitted parameters/leaf values, task metadata and
 possibly confidential free-text policy. They are not aggregate-only audit

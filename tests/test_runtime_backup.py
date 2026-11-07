@@ -637,6 +637,112 @@ print(json.dumps({'restored_routes': 'ok'}))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)['restored_routes'], 'ok')
 
+    def test_recovered_shared_forecasts_keep_scores_and_accept_a_new_correction(self):
+        from src.forecast_artifact import create_artifact
+        from src.forecasting import ForecastTask, forecast_series
+        from tests.test_forecasting import frame
+        from vibedash.accounts import account_scope_id
+        from vibedash.forecast_models import ForecastModelStore
+
+        secret = 'synthetic-forecast-recovery-key-for-tests'
+        email, password = 'forecast-recovery@example.com', 'a sufficiently long test password'
+        with AccountStore(self.state / 'accounts' / 'accounts.sqlite3') as accounts:
+            account = accounts.register(email, password)
+        scope = account_scope_id(account['id'], secret)
+        settings = {
+            'deployment_profile': 'production', 'state_durability': 'persistent',
+            'expected_state_id': self.state_identity['state_id'],
+        }
+        store = ForecastModelStore(self.state, **settings)
+        task = ForecastTask('demand', 'date', 7)
+        training = frame()
+        artifact = create_artifact(training, task, forecast_series(training, task))
+        store.register(scope, artifact, retention_days=7)
+        forecasts = []
+        for size, choice in ((161, ('', 'Synthetic daily demand')), (162, None)):
+            if choice is None:
+                series, = store.list_series(scope)
+                choice = series['series_id'], ''
+            history = frame(size=size)
+            issue = history['date'].iloc[-1].strftime('%Y-%m-%d')
+            result = store.predict(scope, artifact['model_id'], history=history, forecast_origin=issue,
+                                   require_new_history=True, retain_forecast=True, series_choice=choice)
+            forecasts.append(result['retained_prediction_id'])
+        date = store.get_forecast(scope, forecasts[1])['points'][0]['date']
+        store.get_forecast(scope, forecasts[0], actuals={date: 212.})
+        store.get_forecast(scope, forecasts[1], correction=(date, 1, 215., 'Reconciled daily total'))
+        before = [store.get_forecast(scope, prediction_id) for prediction_id in forecasts]
+        snapshot = self.snapshot()
+        self.assertEqual(snapshot, verify_backup(self.backup))
+        self.assertEqual(snapshot, restore_backup(self.backup, self.restored, offline=True))
+
+        # Fresh process, mounted at the restored path, with a real sign-in.
+        script = '''
+import json
+import re
+import sys
+
+from vibedash.accounts import account_scope_id
+from vibedash.forecast_models import ForecastModelStore, storage_settings
+from web_app import app
+
+fixture = json.load(sys.stdin)
+ready = app.test_client().get('/readyz')
+assert ready.status_code == 200, ready.json
+assert ready.json['runtime_storage']['state_identity']['status'] == 'verified'
+store = ForecastModelStore(**storage_settings(app.config))
+owner = app.test_client()
+login = owner.get('/vibedash/login').get_data(as_text=True)
+token = re.search(r'name="csrf_token" value="([0-9a-f]{64})"', login).group(1)
+signed_in = owner.post('/vibedash/login', data={
+    'csrf_token': token, 'email': fixture['email'], 'password': fixture['password'],
+})
+assert signed_in.status_code == 302
+with owner.session_transaction() as session:
+    scope = account_scope_id(session['vibedash_account_id'], app.secret_key)
+    token = session['vibedash_auth_csrf_token']
+assert store.get(scope, fixture['model_id'])['sha256'] == fixture['model_sha256']
+forecasts = fixture['forecasts']
+for forecast in forecasts:
+    url = '/vibedash/account/forecasts/' + forecast['prediction_id']
+    response = owner.get(url)
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'private, no-store'
+    assert 'Reconciled daily total' in response.get_data(as_text=True)
+    assert app.test_client().get(url).status_code == 404
+    assert store.get_forecast(scope, forecast['prediction_id']) == forecast
+
+first_url = '/vibedash/account/forecasts/' + forecasts[0]['prediction_id']
+date = fixture['date']
+correction = owner.post(first_url + '/correct', data={
+    'csrf_token': token, 'correction_date': date + ':2', 'correction_value': '219',
+    'correction_reason': 'Verified after restore',
+})
+assert correction.status_code == 303, correction.status_code
+for original in forecasts:
+    revised = store.get_forecast(scope, original['prediction_id'])
+    versions = revised['corrections'][0]['versions']
+    assert [version['value'] for version in versions] == [212., 215., 219.]
+    assert revised['expires_at'] == original['expires_at']
+    for method, field in (('model_scores', 'prediction'), ('baseline_scores', 'baseline')):
+        point = next(point for point in original['points'] if point['date'] == date)
+        assert revised[method]['mae'] == abs(219. - point[field])
+'''
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, '-c', script], cwd=root, capture_output=True, text=True, timeout=45,
+            input=json.dumps({'email': email, 'password': password, 'date': date, 'forecasts': before,
+                              'model_id': artifact['model_id'], 'model_sha256': artifact['sha256']}),
+            env={**os.environ, 'DATA_PRISM_STATE_DIR': str(self.restored),
+                 'DATA_PRISM_DEPLOYMENT_PROFILE': 'production', 'DATA_PRISM_STATE_DURABILITY': 'persistent',
+                 'DATA_PRISM_EXPECTED_STATE_ID': self.state_identity['state_id'],
+                 'VIBEDASH_MODEL_STORAGE_ENABLED': 'true', 'FLASK_SECRET_KEY': secret,
+                 'SESSION_COOKIE_SECURE': 'false', 'LOG_LEVEL': 'ERROR'},
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([store.get_forecast(scope, prediction_id) for prediction_id in forecasts], before)
+        self.assertEqual(verify_backup(self.backup), snapshot)
+
 
 if __name__ == '__main__':
     unittest.main()

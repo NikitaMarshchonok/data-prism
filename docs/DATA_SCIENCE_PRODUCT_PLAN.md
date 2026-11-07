@@ -221,7 +221,11 @@ New saved forecasts can be explicitly linked to an account-owned daily
 series with a matching input contract. They share versioned actuals for
 overlapping dates and score their own frozen predictions against those facts.
 
-Next, verify restart recovery on provisioned infrastructure and evaluate
+Local recovery coverage now restores that state into a new directory and
+starts a fresh application process. It verifies the saved scores and correction
+history under the owner account and applies a new shared correction.
+
+Next, rehearse recovery on provisioned infrastructure and evaluate
 prospectively recorded forecasts with client data. Distinguish drift from
 measured quality loss, then test an explicit alert policy and candidate
 retraining with review, promotion and rollback.
