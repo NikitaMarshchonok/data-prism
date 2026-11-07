@@ -276,6 +276,31 @@ class ForecastPredictionWebTests(unittest.TestCase):
         self.assertEqual(updated['forecast_json'], saved['forecast_json'])
         self.assertEqual(updated['expires_at'], saved['expires_at'])
 
+    def test_utc_issue_day_distinguishes_live_and_retrospective_forecast_scores(self):
+        # The fixture's issue dates are historical relative to the test runner.
+        # Use a simulated application clock and skip real-time expiry cleanup.
+        with patch('vibedash.analysis_jobs.AnalysisJobStore.purge_terminal', return_value=0), \
+                patch('vibedash.forecast_models._now') as clock:
+            clock.return_value = datetime(2020, 6, 13, 23, 59, 59, tzinfo=timezone.utc)
+            prospective = self._save()
+            before = self._outcomes()
+            clock.return_value = datetime(2020, 6, 14, tzinfo=timezone.utc)
+            self.assertEqual(self._save(), prospective)
+            self.assertEqual(self._outcomes(), before)
+            retrospective = self._save(frame=self.frame.iloc[:-1], forecast_origin='2020-06-12')
+            account = self.owner.get('/vibedash/account').get_data(as_text=True)
+            for url, label in ((prospective, 'Prospective'), (retrospective, 'Retrospective')):
+                self.assertIn(f'· {url.rsplit("/", 1)[1][:12]} · {label}</a>', account)
+                html = self.owner.get(url).get_data(as_text=True)
+                self.assertIn(f'<strong>{label}</strong>', html)
+
+            clock.return_value = datetime(2020, 6, 16, tzinfo=timezone.utc)
+            for url, label in ((prospective, 'Prospective'), (retrospective, 'Retrospective')):
+                self.assertEqual(self._post_actuals(url, [('2020-06-14', 315)]).status_code, 303)
+                html = self.owner.get(url).get_data(as_text=True)
+                self.assertIn(f'<strong>{label}</strong>', html)
+                self.assertIn('Errors on the same matched dates', html)
+
     def test_bad_or_premature_actuals_leave_the_entire_batch_unapplied(self):
         url = self._save()
         self.assertEqual(self._post_actuals(url, [('2020-06-14', 10)]).status_code, 303)

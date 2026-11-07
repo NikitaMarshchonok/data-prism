@@ -147,7 +147,7 @@
                                 <label for="{{ prefix }}-origin">New issue date (required)</label>
                                 <input id="{{ prefix }}-origin" name="forecast_origin" type="date" value="{{ run.origin if run else '' }}" required
                                     aria-describedby="{{ prefix }}-origin-help{% if run and run.field == 'origin' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'origin' %} aria-invalid="true"{% endif %}>
-                                <p id="{{ prefix }}-origin-help" class="form-help">Use a date later than {{ model.input_contract.original_issue_date }}. Your last observation must be on the new issue date minus {{ model.input_contract.reporting_delay_days }} days.</p>
+                                <p id="{{ prefix }}-origin-help" class="form-help">Use a date later than {{ model.input_contract.original_issue_date }}. Your last observation must be on the new issue date minus {{ model.input_contract.reporting_delay_days }} days. Save on the issue day in UTC to track accuracy prospectively.</p>
                                 <label for="{{ prefix }}-history">Updated history CSV (required)</label>
                                 <input id="{{ prefix }}-history" name="history_csv" type="file" accept=".csv,text/csv" required
                                     aria-describedby="{{ prefix }}-history-help{% if run and run.field == 'history' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'history' %} aria-invalid="true"{% endif %}>
@@ -196,6 +196,11 @@
             </section>
             <section class="export-card" aria-labelledby="saved-forecasts-title">
                 <h2 id="saved-forecasts-title">Saved forecasts</h2>
+                {% set timing_labels = {
+                    'prospective': 'Prospective',
+                    'retrospective': 'Retrospective',
+                    'unverified': 'Timing unverified'
+                } %}
                 {% if forecast_list_unavailable %}
                 <p role="status">Saved forecasts are temporarily unavailable.</p>
                 {% elif saved_forecasts %}
@@ -203,7 +208,7 @@
                     {% for saved in saved_forecasts %}
                     <li><a href="{{ url_for('vibedash.forecast_outcome', prediction_id=saved.prediction_id, _anchor='forecast-quality') }}"
                         {% if forecast_outcome and forecast_outcome.prediction_id == saved.prediction_id %}aria-current="page"{% endif %}>
-                        Issue {{ saved.forecast_origin }} · {{ saved.prediction_id[:12] }}</a></li>
+                        Issue {{ saved.forecast_origin }} · {{ saved.prediction_id[:12] }} · {{ timing_labels[saved.evaluation_timing] }}</a></li>
                     {% endfor %}
                 </ul>
                 {% else %}
@@ -213,7 +218,16 @@
                 {% set check = forecast_outcome %}
                 <section class="model-prediction" id="forecast-quality" aria-labelledby="forecast-quality-title">
                     <h3 id="forecast-quality-title">Forecast with issue date {{ check.forecast_origin }}</h3>
-                    <p class="form-help">First saved {{ check.registered_at[:16]|replace('T', ' ') }} UTC. Expires {{ check.expires_at[:16]|replace('T', ' ') }} UTC. The issue date is user-declared. The saved timestamp records when Data Prism received the forecast.</p>
+                    <p class="form-help">First saved {{ check.registered_at[:16]|replace('T', ' ') }} UTC. Expires {{ check.expires_at[:16]|replace('T', ' ') }} UTC. The issue date is user-declared.</p>
+                    <p><strong>{{ timing_labels[check.evaluation_timing] }}</strong>
+                        {% if check.evaluation_timing == 'prospective' %}
+                        Data Prism recorded this forecast on its issue date, before the dates it predicts.
+                        {% elif check.evaluation_timing == 'retrospective' %}
+                        Data Prism recorded this forecast after its declared issue date. Treat its scores as a retrospective comparison.
+                        {% else %}
+                        The recorded timestamp is insufficient to establish the timing of this forecast.
+                        {% endif %}
+                    </p>
                     {% if check.series_label %}
                     <p><strong>Shared daily series</strong> · {{ check.series_label }}</p>
                     <p class="form-help">Adding or correcting an actual here updates all forecasts linked to this series that cover its date. Each forecast uses its own saved predictions and baseline. Shared actuals are kept while a saved forecast covers their dates.</p>

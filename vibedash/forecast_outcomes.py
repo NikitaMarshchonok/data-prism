@@ -1,6 +1,6 @@
 """Explicitly retained web forecasts and matched daily outcomes."""
 import csv
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import io
 import json
@@ -149,6 +149,21 @@ def store_forecast(connection, scope, report, artifact, now):
     return prediction_id, True
 
 
+def forecast_evaluation_timing(registered_at, forecast_origin):
+    """Classify using the first server save and the declared UTC issue day."""
+    try:
+        saved = datetime.fromisoformat(registered_at)
+        origin = validate_forecast_date(forecast_origin)
+        if saved.utcoffset() is None:
+            return 'unverified'
+        saved_day = saved.astimezone(timezone.utc).date()
+    except (TypeError, ValueError, OverflowError):
+        return 'unverified'
+    if saved_day == origin:
+        return 'prospective'
+    return 'retrospective' if saved_day > origin else 'unverified'
+
+
 def forecast_view(row, payload, actuals):
     report = payload['report']
     points = []
@@ -183,6 +198,7 @@ def forecast_view(row, payload, actuals):
         'registered_at': row['registered_at'],
         'expires_at': row['expires_at'],
         'forecast_origin': report['forecast_origin'],
+        'evaluation_timing': forecast_evaluation_timing(row['registered_at'], report['forecast_origin']),
         'target_column': payload['target_column'],
         'target_unit': payload['target_unit'],
         'reporting_delay_days': payload['reporting_delay_days'],
