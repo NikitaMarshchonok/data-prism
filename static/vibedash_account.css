@@ -64,8 +64,13 @@ input:focus-visible { border-color: var(--accent); outline: 3px solid rgba(114, 
 .saved-model-list .button { min-height: 44px; }
 .model-inference { flex: 1 0 100%; min-width: 0; }
 .model-inference summary { min-height: 44px; padding: 10px 0; color: var(--accent); cursor: pointer; font-weight: 650; }
-.model-inference summary:focus-visible, .model-inference :is(h3, p)[autofocus]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.model-inference summary:focus-visible, :is(.model-inference, .model-prediction) :is(h3, p)[autofocus]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.saved-forecast-list li + li { margin-top: 8px; }
 .model-inference-form :is(input[type="date"], input[type="file"]) { min-width: 0; min-height: 44px; }
+.actual-correction { margin-top: 16px; overflow-wrap: anywhere; }
+.model-inference-form select { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; font: inherit; background: var(--panel-soft); color: var(--text); border: 1px solid var(--border); border-radius: 8px; }
+.model-inference-form select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.actual-correction li + li { margin-top: 8px; }
 .model-inference-form .form-help { overflow-wrap: anywhere; }
 .model-availability { display: flex; align-items: center; min-height: 44px; gap: 10px; }
 .model-availability input { flex: none; width: 20px; height: 20px; accent-color: var(--accent); }

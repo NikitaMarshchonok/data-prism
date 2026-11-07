@@ -70,6 +70,11 @@ try:
     from .decision_brief import build_decision_brief
     from .forecast_tasks import ForecastTaskError, forecast_task_from_form, run_confirmed_forecast, forecast_audit_view
     from .forecast_models import ForecastModelNotFound, ForecastModelStore, RETENTION_CONTRACT, retention_days, storage_settings
+    from .forecast_outcomes import (
+        ForecastActualsTooLarge, ForecastCorrectionError, ForecastOutcomeError, MAX_ACTUALS_REQUEST_BYTES,
+        RETENTION_DAYS as FORECAST_RETENTION_DAYS, correction_from_form, load_actuals,
+    )
+    from .forecast_series import ForecastSeriesError, series_from_form
     from .forecast_prediction import ForecastHistoryTooLarge, MAX_HISTORY_REQUEST_BYTES, load_prediction_history
     from .task_capabilities import (
         TaskAdmissionError, capability_catalog, assess_task_request,
@@ -1362,7 +1367,9 @@ if vibedash_bp:
         return redirect(url_for('vibedash.index'))
 
 
-    def _render_account_settings(account, *, error=None, success=None, status=200, forecast_run=None):
+    def _render_account_settings(account, *, error=None, success=None, status=200,
+                                 forecast_run=None, forecast_outcome=None, actuals_error=None,
+                                 correction_error=None):
         security_activity = []
         security_activity_unavailable = False
         try:
@@ -1375,14 +1382,25 @@ if vibedash_bp:
         saved_models = []
         model_storage = storage_settings(current_app.config)
         model_list_unavailable = False
+        saved_forecasts = []
+        saved_series = []
+        forecast_list_unavailable = False
         if model_storage is not None:
             try:
-                saved_models = ForecastModelStore(**model_storage).list_for_scope(
-                    account_scope_id(account['id'], current_app.secret_key),
-                    include_input_contract=True,
-                )
+                model_store = ForecastModelStore(**model_storage)
+                scope = account_scope_id(account['id'], current_app.secret_key)
             except Exception:
-                model_list_unavailable = True
+                model_list_unavailable = forecast_list_unavailable = True
+            else:
+                try:
+                    saved_models = model_store.list_for_scope(scope, include_input_contract=True)
+                except Exception:
+                    model_list_unavailable = True
+                try:
+                    saved_forecasts = model_store.list_forecasts(scope)
+                    saved_series = model_store.list_series(scope)
+                except Exception:
+                    forecast_list_unavailable = True
         rendered = render_template(
             'vibedash_account.html',
             account=account,
@@ -1392,12 +1410,24 @@ if vibedash_bp:
             saved_models=saved_models,
             model_list_unavailable=model_list_unavailable,
             forecast_run=forecast_run,
+            forecast_retention_days=FORECAST_RETENTION_DAYS,
+            saved_forecasts=saved_forecasts,
+            saved_series=saved_series,
+            forecast_list_unavailable=forecast_list_unavailable,
+            forecast_outcome=forecast_outcome,
+            actuals_error=actuals_error,
+            correction_error=correction_error,
             auth_csrf_token=_auth_csrf_token(),
             error=error,
             success=success,
         )
         response = make_response(rendered, status)
         _set_account_private_headers(response)
+        if forecast_run is not None or forecast_outcome is not None:
+            response.headers['Content-Security-Policy'] = (
+                "default-src 'none'; style-src 'self'; form-action 'self'; "
+                "base-uri 'none'; frame-ancestors 'none'"
+            )
         return response
 
 
@@ -1474,7 +1504,7 @@ if vibedash_bp:
 
     @vibedash_bp.post('/account/models/<model_id>/predict')
     def forecast_model_predict(model_id):
-        """Run a transient forecast on an explicitly extended, available history."""
+        """Run a forecast on explicitly extended history, with separate opt-in saving."""
         account = _current_account()
         settings = storage_settings(current_app.config)
 
@@ -1489,15 +1519,9 @@ if vibedash_bp:
         origin = ''
 
         def show_run(status=200, **result):
-            response = make_response(_render_account_settings(
+            return _render_account_settings(
                 account, status=status, forecast_run={'model_id': model_id, 'origin': origin, **result},
-            ))
-            _set_account_private_headers(response)
-            response.headers['Content-Security-Policy'] = (
-                "default-src 'none'; style-src 'self'; form-action 'self'; "
-                "base-uri 'none'; frame-ancestors 'none'"
             )
-            return response
 
         try:
             store = ForecastModelStore(**settings)
@@ -1518,6 +1542,10 @@ if vibedash_bp:
             if request.form.getlist('history_available') != ['yes']:
                 raise ForecastHistoryError('Confirm that the observations were available by the chosen issue date.',
                                            field='availability')
+            consent = request.form.getlist('retain_forecast')
+            if consent not in ([], ['yes']):
+                raise ForecastOutcomeError('Choose whether to save the forecast using the checkbox.')
+            series_choice = series_from_form(request.form, retain=bool(consent))
             files = request.files.getlist('history_csv')
             if len(files) != 1:
                 raise ForecastHistoryError('Choose one UTF-8 CSV file with the full updated history.')
@@ -1526,13 +1554,18 @@ if vibedash_bp:
             finally:
                 files[0].close()
             prediction = store.predict(scope, model_id, history=history, forecast_origin=origin,
-                                       require_new_history=True)
+                                       require_new_history=True, retain_forecast=bool(consent),
+                                       series_choice=series_choice)
         except (ScopeClosedError, ForecastModelNotFound):
             return unavailable()
         except (ForecastHistoryTooLarge, RequestEntityTooLarge):
             return show_run(413, error='The history CSV must be no larger than 2 MiB.', field='history')
         except ForecastHistoryError as error:
             return show_run(422, error=str(error), field=error.field)
+        except ForecastSeriesError as error:
+            return show_run(422, error=str(error), field='series')
+        except ForecastOutcomeError as error:
+            return show_run(422, error=str(error), field='retention')
         except Exception:
             current_app.logger.warning(
                 'Saved forecast model prediction unavailable',
@@ -1542,6 +1575,79 @@ if vibedash_bp:
         if prediction['status'] != 'ok':
             return show_run(422, error='The model or its baseline produced negative counts. No forecast is shown.')
         return show_run(prediction=prediction)
+
+
+    @vibedash_bp.route('/account/forecasts/<prediction_id>', methods=['GET', 'POST'])
+    @vibedash_bp.post('/account/forecasts/<prediction_id>/correct', endpoint='forecast_outcome_correct')
+    def forecast_outcome(prediction_id):
+        account = _current_account()
+        settings = storage_settings(current_app.config)
+
+        def unavailable(status=404):
+            response = make_response(jsonify(error='Saved forecast is unavailable.'), status)
+            _set_account_private_headers(response)
+            return response
+
+        if account is None or settings is None or not JOB_ID_PATTERN.fullmatch(prediction_id):
+            return unavailable()
+        scope = account_scope_id(account['id'], current_app.secret_key)
+        is_correction = request.endpoint == 'vibedash.forecast_outcome_correct'
+
+        def form_error(message, status, field=None):
+            context = {'correction_error': {'message': message, 'field': field}} if is_correction else {
+                'actuals_error': message,
+            }
+            return _render_account_settings(account, forecast_outcome=forecast, status=status, **context)
+
+        try:
+            store = ForecastModelStore(**settings)
+            forecast = store.get_forecast(scope, prediction_id)
+            if forecast is None:
+                return unavailable()
+            if request.method != 'POST':
+                return _render_account_settings(account, forecast_outcome=forecast)
+            if is_correction:
+                if request.mimetype != 'application/x-www-form-urlencoded':
+                    return form_error('Use the correction form to submit a revised actual.', 422)
+                if request.content_length is not None and request.content_length > 8192:
+                    return form_error('The correction form is too large.', 413)
+            elif request.content_length is not None and request.content_length > MAX_ACTUALS_REQUEST_BYTES:
+                raise ForecastActualsTooLarge('Use an actuals CSV of at most 16 KiB.')
+            tokens = request.form.getlist('csrf_token')
+            if len(tokens) != 1 or not _valid_auth_csrf_token(tokens[0]):
+                return form_error('This form has expired. Reload the forecast and try again.', 400)
+            if is_correction:
+                updated = store.get_forecast(scope, prediction_id, correction=correction_from_form(request.form))
+            else:
+                files = request.files.getlist('actuals_csv')
+                if len(files) != 1:
+                    raise ForecastOutcomeError('Choose one CSV file containing daily actuals.')
+                try:
+                    actuals = load_actuals(files[0])
+                finally:
+                    files[0].close()
+                updated = store.get_forecast(scope, prediction_id, actuals=actuals)
+            if updated is None:
+                return unavailable()
+        except ScopeClosedError:
+            return unavailable()
+        except (ForecastActualsTooLarge, RequestEntityTooLarge):
+            message = 'The correction form is too large.' if is_correction else 'Use an actuals CSV of at most 16 KiB.'
+            return form_error(message, 413)
+        except ForecastCorrectionError as error:
+            return form_error(str(error), error.status, error.field)
+        except ForecastOutcomeError as error:
+            return form_error(str(error), 422)
+        except Exception:
+            current_app.logger.warning('Saved forecast outcomes unavailable',
+                                       extra={'event': 'forecast_outcomes_unavailable'})
+            return unavailable(503)
+        if is_correction:
+            flash('Actual correction saved. Forecast errors reflect the latest actuals.', 'success')
+        response = redirect(url_for('vibedash.forecast_outcome', prediction_id=prediction_id,
+                                    _anchor='forecast-quality'), code=303)
+        _set_account_private_headers(response)
+        return response
 
 
     @vibedash_bp.post('/account/export.json')

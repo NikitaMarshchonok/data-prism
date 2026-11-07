@@ -117,7 +117,12 @@
                             <section class="model-prediction" aria-labelledby="{{ prefix }}-result">
                                 <h3 id="{{ prefix }}-result" tabindex="-1" autofocus>New forecast ready</h3>
                                 <p>Issue date: <strong>{{ result.forecast_origin }}</strong>. History available through {{ result.available_through }}; model trained through {{ result.trained_through }}.</p>
-                                <p>Parameters and reference method unchanged. Accuracy on new outcomes is unknown. This forecast is not saved and is not approved for operational use.</p>
+                                <p>Parameters and reference method unchanged. Accuracy on new outcomes is unknown for this run.</p>
+                                {% if result.retained_prediction_id %}
+                                <p><a href="{{ url_for('vibedash.forecast_outcome', prediction_id=result.retained_prediction_id, _anchor='forecast-quality') }}">Open saved forecast and add actuals</a></p>
+                                {% else %}
+                                <p>This forecast was shown for this request only.</p>
+                                {% endif %}
                                 <table>
                                     <caption>Daily predictions for {{ model.input_contract.target_column }} ({{ model.input_contract.target_unit }})</caption>
                                     <thead><tr><th scope="col">Date</th><th scope="col">Model</th><th scope="col">Baseline</th></tr></thead>
@@ -132,7 +137,7 @@
                             {% endif %}
                             <form class="model-inference-form" method="post" enctype="multipart/form-data" action="{{ url_for('vibedash.forecast_model_predict', model_id=model.model_id) }}#saved-model-{{ model.model_id }}">
                                 <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
-                                <p class="form-help">Use the saved model without retraining. The uploaded history and the result are not retained in your account.</p>
+                                <p class="form-help">Use the saved model without retraining. The uploaded history file is used for this request only.</p>
                                 {% if run and run.error %}
                                 <p id="{{ prefix }}-error" class="notice notice-error" role="alert" tabindex="-1" autofocus>
                                     {{ run.error }}
@@ -151,6 +156,34 @@
                                     <input id="{{ prefix }}-availability" name="history_available" type="checkbox" value="yes" required{% if run and run.field == 'availability' %} aria-describedby="{{ prefix }}-error" aria-invalid="true"{% endif %}>
                                     <span>I confirm these observations were available by the new issue date.</span>
                                 </label>
+                                <label class="model-availability" for="{{ prefix }}-retention">
+                                    <input id="{{ prefix }}-retention" name="retain_forecast" type="checkbox" value="yes"
+                                        aria-describedby="{{ prefix }}-retention-help{% if run and run.field == 'retention' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'retention' %} aria-invalid="true"{% endif %}>
+                                    <span>Save this forecast to check it against actuals</span>
+                                </label>
+                                <p id="{{ prefix }}-retention-help" class="form-help">Optional. Saves this forecast and baseline for up to {{ forecast_retention_days }} days from first save.</p>
+                                <details class="actual-correction"{% if run and run.field == 'series' %} open{% endif %}>
+                                    <summary>Share actuals across forecasts</summary>
+                                    <p id="{{ prefix }}-series-help" class="form-help">Optional when saving. Choose a series or enter a new name. Use the same series only for the same business measure and population. Omit sensitive information from the name. Actuals and corrections apply to every linked forecast that covers the date.</p>
+                                    <label for="{{ prefix }}-series">Existing daily series</label>
+                                    <select id="{{ prefix }}-series" name="series_id"
+                                        aria-describedby="{{ prefix }}-series-help{% if run and run.field == 'series' %} {{ prefix }}-error{% endif %}"{% if run and run.field == 'series' %} aria-invalid="true"{% endif %}>
+                                        <option value="">No existing series selected</option>
+                                        {% for series in saved_series if series.time_column == model.input_contract.time_column
+                                            and series.target_column == model.input_contract.target_column
+                                            and series.target_unit == model.input_contract.target_unit
+                                            and series.reporting_delay_days == model.input_contract.reporting_delay_days %}
+                                        <option value="{{ series.series_id }}">{{ series.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    <label for="{{ prefix }}-series-name">New series name</label>
+                                    <input id="{{ prefix }}-series-name" name="new_series_label" type="text" maxlength="80"
+                                        aria-describedby="{{ prefix }}-series-help">
+                                    <label class="model-availability" for="{{ prefix }}-series-confirmed">
+                                        <input id="{{ prefix }}-series-confirmed" name="series_confirmed" type="checkbox" value="yes">
+                                        <span>I confirm this forecast and the shared actuals represent the same daily series.</span>
+                                    </label>
+                                </details>
                                 <button type="submit" class="button button-primary">Run forecast</button>
                             </form>
                         </details>
@@ -159,6 +192,133 @@
                 </ul>
                 {% else %}
                 <p>No saved forecast models. Choose a retention period when you run a daily forecast to save one.</p>
+                {% endif %}
+            </section>
+            <section class="export-card" aria-labelledby="saved-forecasts-title">
+                <h2 id="saved-forecasts-title">Saved forecasts</h2>
+                {% if forecast_list_unavailable %}
+                <p role="status">Saved forecasts are temporarily unavailable.</p>
+                {% elif saved_forecasts %}
+                <ul class="saved-forecast-list">
+                    {% for saved in saved_forecasts %}
+                    <li><a href="{{ url_for('vibedash.forecast_outcome', prediction_id=saved.prediction_id, _anchor='forecast-quality') }}"
+                        {% if forecast_outcome and forecast_outcome.prediction_id == saved.prediction_id %}aria-current="page"{% endif %}>
+                        Issue {{ saved.forecast_origin }} · {{ saved.prediction_id[:12] }}</a></li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p>Choose to save a new forecast when running a saved model to start checking its accuracy.</p>
+                {% endif %}
+                {% if forecast_outcome %}
+                {% set check = forecast_outcome %}
+                <section class="model-prediction" id="forecast-quality" aria-labelledby="forecast-quality-title">
+                    <h3 id="forecast-quality-title">Forecast with issue date {{ check.forecast_origin }}</h3>
+                    <p class="form-help">First saved {{ check.registered_at[:16]|replace('T', ' ') }} UTC. Expires {{ check.expires_at[:16]|replace('T', ' ') }} UTC. The issue date is user-declared. The saved timestamp records when Data Prism received the forecast.</p>
+                    {% if check.series_label %}
+                    <p><strong>Shared daily series</strong> · {{ check.series_label }}</p>
+                    <p class="form-help">Adding or correcting an actual here updates all forecasts linked to this series that cover its date. Each forecast uses its own saved predictions and baseline. Shared actuals are kept while a saved forecast covers their dates.</p>
+                    {% endif %}
+                    <p><strong>{{ check.matched_count }} of {{ check.points|length }} forecast dates matched.</strong>
+                        {% if check.matched_count == 0 %}Accuracy is unknown until actuals are added.
+                        {% elif check.matched_count < check.points|length %}Partial results cover the matched dates only.
+                        {% else %}Errors cover all forecast dates using the reported actuals.{% endif %}
+                    </p>
+                    {% if check.model_scores %}
+                    <table>
+                        <caption>Errors on the same matched dates</caption>
+                        <thead><tr><th scope="col">Metric</th><th scope="col">Model</th><th scope="col">Baseline</th></tr></thead>
+                        <tbody>
+                            <tr><th scope="row">MAE</th><td>{{ '%.8g'|format(check.model_scores.mae) }}</td><td>{{ '%.8g'|format(check.baseline_scores.mae) }}</td></tr>
+                            <tr><th scope="row">RMSE</th><td>{{ '%.8g'|format(check.model_scores.rmse) }}</td><td>{{ '%.8g'|format(check.baseline_scores.rmse) }}</td></tr>
+                            {% if check.model_scores.weighted_absolute_error is defined %}
+                            <tr><th scope="row">Weighted absolute error</th><td>{{ '%.8g'|format(check.model_scores.weighted_absolute_error) }}</td><td>{{ '%.8g'|format(check.baseline_scores.weighted_absolute_error) }}</td></tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                    {% endif %}
+                    <p class="form-help">Model {{ check.model_name }} · baseline {{ check.baseline_name }}. Lower errors are better. Data Prism uses the facts you supply, and cannot verify when they became available.</p>
+                    <table>
+                        <caption>{{ check.target_column }} ({{ check.target_unit }}) by date</caption>
+                        <thead><tr><th scope="col">Date</th><th scope="col">Model</th><th scope="col">Baseline</th><th scope="col">Actual</th></tr></thead>
+                        <tbody>
+                            {% for point in check.points %}
+                            <tr><th scope="row">{{ point.date }}</th><td>{{ '%.8g'|format(point.prediction) }}</td><td>{{ '%.8g'|format(point.baseline) }}</td><td>{{ '%.8g'|format(point.actual) if point.actual is not none else 'Pending' }}</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                    <form class="model-inference-form" method="post" enctype="multipart/form-data"
+                        action="{{ url_for('vibedash.forecast_outcome', prediction_id=check.prediction_id, _anchor='forecast-quality') }}">
+                        <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                        {% if actuals_error %}
+                        <p id="actuals-error" class="notice notice-error" role="alert" tabindex="-1" autofocus>{{ actuals_error }} <a href="#actuals-file">Review upload</a></p>
+                        {% endif %}
+                        <label for="actuals-file">Daily actuals CSV (required)</label>
+                        <input id="actuals-file" name="actuals_csv" type="file" accept=".csv,text/csv" required
+                            aria-describedby="actuals-help{% if actuals_error %} actuals-error{% endif %}"{% if actuals_error %} aria-invalid="true"{% endif %}>
+                        <p id="actuals-help" class="form-help">UTF-8, up to 16 KiB. Use the header <code>date,actual</code> and one row per forecast date you can report. Dates are eligible after the {{ check.reporting_delay_days }}-day reporting delay, using today in UTC. Use the correction form to revise a saved value.</p>
+                        <button type="submit" class="button button-primary">Add actuals</button>
+                    </form>
+                    {% if check.matched_count or correction_error %}
+                    <details class="model-inference actual-correction"{% if correction_error %} open{% endif %}>
+                        <summary>Correct a saved actual</summary>
+                        <form class="model-inference-form" method="post"
+                            action="{{ url_for('vibedash.forecast_outcome_correct', prediction_id=check.prediction_id, _anchor='forecast-quality') }}">
+                            <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                            {% if correction_error %}
+                            <p class="notice notice-error" role="alert" tabindex="-1" autofocus>
+                                {% if correction_error.field %}<a href="#correction-{{ correction_error.field }}">Review the correction</a>
+                                {% else %}{{ correction_error.message }}{% endif %}
+                            </p>
+                            {% endif %}
+                            <label for="correction-date">Date and current actual (required)</label>
+                            <select id="correction-date" name="correction_date" required
+                                {% if correction_error and correction_error.field == 'date' %}aria-invalid="true" aria-describedby="correction-date-error"{% endif %}>
+                                <option value="">Choose a date</option>
+                                {% for point in check.points if point.actual is not none %}
+                                <option value="{{ point.date }}:{{ point.revision }}">{{ point.date }} · {{ point.actual }}</option>
+                                {% endfor %}
+                            </select>
+                            {% if correction_error and correction_error.field == 'date' %}
+                            <p id="correction-date-error" class="form-help">{{ correction_error.message }}</p>
+                            {% endif %}
+                            <label for="correction-value">Corrected actual (required)</label>
+                            <input id="correction-value" name="correction_value" type="text" inputmode="decimal" maxlength="100" required
+                                {% if correction_error and correction_error.field == 'value' %}aria-invalid="true" aria-describedby="correction-value-error"{% endif %}>
+                            {% if correction_error and correction_error.field == 'value' %}
+                            <p id="correction-value-error" class="form-help">{{ correction_error.message }}</p>
+                            {% endif %}
+                            <label for="correction-reason">Reason for correction (required)</label>
+                            <input id="correction-reason" name="correction_reason" type="text" maxlength="300" required
+                                aria-describedby="correction-help{% if correction_error and correction_error.field == 'reason' %} correction-reason-error{% endif %}"
+                                {% if correction_error and correction_error.field == 'reason' %}aria-invalid="true"{% endif %}>
+                            {% if correction_error and correction_error.field == 'reason' %}
+                            <p id="correction-reason-error" class="form-help">{{ correction_error.message }}</p>
+                            {% endif %}
+                            <p id="correction-help" class="form-help">The correction and reason are saved in this forecast’s history. Keep the reason brief and omit sensitive information.</p>
+                            <button type="submit" class="button button-primary">Save correction</button>
+                        </form>
+                    </details>
+                    {% endif %}
+                    {% if check.corrections %}
+                    <details class="model-inference actual-correction">
+                        <summary>Actual correction history</summary>
+                        <p class="form-help">The score above uses the current value for each date. This history shows the absolute error for each version against the same saved predictions.</p>
+                        {% for item in check.corrections %}
+                        <h4>{{ item.date }}</h4>
+                        <ol>
+                            {% for version in item.versions %}
+                            <li>
+                                <strong>{{ version.value }}{% if loop.last %} (current){% endif %}</strong> ·
+                                <time datetime="{{ version.received_at }}">{{ version.received_at[:19]|replace('T', ' ') }} UTC</time><br>
+                                Model error {{ '%.8g'|format(version.model_error) }} · baseline error {{ '%.8g'|format(version.baseline_error) }}<br>
+                                {{ version.reason if version.reason is not none else 'Original reported actual' }}
+                            </li>
+                            {% endfor %}
+                        </ol>
+                        {% endfor %}
+                    </details>
+                    {% endif %}
+                </section>
                 {% endif %}
             </section>
             {% endif %}

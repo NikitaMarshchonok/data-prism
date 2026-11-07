@@ -11,6 +11,8 @@ from pathlib import Path
 from src.forecast_artifact import MAX_ARTIFACT_BYTES, predict_artifact, validate_artifact
 from src.runtime_storage import evaluate_runtime_storage_contract
 from .analysis_jobs import AnalysisJobStore, _validated_job_id, _validated_scope_id
+from .forecast_outcomes import correct_actual, forecast_view, merge_actuals, store_forecast
+from . import forecast_series
 
 
 CONTRACT = 'scoped-forecast-model-store-v1'
@@ -110,6 +112,14 @@ class ForecastModelStore:
             )''')
             connection.execute('''CREATE INDEX IF NOT EXISTS idx_forecast_models_expiry
                 ON forecast_models(scope_id, expires_at)''')
+            connection.execute('''CREATE TABLE IF NOT EXISTS forecast_outcomes (
+                scope_id TEXT NOT NULL, prediction_id TEXT NOT NULL, model_id TEXT NOT NULL,
+                forecast_origin TEXT NOT NULL, registered_at TEXT NOT NULL, expires_at TEXT NOT NULL,
+                forecast_json TEXT NOT NULL, actuals_json TEXT NOT NULL,
+                PRIMARY KEY(scope_id, prediction_id),
+                UNIQUE(scope_id, model_id, forecast_origin)
+            )''')
+            forecast_series.initialize_series(connection)
 
     def _check_storage(self):
         contract = evaluate_runtime_storage_contract(
@@ -266,7 +276,10 @@ class ForecastModelStore:
             return models
         return self._guard(scope_id, read)
 
-    def predict(self, scope_id, model_id, *, history=None, forecast_origin=None, require_new_history=False):
+    def predict(self, scope_id, model_id, *, history=None, forecast_origin=None,
+                require_new_history=False, retain_forecast=False, series_choice=None):
+        if series_choice is not None and not retain_forecast:
+            raise ValueError('A series can only be linked when saving a forecast.')
         model_id = _validated_job_id(model_id)
         def predict(connection, scope):
             row = connection.execute('''SELECT * FROM forecast_models
@@ -274,11 +287,66 @@ class ForecastModelStore:
                 (scope, model_id, _timestamp(_now()))).fetchone()
             if row is None:
                 raise ForecastModelNotFound('No retained model is available in this scope.')
-            return predict_artifact(self._artifact(row), history=history, forecast_origin=forecast_origin,
-                                    require_new_history=require_new_history)
-        # Ownership and the deletion fence stay held through frozen inference.
-        # This does not persist the returned predictions or match actuals.
+            artifact = self._artifact(row)
+            report = predict_artifact(artifact, history=history, forecast_origin=forecast_origin,
+                                      require_new_history=require_new_history)
+            if retain_forecast:
+                prediction_id, created = store_forecast(connection, scope, report, artifact, _now())
+                if prediction_id is not None:
+                    forecast_series.bind_series(connection, scope, prediction_id, created=created,
+                                                choice=series_choice, artifact=artifact, points=report['predictions'])
+                report['retained_prediction_id'] = prediction_id
+            return report
+        # Keep ownership, inference and optional persistence under the deletion fence.
         return self._guard(scope_id, predict)
+
+    def list_forecasts(self, scope_id):
+        def read(connection, scope):
+            return [dict(row) for row in connection.execute('''
+                SELECT prediction_id, forecast_origin
+                FROM forecast_outcomes WHERE scope_id=? AND expires_at>?
+                ORDER BY registered_at DESC, prediction_id''', (scope, _timestamp(_now())))]
+        return self._guard(scope_id, read)
+
+    def list_series(self, scope_id):
+        return self._guard(scope_id, lambda connection, scope:
+                           forecast_series.list_series(connection, scope, _timestamp(_now())))
+
+    def get_forecast(self, scope_id, prediction_id, *, actuals=None, correction=None):
+        """Read a forecast or atomically apply one type of outcome update."""
+        if actuals is not None and correction is not None:
+            raise ValueError('Apply either actuals or a correction.')
+        prediction_id = _validated_job_id(prediction_id)
+
+        def read_or_update(connection, scope):
+            now = _now()
+            row = connection.execute('''SELECT * FROM forecast_outcomes
+                WHERE scope_id=? AND prediction_id=? AND expires_at>?''',
+                (scope, prediction_id, _timestamp(now))).fetchone()
+            if row is None:
+                return None
+            payload = json.loads(row['forecast_json'])
+            link = forecast_series.get_link(connection, scope, prediction_id)
+            recorded = (forecast_series.read_series_actuals(connection, scope, link) if link is not None
+                        else json.loads(row['actuals_json']))
+            merged = recorded
+            if actuals is not None:
+                merged = merge_actuals(payload, recorded, actuals, now)
+            elif correction is not None:
+                count = (forecast_series.count_series_corrections(connection, scope, link['series_id'])
+                         if link is not None else None)
+                merged = correct_actual(payload, recorded, *correction, now=now, correction_count=count)
+            view = forecast_view(row, payload, merged)
+            view['series_label'] = link['label'] if link is not None else None
+            if merged != recorded:
+                if link is not None:
+                    forecast_series.write_series_actuals(connection, scope, link['series_id'], recorded, merged)
+                else:
+                    connection.execute('''UPDATE forecast_outcomes SET actuals_json=?
+                        WHERE scope_id=? AND prediction_id=?''',
+                        (json.dumps(merged, ensure_ascii=False, allow_nan=False), scope, prediction_id))
+            return view
+        return self._guard(scope_id, read_or_update)
 
     def delete(self, scope_id, model_id):
         model_id = _validated_job_id(model_id)

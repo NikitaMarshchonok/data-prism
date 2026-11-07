@@ -167,7 +167,7 @@ evaluation workflow for the supported single-series task; approved real-client
 cases and specialist acceptance are still missing. See
 [FORECAST_BACKTEST.md](FORECAST_BACKTEST.md).
 
-## 4. Model and outcome lifecycle — first local slice; hosted lifecycle not implemented
+## 4. Model and outcome lifecycle
 
 The CLI can now explicitly save a private, versioned declarative JSON snapshot
 of an evaluated daily model and its reference, then predict in a separate process
@@ -200,24 +200,35 @@ implemented and tested but the current ephemeral deployment is not eligible.
 Provisioning and verifying real persistent infrastructure remain operator work.
 See [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
 
-Account settings now also supports transient web inference on explicitly
+Account settings now also supports web inference on explicitly
 available new history using an owned, retained model. It checks the unchanged
 training prefix, reporting cutoff and a later issue date, then compares frozen
-model and reference predictions without refitting. It does not retain the
-uploaded history or issue a durable prediction record. Never load arbitrary
-user-supplied serialized Python objects.
+model and reference predictions without refitting. The history upload is
+transient. Never load arbitrary user-supplied serialized Python objects.
 
-Next, bind an explicitly retained forecast to its future actuals.
+With separate consent on the inference form, the account can retain both sets
+of predictions and later submit actuals for that forecast ID. Paired errors
+and coverage are available even after the model expires. This web flow uses
+the persistent-state gate. Reported actuals and declared historical issue dates
+are user assertions. See [FORECAST_MODEL_STORE.md](FORECAST_MODEL_STORE.md).
 
-Record prediction IDs, origin and horizon; accept matched actuals only once they
-become available. Score each horizon against its contemporaneous baseline;
-distinguish data drift from measured forecast deterioration. Missing actuals are
-unknown quality, not a successful prediction. Keep monitoring state durable.
+Owners can explicitly correct a fact for a saved forecast. The account keeps
+each previous value, reason and receipt time and shows its errors against the
+same saved predictions. Corrections rescore both methods and require the
+latest actual version.
 
-Acceptance: artifact round-trip predictions; restart survival; strict ownership;
-duplicate/late/corrected actuals; invalid input rejection; explicit alert policy;
-candidate retraining that cannot silently replace the active model, with a
-reviewable promotion decision and rollback path.
+New saved forecasts can be explicitly linked to an account-owned daily
+series with a matching input contract. They share versioned actuals for
+overlapping dates and score their own frozen predictions against those facts.
+
+Local recovery coverage now restores that state into a new directory and
+starts a fresh application process. It verifies the saved scores and correction
+history under the owner account and applies a new shared correction.
+
+Next, rehearse recovery on provisioned infrastructure and evaluate
+prospectively recorded forecasts with client data. Distinguish drift from
+measured quality loss, then test an explicit alert policy and candidate
+retraining with review, promotion and rollback.
 
 ## Pilot value decision
 

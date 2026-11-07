@@ -127,17 +127,86 @@ checked again under the scope fence at inference.
 
 The response shows the frozen model and its original reference side by side.
 New history updates lag context, not fitted parameters or model selection.
-Invalid negative count predictions are withheld. The private, no-store
-response does not persist the file, report, prediction ID or outcome record.
-The request parser may temporarily spool multipart input; the application
-does not save a working upload or extend the model's retention. Reloading the
-account does not recover the result. This flow remains off on the current
-ephemeral deployment.
+Invalid negative count predictions are withheld. By default the private,
+no-store response shows the forecast for that request only. The request parser
+may temporarily spool multipart input. The application does not retain the
+history file or extend model retention.
+
+### Save a forecast and compare it with daily actuals
+
+Check **Save this forecast to check it against actuals** on the updated-history
+form to retain its model and baseline values. Saving uses the same authenticated
+persistent-state gate and SQLite deletion fence as the model. An issue date
+must be on or before the server's current UTC day. The record distinguishes the
+declared issue date from the server timestamp at first save. A historical issue
+date does not prove that the predictions were made before outcomes were known.
+
+The first successful save freezes one output per account, model and issue date.
+Repeating the same output returns its original ID without changing expiry.
+A different output for the same issue date is rejected. Records expire 150 days
+after the first save, independently of model or job expiry. This covers the
+supported 90-day horizon and 30-day reporting delay with 30 days left to report
+the latest actual. Up to 20 forecasts per account and 200 in total can be active.
+The frozen JSON payload is capped at 64 KiB. The application does not evict
+active forecasts to admit new ones.
+
+Under **Saved forecasts**, select a forecast and upload a UTF-8 CSV with the
+header `date,actual`, up to 16 KiB and 90 rows. Each date must be unique within
+the file and belong to this forecast. Today in UTC must be on or after the
+date plus the frozen reporting delay. Values must be finite decimals in the
+supported numeric range. Count values must be non-negative. The server keeps
+normalized facts and their receipt timestamps. Repeated identical values
+are idempotent. A conflicting value or invalid date rejects the entire batch.
+By default, actuals belong to the selected forecast. Uploads are always
+validated against the selected forecast's dates.
+
+To revise a saved actual, open **Correct a saved actual**, select its date and
+current value, enter the corrected value and provide a brief reason of up to
+300 characters. The submission is bound to the version visible in the form.
+A stale form fails after a concurrent correction. An identical retry of the
+most recent correction is idempotent. The forecast retains up to 90
+corrections across its dates. Each prior value,
+receipt time and recorded reason stays in the forecast's correction history.
+History shows absolute errors for each version against the original model and
+baseline. The aggregate scores use the current value for each date. Forecast
+values, scope and expiry stay fixed through corrections.
+
+### Share actuals across forecasts of one daily series
+
+While saving a forecast, expand **Share actuals across forecasts**. Choose
+an existing account-owned series or create one with a new name, then confirm
+that the forecasts represent the same business measure and population. The
+service checks an exact match of time column, target column, unit and reporting
+delay. A series has a stable ID. Its name is a label and an account-level
+case-insensitive uniqueness check. Confirmation of the business meaning and
+population comes from the account owner.
+
+The binding is fixed at first save. Existing isolated forecasts keep their
+own facts. In a shared series, one versioned fact per date feeds every linked
+forecast that covers it. Each forecast compares that fact with its own frozen
+model and baseline predictions. A correction submitted in one forecast is
+visible in the other forecasts' scores and history for that date. The limit
+of 90 retained corrections applies across the shared series. Series actuals
+feed evaluation, while inference takes its input from the uploaded history.
+
+A shared fact and its revisions expire when the last forecast covering that
+date is purged. The series label and ID are purged with its last forecast.
+SQLite cleanup follows parent forecast deletion inside the same transaction.
+Keep serving instances on the same application version so linked forecast
+views use the shared actuals store.
+
+The account view shows date coverage and compares MAE, RMSE and, when declared
+in the original task, weighted absolute error. Both predictions are scored on
+exactly the same reported dates. With no facts, accuracy is unknown. Partial
+coverage is explicit and full coverage means that all expected dates have
+reported facts. Neither the source of the actuals nor their original release
+timing is independently verified. These comparisons do not promote or retrain
+the model. The ephemeral deployment does not meet the storage gate.
 
 ## Deletion, recovery and data boundary
 
 The table shares the analysis database and `run_if_scope_open` write fence.
-Existing account-scope erasure deletes that scope's model rows atomically with
+Existing account-scope erasure deletes that scope's model, forecast and actual rows atomically with
 its jobs/cases/metrics and permanently fences new writes. Foreign owners remain
 untouched. Active jobs or a cleanup failure prevent that transaction from
 partially deleting model rows. No filesystem model copies are created.
@@ -145,16 +214,18 @@ partially deleting model rows. No filesystem model copies are created.
 This is logical deletion, not secure erasure of SQLite pages/WAL, historical
 backups or downloads. Old backups may contain subsequently deleted/expired data;
 backup retention and restoration controls remain essential. The current
-metadata-only account export does **not** add these data-bearing models. They
-have a separate explicit download.
+metadata-only account export excludes model snapshots, forecasts and facts.
+Model snapshots have a separate explicit download. Retained forecast data is
+visible through the owner-only account view. Expiry cleanup on VibeDash traffic
+also removes forecasts and actuals when the feature is off.
 
-The existing offline runtime backup includes this table as part of the shared
-database. A round-trip test verifies the artifact, frozen predictions and
-original expiry after restore. Backup and restore still require an explicit
-offline assertion and all writers stopped; a test in temporary directories is
-not evidence that the deployed host has persistent storage or a tested recovery
-operation. A model may already be expired when a backup is restored: recovery
-does not restart retention.
+The offline runtime backup includes models, forecasts, shared actuals and
+correction history in the analysis database. Local recovery tests verify the
+model, frozen predictions, paired scores and original expiry. A fresh
+application process also signs in and applies a correction to the restored
+series. Follow the [backup and recovery runbook](BACKUP_RECOVERY.md) for
+the offline window and a rehearsal on the provisioned infrastructure.
+Retention continues from the original expiry timestamps after restore.
 
 Artifacts contain target lags, fitted parameters/leaf values, task metadata and
 possibly confidential free-text policy. They are not aggregate-only audit
@@ -164,8 +235,6 @@ outside this server deletion/backup boundary.
 
 ## Remaining customer-facing work
 
-Idle-time retention scheduling, durable issuance of user-approved forecasts,
-hosted prediction/outcome matching with series identity, prospective issuance
-provenance, predeclared alerts and controlled model promotion/rollback remain
-outstanding. The deployed ephemeral service is not silently upgraded or
-represented as a durable model service by this module.
+Idle-time retention scheduling, prospective
+issuance provenance, predeclared alerts and controlled model promotion/rollback
+remain outstanding.

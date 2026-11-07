@@ -13,7 +13,7 @@ Docker deployment:
 ```text
 runtime-state/
 ├── identity/runtime_state.json # Stable state lineage; preserve across restore
-├── jobs/analysis_jobs.sqlite3     # Jobs, decision cases, opt-in pilot measurement
+├── jobs/analysis_jobs.sqlite3    # Jobs, decision cases, pilot measurement, retained forecasts and actuals
 ├── drift/drift_history.sqlite3   # Monitoring runs and alerts, when present
 ├── accounts/accounts.sqlite3     # Accounts, throttling, recovery hashes, bounded security events
 ├── baselines/                    # Aggregate reference profiles
@@ -149,6 +149,12 @@ or restore. Parent directories must be operator-controlled, not shared scratch s
    in, sees its recent security activity and account-owned history, and that a
    separate guest browser cannot read an existing case. An expired source
    dashboard may be unavailable while its longer-lived case remains readable.
+   For retained forecasting, sign in as the owner and check an unexpired model
+   and two saved forecasts linked to the same series. Compare their forecast
+   IDs, expiry, matched dates, model and baseline errors, and correction
+   history with the pre-backup values. Use a guest browser to verify access is
+   denied. In a separate disposable rehearsal copy, submit a correction on
+   an overlapping date and verify that both forecasts use the new actual.
 6. Original modification times and database timestamps are preserved. Normal
    retention cleanup applies on the next application request, so restoration
    must not be used to extend the life of expired uploads or measurements.
@@ -169,14 +175,18 @@ evidence, pilot counts, a drift alert, profiles, sessions, and a retained upload
 It tests committed WAL content, corruption, overwrite refusal, unsafe paths,
 partial-copy failure, permissions, and a fresh application process that accepts
 the original signed cookie. Expired uploads are cleaned without resetting their
-age, and a changed signing key cannot access the old case. These tests are not
-a rehearsal of your real Render disk, credentials, or backup infrastructure.
+age, and a changed signing key cannot access the old case. A separate
+forecast recovery test signs in against a restored account database, checks
+the model and both saved views, and corrects a shared fact through the web
+route. It verifies that the source and snapshot still contain the original
+state. These tests use temporary directories. Run the rehearsal above on the
+provisioned deployment before accepting recovery on that infrastructure.
 
 ## Security, retention, and hosting limits
 
 - Full snapshots contain uploaded rows, prompts, decision text, pseudonymous
-  measurement, and (when enabled) pilot account emails, password hashes, and
-  recovery-code hashes.
+  measurement, and (when enabled) pilot account emails, password hashes,
+  recovery-code hashes, saved models, forecast values and corrected actuals.
   They are sensitive operational data, unlike the aggregate pilot report. The
   tools do not upload them anywhere.
 - New directories use POSIX mode `0700` and files `0600`; these permissions are
