@@ -11,7 +11,7 @@ from pathlib import Path
 from src.forecast_artifact import MAX_ARTIFACT_BYTES, predict_artifact, validate_artifact
 from src.runtime_storage import evaluate_runtime_storage_contract
 from .analysis_jobs import AnalysisJobStore, _validated_job_id, _validated_scope_id
-from .forecast_outcomes import correct_actual, forecast_view, merge_actuals, store_forecast
+from .forecast_outcomes import correct_actual, forecast_evaluation_timing, forecast_view, merge_actuals, store_forecast
 from . import forecast_series
 
 
@@ -302,10 +302,15 @@ class ForecastModelStore:
 
     def list_forecasts(self, scope_id):
         def read(connection, scope):
-            return [dict(row) for row in connection.execute('''
-                SELECT prediction_id, forecast_origin
+            rows = connection.execute('''
+                SELECT prediction_id, forecast_origin, registered_at
                 FROM forecast_outcomes WHERE scope_id=? AND expires_at>?
-                ORDER BY registered_at DESC, prediction_id''', (scope, _timestamp(_now())))]
+                ORDER BY registered_at DESC, prediction_id''', (scope, _timestamp(_now())))
+            return [{
+                'prediction_id': row['prediction_id'],
+                'forecast_origin': row['forecast_origin'],
+                'evaluation_timing': forecast_evaluation_timing(row['registered_at'], row['forecast_origin']),
+            } for row in rows]
         return self._guard(scope_id, read)
 
     def list_series(self, scope_id):

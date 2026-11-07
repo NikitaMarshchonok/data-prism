@@ -138,8 +138,12 @@ Check **Save this forecast to check it against actuals** on the updated-history
 form to retain its model and baseline values. Saving uses the same authenticated
 persistent-state gate and SQLite deletion fence as the model. An issue date
 must be on or before the server's current UTC day. The record distinguishes the
-declared issue date from the server timestamp at first save. A historical issue
-date does not prove that the predictions were made before outcomes were known.
+declared issue date from the server timestamp at first save. The saved forecast
+list and score view label a forecast **Prospective** when the first save falls on
+its declared UTC issue day, before the daily horizon starts. A save after that
+day is **Retrospective**, including when some dates in the horizon are still
+ahead. The label describes when Data Prism recorded the forecast. Availability
+of source observations remains the account owner's declaration.
 
 The first successful save freezes one output per account, model and issue date.
 Repeating the same output returns its original ID without changing expiry.
@@ -235,6 +239,5 @@ outside this server deletion/backup boundary.
 
 ## Remaining customer-facing work
 
-Idle-time retention scheduling, prospective
-issuance provenance, predeclared alerts and controlled model promotion/rollback
-remain outstanding.
+Idle-time retention scheduling, independent evidence of source availability,
+predeclared alerts and controlled model promotion/rollback remain outstanding.

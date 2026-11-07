@@ -225,6 +225,10 @@ Local recovery coverage now restores that state into a new directory and
 starts a fresh application process. It verifies the saved scores and correction
 history under the owner account and applies a new shared correction.
 
+Saved forecasts now distinguish same-day prospective records from retrospective
+calculations using the first server save in UTC. Source availability remains
+user-declared.
+
 Next, rehearse recovery on provisioned infrastructure and evaluate
 prospectively recorded forecasts with client data. Distinguish drift from
 measured quality loss, then test an explicit alert policy and candidate
