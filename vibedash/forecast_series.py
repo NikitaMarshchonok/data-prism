@@ -1,10 +1,12 @@
 """Explicit account-owned identity for shared forecast actuals."""
+from datetime import timedelta
 import json
 import re
 import unicodedata
 import uuid
 
-from .forecast_outcomes import ForecastOutcomeError
+from src.forecast_scoring import score_predictions
+from .forecast_outcomes import ForecastOutcomeError, forecast_evaluation_timing
 
 
 class ForecastSeriesError(ForecastOutcomeError):
@@ -147,6 +149,50 @@ def read_series_actuals(connection, scope, link):
         SELECT day, actual_json FROM forecast_series_actuals
         WHERE scope_id=? AND series_id=? AND day BETWEEN ? AND ?''',
         (scope, link['series_id'], link['first_day'], link['last_day']))}
+
+
+def evaluate_series_model(connection, scope, series_id, report, *, now, reporting_delay_days):
+    """Compare one frozen model and baseline by lead across prospective issues."""
+    rows = connection.execute('''
+        SELECT outcome.forecast_origin, outcome.registered_at, outcome.forecast_json,
+               link.first_day, link.last_day
+        FROM forecast_series_links AS link JOIN forecast_outcomes AS outcome
+          ON outcome.scope_id=link.scope_id AND outcome.prediction_id=link.prediction_id
+        WHERE link.scope_id=? AND link.series_id=? AND outcome.model_id=? AND outcome.expires_at>?
+        ORDER BY outcome.forecast_origin''',
+        (scope, series_id, report['model_id'], now.isoformat(timespec='microseconds')))
+    eligible = []
+    for row in rows:
+        if forecast_evaluation_timing(row['registered_at'], row['forecast_origin']) != 'prospective':
+            continue
+        saved = json.loads(row['forecast_json'])['report']
+        if saved['model_sha256'] == report['model_sha256']:
+            eligible.append((row, saved['predictions']))
+    if not eligible:
+        return {'forecast_count': 0, 'leads': []}
+
+    actuals = read_series_actuals(connection, scope, {
+        'series_id': series_id,
+        'first_day': min(row['first_day'] for row, _ in eligible),
+        'last_day': max(row['last_day'] for row, _ in eligible),
+    })
+    due_through = (now.date() - timedelta(days=reporting_delay_days)).isoformat()
+    leads = []
+    for lead in range(len(report['predictions'])):
+        # A model has one retained forecast per issue date, so each target
+        # date can appear once per lead, even if the horizons overlap.
+        due = [points[lead] for _, points in eligible if points[lead]['date'] <= due_through]
+        matched = [point for point in due if point['date'] in actuals]
+        model_mae = baseline_mae = None
+        if matched:
+            observed = [actuals[point['date']]['value'] for point in matched]
+            model_mae = score_predictions(observed, [point['prediction'] for point in matched])['mae']
+            baseline_mae = score_predictions(observed, [point['baseline'] for point in matched])['mae']
+        leads.append({
+            'lead_days': lead + 1, 'due_count': len(due), 'matched_count': len(matched),
+            'model_mae': model_mae, 'baseline_mae': baseline_mae,
+        })
+    return {'forecast_count': len(eligible), 'leads': leads}
 
 
 def count_series_corrections(connection, scope, series_id):

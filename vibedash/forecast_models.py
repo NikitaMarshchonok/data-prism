@@ -341,8 +341,6 @@ class ForecastModelStore:
                 count = (forecast_series.count_series_corrections(connection, scope, link['series_id'])
                          if link is not None else None)
                 merged = correct_actual(payload, recorded, *correction, now=now, correction_count=count)
-            view = forecast_view(row, payload, merged)
-            view['series_label'] = link['label'] if link is not None else None
             if merged != recorded:
                 if link is not None:
                     forecast_series.write_series_actuals(connection, scope, link['series_id'], recorded, merged)
@@ -350,6 +348,12 @@ class ForecastModelStore:
                     connection.execute('''UPDATE forecast_outcomes SET actuals_json=?
                         WHERE scope_id=? AND prediction_id=?''',
                         (json.dumps(merged, ensure_ascii=False, allow_nan=False), scope, prediction_id))
+            view = forecast_view(row, payload, merged)
+            view['series_label'] = link['label'] if link is not None else None
+            if link is not None:
+                view['series_evaluation'] = forecast_series.evaluate_series_model(
+                    connection, scope, link['series_id'], payload['report'], now=now,
+                    reporting_delay_days=payload['reporting_delay_days'])
             return view
         return self._guard(scope_id, read_or_update)
 

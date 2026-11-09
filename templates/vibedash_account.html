@@ -251,6 +251,34 @@
                     </table>
                     {% endif %}
                     <p class="form-help">Model {{ check.model_name }} · baseline {{ check.baseline_name }}. Lower errors are better. Data Prism uses the facts you supply, and cannot verify when they became available.</p>
+                    {% if check.series_label %}
+                    {% set evaluation = check.series_evaluation %}
+                    <details class="model-inference actual-correction">
+                        <summary>Prospective accuracy by lead time</summary>
+                        <p class="form-help">This comparison uses saved prospective forecasts for this series and this model. A lead of 1 means the next day. Coverage shows how many actuals you supplied out of the dates due after the reporting delay. Both MAE values use the same reported actuals.</p>
+                        {% if evaluation.forecast_count == 0 %}
+                        <p>No prospective forecasts are saved for this model and series.</p>
+                        {% elif evaluation.leads|sum(attribute='due_count') == 0 %}
+                        <p>Actuals are still pending under the reporting delay.</p>
+                        {% else %}
+                        <p>{{ evaluation.forecast_count }} saved prospective {{ 'forecast' if evaluation.forecast_count == 1 else 'forecasts' }}.</p>
+                        <table>
+                            <caption>Mean absolute error by lead time</caption>
+                            <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due</th><th scope="col">Model MAE</th><th scope="col">Baseline MAE</th></tr></thead>
+                            <tbody>
+                                {% for lead in evaluation.leads %}
+                                <tr>
+                                    <th scope="row">{{ lead.lead_days }}</th>
+                                    <td>{{ lead.matched_count }} / {{ lead.due_count }}</td>
+                                    <td>{{ '%.8g'|format(lead.model_mae) if lead.model_mae is not none else 'Pending' }}</td>
+                                    <td>{{ '%.8g'|format(lead.baseline_mae) if lead.baseline_mae is not none else 'Pending' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% endif %}
+                    </details>
+                    {% endif %}
                     <table>
                         <caption>{{ check.target_column }} ({{ check.target_unit }}) by date</caption>
                         <thead><tr><th scope="col">Date</th><th scope="col">Model</th><th scope="col">Baseline</th><th scope="col">Actual</th></tr></thead>

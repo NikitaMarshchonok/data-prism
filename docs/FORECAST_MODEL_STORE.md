@@ -193,6 +193,15 @@ visible in the other forecasts' scores and history for that date. The limit
 of 90 retained corrections applies across the shared series. Series actuals
 feed evaluation, while inference takes its input from the uploaded history.
 
+Open **Prospective accuracy by lead time** on a linked forecast to compare
+its exact saved model with its baseline across the same series. The summary
+uses retained prospective issues. Each lead is scored separately, so a
+target date can appear once at that lead. Coverage counts the reported
+actuals out of dates due under the reporting delay. Both MAEs use the same
+matched dates and the latest recorded versions of their actuals. The summary
+reports observed errors over retained forecasts and coverage can change with
+expiry or new actuals.
+
 A shared fact and its revisions expire when the last forecast covering that
 date is purged. The series label and ID are purged with its last forecast.
 SQLite cleanup follows parent forecast deletion inside the same transaction.
