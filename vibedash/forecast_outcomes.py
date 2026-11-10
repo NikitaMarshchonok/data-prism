@@ -128,13 +128,20 @@ def store_forecast(connection, scope, report, artifact, now):
         'reporting_delay_days': artifact['task'].get('reporting_delay_days', 0),
         'error_weights': weights,
     }
+    limits = {} if policy is None else {
+        key: policy[key] for key in ('maximum_mae', 'minimum_improvement') if policy[key] is not None
+    }
+    if existing is not None:
+        saved = json.loads(existing['forecast_json'])
+        # Only compare criteria that were recorded when this forecast was saved.
+        payload.update({key: value for key, value in limits.items() if key in saved})
+        if saved != payload:
+            raise ForecastOutcomeError('A different forecast from this model already exists for this issue date.')
+        return existing['prediction_id'], False
+    payload.update(limits)
     serialized = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
     if len(serialized.encode('utf-8')) > MAX_FORECAST_BYTES:
         raise ForecastOutcomeError('The forecast is too large to save. Run without saving.')
-    if existing is not None:
-        if json.loads(existing['forecast_json']) != payload:
-            raise ForecastOutcomeError('A different forecast from this model already exists for this issue date.')
-        return existing['prediction_id'], False
     total, owned = connection.execute(
         'SELECT count(*), count(CASE WHEN scope_id=? THEN 1 END) FROM forecast_outcomes',
         (scope,)).fetchone()

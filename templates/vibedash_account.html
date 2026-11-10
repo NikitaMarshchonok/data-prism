@@ -253,9 +253,22 @@
                     <p class="form-help">Model {{ check.model_name }} · baseline {{ check.baseline_name }}. Lower errors are better. Data Prism uses the facts you supply, and cannot verify when they became available.</p>
                     {% if check.series_label %}
                     {% set evaluation = check.series_evaluation %}
+                    {% set breaches = evaluation.leads|selectattr('quality_status', 'equalto', 'above_limit')|map(attribute='lead_days')|list %}
+                    {% if breaches %}
+                    <p class="notice notice-error"><strong>Model MAE above limit.</strong> Affected lead times in days {{ breaches|join(', ') }}.</p>
+                    {% endif %}
                     <details class="model-inference actual-correction">
                         <summary>Prospective accuracy by lead time</summary>
                         <p class="form-help">This comparison uses saved prospective forecasts for this series and this model. A lead of 1 means the next day. Coverage shows how many actuals you supplied out of the dates due after the reporting delay. Both MAE values use the same reported actuals.</p>
+                        {% if evaluation.maximum_mae is not none %}
+                        <p class="form-help">The model’s MAE limit is {{ '%.8g'|format(evaluation.maximum_mae) }} ({{ check.target_unit }}). Each lead needs at least {{ evaluation.minimum_quality_dates }} dates with all due actuals reported before the limit is checked.</p>
+                        {% set quality_labels = {
+                            'too_few_dates': 'Too few dates',
+                            'missing_actuals': 'Missing actuals',
+                            'above_limit': 'Above limit',
+                            'within_limit': 'Within limit'
+                        } %}
+                        {% endif %}
                         {% if evaluation.forecast_count == 0 %}
                         <p>No prospective forecasts are saved for this model and series.</p>
                         {% elif evaluation.leads|sum(attribute='due_count') == 0 %}
@@ -264,7 +277,7 @@
                         <p>{{ evaluation.forecast_count }} saved prospective {{ 'forecast' if evaluation.forecast_count == 1 else 'forecasts' }}.</p>
                         <table>
                             <caption>Mean absolute error by lead time</caption>
-                            <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due</th><th scope="col">Model MAE</th><th scope="col">Baseline MAE</th></tr></thead>
+                            <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due</th><th scope="col">Model MAE</th><th scope="col">Baseline MAE</th>{% if evaluation.maximum_mae is not none %}<th scope="col">Limit status</th>{% endif %}</tr></thead>
                             <tbody>
                                 {% for lead in evaluation.leads %}
                                 <tr>
@@ -272,12 +285,83 @@
                                     <td>{{ lead.matched_count }} / {{ lead.due_count }}</td>
                                     <td>{{ '%.8g'|format(lead.model_mae) if lead.model_mae is not none else 'Pending' }}</td>
                                     <td>{{ '%.8g'|format(lead.baseline_mae) if lead.baseline_mae is not none else 'Pending' }}</td>
+                                    {% if lead.quality_status %}<td>{{ quality_labels[lead.quality_status] }}</td>{% endif %}
                                 </tr>
                                 {% endfor %}
                             </tbody>
                         </table>
                         {% endif %}
                     </details>
+                    {% if evaluation.comparison_options or evaluation.comparison_unavailable %}
+                    <details class="model-inference actual-correction"{% if evaluation.comparison or evaluation.comparison_unavailable %} open{% endif %}>
+                        <summary>Compare model versions</summary>
+                        <p id="forecast-comparison-help" class="form-help">Both versions must have saved prospective forecasts for the same issue date and lead time. The comparison uses the same reported actuals for both versions.</p>
+                        {% if evaluation.comparison_options %}
+                        <form class="model-inference-form" method="get"
+                            action="{{ url_for('vibedash.forecast_outcome', prediction_id=check.prediction_id, _anchor='forecast-quality') }}">
+                            <label for="forecast-comparison-model">Comparison model</label>
+                            <select id="forecast-comparison-model" name="compare" aria-describedby="forecast-comparison-help" required>
+                                <option value="">Choose a model version</option>
+                                {% for model in evaluation.comparison_options %}
+                                <option value="{{ model.sha }}"{% if evaluation.comparison and evaluation.comparison.sha == model.sha %} selected{% endif %}>{{ model.model_name }} · {{ model.sha[:12] }} · trained through {{ model.trained_through }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="button button-primary">Compare versions</button>
+                        </form>
+                        {% endif %}
+                        {% if evaluation.comparison_unavailable %}
+                        <p role="status">Choose an available model version from this shared series.</p>
+                        {% elif evaluation.comparison %}
+                        {% set policy = evaluation.comparison.review_policy %}
+                        {% if policy %}
+                        <p class="form-help">Candidate review uses the selected model’s recorded criteria. The candidate needs strictly lower weighted error and at least {{ '%.8g'|format(100 * policy.minimum_improvement) }}% improvement{% if policy.maximum_mae is not none %}, with MAE at or below {{ '%.8g'|format(policy.maximum_mae) }} ({{ check.target_unit }}){% endif %}. Each lead needs at least {{ evaluation.minimum_quality_dates }} due dates, a paired forecast for every selected-model issue since the candidate’s first retained prospective issue, and all corresponding actuals.</p>
+                        {% set review_labels = {
+                            'too_few_dates': 'Too few dates',
+                            'missing_issues': 'Missing paired forecasts',
+                            'missing_actuals': 'Missing actuals',
+                            'meets_criteria': 'Meets criteria',
+                            'below_criteria': 'Below criteria'
+                        } %}
+                        {% else %}
+                        <p class="form-help">Candidate review requires recorded decision criteria from the selected model.</p>
+                        {% endif %}
+                        {% if evaluation.comparison.leads %}
+                        <table>
+                            <caption>Paired MAE by lead time ({{ check.target_unit }})</caption>
+                            <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due pairs</th><th scope="col">Selected model MAE</th><th scope="col">Comparison model MAE</th>{% if policy %}<th scope="col">Candidate review</th>{% endif %}</tr></thead>
+                            <tbody>
+                                {% for lead in evaluation.comparison.leads %}
+                                <tr>
+                                    <th scope="row">{{ lead.lead_days }}</th>
+                                    <td>{{ lead.matched_count }} / {{ lead.due_count }}</td>
+                                    <td>{{ '%.8g'|format(lead.current_mae) if lead.current_mae is not none else 'Pending' }}</td>
+                                    <td>{{ '%.8g'|format(lead.candidate_mae) if lead.candidate_mae is not none else 'Pending' }}</td>
+                                    {% if policy %}
+                                    <td>
+                                        <strong>{{ review_labels[lead.review.status] }}</strong>
+                                        {% if lead.review.status == 'missing_issues' %}
+                                        <br>{{ lead.due_count }} / {{ lead.review.expected }} forecast pairs
+                                        {% elif lead.review.checks is defined %}
+                                            <br>Weighted error {{ '%.8g'|format(lead.review.current_weighted_error) }} → {{ '%.8g'|format(lead.review.candidate_weighted_error) }}
+                                            {% if not lead.review.checks.strictly_lower_weighted_error or not lead.review.checks.minimum_improvement %}
+                                            <br>Weighted improvement target unmet
+                                            {% endif %}
+                                            {% if not lead.review.checks.maximum_mae %}
+                                            <br>MAE above limit
+                                            {% endif %}
+                                        {% endif %}
+                                    </td>
+                                    {% endif %}
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% else %}
+                        <p>No paired dates are due for these versions yet.</p>
+                        {% endif %}
+                        {% endif %}
+                    </details>
+                    {% endif %}
                     {% endif %}
                     <table>
                         <caption>{{ check.target_column }} ({{ check.target_unit }}) by date</caption>

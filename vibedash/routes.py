@@ -1592,6 +1592,9 @@ if vibedash_bp:
             return unavailable()
         scope = account_scope_id(account['id'], current_app.secret_key)
         is_correction = request.endpoint == 'vibedash.forecast_outcome_correct'
+        comparison = request.args.getlist('compare') if request.method != 'POST' else []
+        if comparison and (len(comparison) != 1 or not re.fullmatch(r'[0-9a-f]{64}', comparison[0])):
+            return unavailable()
 
         def form_error(message, status, field=None):
             context = {'correction_error': {'message': message, 'field': field}} if is_correction else {
@@ -1601,8 +1604,8 @@ if vibedash_bp:
 
         try:
             store = ForecastModelStore(**settings)
-            forecast = store.get_forecast(scope, prediction_id)
-            if forecast is None:
+            forecast = store.get_forecast(scope, prediction_id, compare_to=comparison[0] if comparison else None)
+            if forecast is None or (comparison and forecast['series_label'] is None):
                 return unavailable()
             if request.method != 'POST':
                 return _render_account_settings(account, forecast_outcome=forecast)
