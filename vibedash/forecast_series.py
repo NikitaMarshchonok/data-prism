@@ -6,6 +6,7 @@ import re
 import unicodedata
 import uuid
 
+from src.forecast_policy import evaluate_forecast_policy
 from src.forecast_scoring import score_predictions
 from .forecast_outcomes import ForecastOutcomeError, forecast_evaluation_timing
 
@@ -167,6 +168,7 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
         (scope, series_id, now.isoformat(timespec='microseconds')))
     eligible = []
     maximum_mae = None
+    review_policy = None
     candidates = {}
     candidate_issues = {}
     for row in rows:
@@ -176,6 +178,11 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
         is_current = sha == report['model_sha256']
         if is_current and maximum_mae is None:
             maximum_mae = snapshot.get('maximum_mae')
+        if is_current and compare_to is not None and review_policy is None and 'minimum_improvement' in snapshot:
+            review_policy = snapshot['error_weights'] | {
+                'minimum_improvement': snapshot['minimum_improvement'],
+                'maximum_mae': snapshot.get('maximum_mae'),
+            }
         if forecast_evaluation_timing(row['registered_at'], row['forecast_origin']) != 'prospective':
             continue
         if is_current:
@@ -191,7 +198,7 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
                   'comparison_options': list(candidates.values()), 'comparison': candidates.get(compare_to),
                   'comparison_unavailable': compare_to is not None and compare_to not in candidates}
     if evaluation['comparison'] is not None:
-        evaluation['comparison'] = dict(evaluation['comparison'], leads=[])
+        evaluation['comparison'] = dict(evaluation['comparison'], leads=[], review_policy=review_policy)
     if not eligible:
         return evaluation
 
@@ -224,31 +231,61 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
             'model_mae': model_mae, 'baseline_mae': baseline_mae, 'quality_status': quality_status,
         })
     if evaluation['comparison'] is not None:
-        evaluation['comparison']['leads'] = _compare_versions(eligible, candidate_issues, actuals, due_through)
+        evaluation['comparison']['leads'] = _compare_versions(
+            eligible, candidate_issues, actuals, due_through, review_policy=review_policy)
     return evaluation
 
 
-def _compare_versions(current_issues, candidate_issues, actuals, due_through):
+def _compare_versions(current_issues, candidate_issues, actuals, due_through, *, review_policy):
     paired = defaultdict(list)
+    expected = defaultdict(int)
+    review_start = min(candidate_issues)
     for row, current in current_issues:
-        candidate = candidate_issues.get(row['forecast_origin'], ())
+        origin = row['forecast_origin']
+        if origin < review_start:
+            continue
+        for lead, point in enumerate(current, 1):
+            if point['date'] <= due_through:
+                expected[lead] += 1
+        candidate = candidate_issues.get(origin, ())
         for lead, (left, right) in enumerate(zip(current, candidate), 1):
             if left['date'] == right['date'] and left['date'] <= due_through:
                 paired[lead].append((left, right))
 
     leads = []
-    for lead, due in sorted(paired.items()):
+    for lead in sorted(expected if review_policy is not None else paired):
+        due = paired.get(lead, [])
         matched = [(left, right) for left, right in due if left['date'] in actuals]
-        current_mae = candidate_mae = None
+        current_scores = candidate_scores = None
         if matched:
             observed = [actuals[left['date']]['value'] for left, _ in matched]
-            current_mae = score_predictions(observed, [left['prediction'] for left, _ in matched])['mae']
-            candidate_mae = score_predictions(observed, [right['prediction'] for _, right in matched])['mae']
+            current_scores = score_predictions(
+                observed, [left['prediction'] for left, _ in matched], decision_policy=review_policy)
+            candidate_scores = score_predictions(
+                observed, [right['prediction'] for _, right in matched], decision_policy=review_policy)
         leads.append({
             'lead_days': lead, 'due_count': len(due), 'matched_count': len(matched),
-            'current_mae': current_mae, 'candidate_mae': candidate_mae,
+            'current_mae': current_scores['mae'] if current_scores is not None else None,
+            'candidate_mae': candidate_scores['mae'] if candidate_scores is not None else None,
+            'review': (_review_candidate(review_policy, candidate_scores, current_scores,
+                                         expected[lead], len(due), len(matched))
+                       if review_policy is not None else None),
         })
     return leads
+
+
+def _review_candidate(policy, candidate_scores, current_scores, expected, paired, matched):
+    if expected < MIN_QUALITY_DATES:
+        return {'status': 'too_few_dates'}
+    if paired < expected:
+        return {'status': 'missing_issues', 'expected': expected}
+    if matched < paired:
+        return {'status': 'missing_actuals'}
+    result = evaluate_forecast_policy(policy, candidate_scores, current_scores)
+    checks = result['checks']
+    return {'status': 'meets_criteria' if all(checks.values()) else 'below_criteria',
+            'candidate_weighted_error': result['weighted_absolute_error'],
+            'current_weighted_error': result['baseline_weighted_absolute_error'], 'checks': checks}
 
 
 def count_series_corrections(connection, scope, series_id):

@@ -627,6 +627,7 @@ class ForecastPredictionWebTests(unittest.TestCase):
             row, = self._outcomes()
             old = json.loads(row['forecast_json'])
             self.assertEqual(old.pop('maximum_mae'), 1)
+            self.assertEqual(old.pop('minimum_improvement'), 0.1)
             with sqlite3.connect(self.job_path) as connection:
                 connection.execute('UPDATE forecast_outcomes SET forecast_json=? WHERE prediction_id=?',
                                    (json.dumps(old), row['prediction_id']))
@@ -649,6 +650,7 @@ class ForecastPredictionWebTests(unittest.TestCase):
             html = self.owner.get(first).get_data(as_text=True)
             self.assertIn('Too few dates', html)
             self.assertNotIn('Model MAE above limit.', html)
+
             clock.return_value = datetime(2020, 6, 22, tzinfo=timezone.utc)
             html = self.owner.get(first).get_data(as_text=True)
             self.assertIn('Missing actuals', html)
@@ -665,3 +667,56 @@ class ForecastPredictionWebTests(unittest.TestCase):
             html = self.owner.get(first).get_data(as_text=True)
             self.assertIn('Within limit', html)
             self.assertNotIn('Model MAE above limit.', html)
+
+    def test_candidate_review_requires_all_paired_issues_and_checks_frozen_policy(self):
+        selected_training = daily_frame().assign(cnt=lambda data: data['cnt'] + 20)
+        policy_fields = POLICY_FORM | {'forecast_maximum_mae': '1'}
+        selected_id = self._queue(frame=selected_training, forecast_model_retention_days='7',
+                                  forecast_reporting_delay='2', forecast_origin='2020-06-10',
+                                  **policy_fields)
+        self.assertEqual(self._complete(selected_id)['status'], 'completed')
+        history = pd.concat([self.frame, pd.DataFrame({
+            'dteday': pd.date_range('2020-06-12', periods=7).strftime('%Y-%m-%d'),
+            'cnt': range(325, 332), 'casual': [30] * 7,
+        })], ignore_index=True)
+        with patch('vibedash.analysis_jobs.AnalysisJobStore.purge_terminal', return_value=0), \
+                patch('vibedash.forecast_models._now') as clock:
+            for offset in range(8):
+                clock.return_value = datetime(2020, 6, 13 + offset, tzinfo=timezone.utc)
+                issue = clock.return_value.date().isoformat()
+                inputs = history.iloc[:len(self.frame) + offset]
+                with patch.object(self, 'url', f'/vibedash/account/models/{selected_id}/predict'):
+                    if offset == 0:
+                        first = self._save(frame=inputs.assign(cnt=inputs['cnt'] + 20),
+                                           new_series_label='Store A orders', series_confirmed='yes')
+                        series, = self._series_rows()
+                        shared = {'series_id': series['series_id'], 'series_confirmed': 'yes'}
+                    else:
+                        self._save(frame=inputs.assign(cnt=inputs['cnt'] + 20), forecast_origin=issue, **shared)
+                if offset < 7:
+                    self._save(frame=inputs, forecast_origin=issue, **shared)
+
+            candidates = sorted((json.loads(row['forecast_json'])['report'] for row in self._outcomes()
+                                 if row['model_id'] == self.model_id), key=lambda report: report['forecast_origin'])
+            compare = first + '?compare=' + candidates[0]['model_sha256']
+            points = [report['predictions'][0] for report in candidates]
+            actuals = [(point['date'], point['prediction']) for point in points]
+
+            clock.return_value = datetime(2020, 6, 21, tzinfo=timezone.utc)
+            self.assertIn('<strong>Too few dates</strong>', self.owner.get(compare).get_data(as_text=True))
+            clock.return_value = datetime(2020, 6, 22, tzinfo=timezone.utc)
+            html = self.owner.get(compare).get_data(as_text=True)
+            self.assertIn('<strong>Missing actuals</strong>', html)
+            first_date, first_actual = actuals[0]
+            self.assertEqual(self._post_actuals(first, [(first_date, first_actual + 14), *actuals[1:]]).status_code, 303)
+            html = self.owner.get(compare).get_data(as_text=True)
+            self.assertIn('<strong>Below criteria</strong>', html)
+            self.assertIn('MAE above limit', html.split('Candidate review</th>', 1)[1])
+            self.assertEqual(self._correct(first, correction_value=str(first_actual)).status_code, 303)
+            self.assertIn('<strong>Meets criteria</strong>', self.owner.get(compare).get_data(as_text=True))
+
+            clock.return_value = datetime(2020, 6, 23, tzinfo=timezone.utc)
+            html = self.owner.get(compare).get_data(as_text=True)
+            self.assertIn('<strong>Missing paired forecasts</strong>', html)
+            self.assertIn('7 / 8 forecast pairs', html)
+            self.assertNotIn('<strong>Meets criteria</strong>', html)

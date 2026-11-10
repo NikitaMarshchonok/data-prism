@@ -213,8 +213,16 @@ recomputed with the current actuals and retained forecasts.
 Open **Compare model versions** to evaluate a second model with prospective
 forecasts in the same series. A pair must share the issue date, lead and
 target date, and the date must be due. The table shows the number of pairs
-with actuals and each model's MAE on exactly those pairs. The displayed
-coverage and errors support a manual review of a candidate.
+with actuals and each model's MAE on exactly those pairs.
+
+Candidate review uses the selected model's recorded error weights, minimum
+weighted improvement and optional maximum MAE. For each lead, the review
+requires at least seven due target dates and a matching candidate forecast
+and actual for every due selected-model forecast from the candidate's first
+retained prospective issue onward. The table shows whether the candidate met
+the recorded thresholds on this coverage. Older snapshots still show paired
+MAE and can use the criteria from a newer retained snapshot of the same
+selected model in the same series.
 
 A shared fact and its revisions expire when the last forecast covering that
 date is purged. The series label and ID are purged with its last forecast.

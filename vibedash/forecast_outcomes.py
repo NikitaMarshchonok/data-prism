@@ -128,17 +128,17 @@ def store_forecast(connection, scope, report, artifact, now):
         'reporting_delay_days': artifact['task'].get('reporting_delay_days', 0),
         'error_weights': weights,
     }
-    maximum_mae = policy['maximum_mae'] if policy is not None else None
+    limits = {} if policy is None else {
+        key: policy[key] for key in ('maximum_mae', 'minimum_improvement') if policy[key] is not None
+    }
     if existing is not None:
         saved = json.loads(existing['forecast_json'])
-        # A replay of a pre-limit record keeps its original snapshot.
-        if 'maximum_mae' in saved:
-            payload['maximum_mae'] = maximum_mae
+        # Only compare criteria that were recorded when this forecast was saved.
+        payload.update({key: value for key, value in limits.items() if key in saved})
         if saved != payload:
             raise ForecastOutcomeError('A different forecast from this model already exists for this issue date.')
         return existing['prediction_id'], False
-    if maximum_mae is not None:
-        payload['maximum_mae'] = maximum_mae
+    payload.update(limits)
     serialized = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
     if len(serialized.encode('utf-8')) > MAX_FORECAST_BYTES:
         raise ForecastOutcomeError('The forecast is too large to save. Run without saving.')
