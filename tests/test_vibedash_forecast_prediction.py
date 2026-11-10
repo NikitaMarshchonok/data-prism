@@ -12,6 +12,7 @@ from werkzeug.datastructures import FileStorage
 import web_app
 from src.forecast_artifact import ForecastHistoryError, predict_artifact
 from tests import test_vibedash_forecast_model_web as web_fixture
+from tests.test_forecast_policy import POLICY_FORM
 from tests.test_forecast_tasks import daily_frame
 from vibedash.forecast_models import ForecastModelNotFound
 from vibedash.forecast_outcomes import MAX_ACTUALS_BYTES
@@ -587,3 +588,60 @@ class ForecastPredictionWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         for table in ('forecast_series', 'forecast_series_links', 'forecast_series_actuals'):
             self.assertEqual(self._series_rows(table), [])
+
+    def test_series_mae_limit_warns_only_with_complete_due_coverage_and_clears_on_correction(self):
+        policy_fields = POLICY_FORM | {'forecast_maximum_mae': '1'}
+        model_id = self._queue(forecast_model_retention_days='7', forecast_reporting_delay='2',
+                               forecast_origin='2020-06-10', **policy_fields)
+        self.assertEqual(self._complete(model_id)['status'], 'completed')
+        future_dates = pd.date_range('2020-06-12', periods=6).strftime('%Y-%m-%d')
+        history = pd.concat([self.frame, pd.DataFrame({
+            'dteday': future_dates, 'cnt': range(325, 331), 'casual': [30] * 6,
+        })], ignore_index=True)
+        with patch.object(self, 'url', f'/vibedash/account/models/{model_id}/predict'), \
+                patch('vibedash.analysis_jobs.AnalysisJobStore.purge_terminal', return_value=0), \
+                patch('vibedash.forecast_models._now') as clock:
+            clock.return_value = datetime(2020, 6, 13, tzinfo=timezone.utc)
+            first = self._save(new_series_label='Store A orders', series_confirmed='yes')
+            # Emulate a forecast retained before policy snapshots were added.
+            row, = self._outcomes()
+            old = json.loads(row['forecast_json'])
+            self.assertEqual(old.pop('maximum_mae'), 1)
+            with sqlite3.connect(self.job_path) as connection:
+                connection.execute('UPDATE forecast_outcomes SET forecast_json=? WHERE prediction_id=?',
+                                   (json.dumps(old), row['prediction_id']))
+            before = self._outcomes()
+            series, = self._series_rows()
+            shared = {'series_id': series['series_id'], 'series_confirmed': 'yes'}
+            self.assertEqual(self._save(**shared), first)
+            self.assertEqual(self._outcomes(), before)
+
+            for day in range(14, 20):
+                clock.return_value = datetime(2020, 6, day, tzinfo=timezone.utc)
+                self._save(frame=history.iloc[:len(self.frame) + day - 13],
+                           forecast_origin=clock.return_value.date().isoformat(), **shared)
+            points = sorted((json.loads(saved['forecast_json'])['report']['predictions'][0]
+                             for saved in self._outcomes()), key=lambda point: point['date'])
+            actuals = [(point['date'], point['prediction']) for point in points]
+
+            clock.return_value = datetime(2020, 6, 21, tzinfo=timezone.utc)
+            self.assertEqual(self._post_actuals(first, actuals[:-1]).status_code, 303)
+            html = self.owner.get(first).get_data(as_text=True)
+            self.assertIn('Too few dates', html)
+            self.assertNotIn('Model MAE above limit.', html)
+            clock.return_value = datetime(2020, 6, 22, tzinfo=timezone.utc)
+            html = self.owner.get(first).get_data(as_text=True)
+            self.assertIn('Missing actuals', html)
+            self.assertNotIn('Model MAE above limit.', html)
+            self.assertEqual(self._post_actuals(first, actuals[-1:]).status_code, 303)
+            self.assertIn('Within limit', self.owner.get(first).get_data(as_text=True))
+
+            self.assertEqual(self._correct(first, correction_value=str(actuals[0][1] + 14)).status_code, 303)
+            html = self.owner.get(first).get_data(as_text=True)
+            self.assertIn('MAE limit is 1 (count)', html)
+            self.assertIn('Model MAE above limit.', html)
+            self.assertEqual(self._correct(first, correction_date='2020-06-14:2',
+                                           correction_value=str(actuals[0][1])).status_code, 303)
+            html = self.owner.get(first).get_data(as_text=True)
+            self.assertIn('Within limit', html)
+            self.assertNotIn('Model MAE above limit.', html)

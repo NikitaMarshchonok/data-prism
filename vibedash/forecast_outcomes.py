@@ -128,13 +128,20 @@ def store_forecast(connection, scope, report, artifact, now):
         'reporting_delay_days': artifact['task'].get('reporting_delay_days', 0),
         'error_weights': weights,
     }
+    maximum_mae = policy['maximum_mae'] if policy is not None else None
+    if existing is not None:
+        saved = json.loads(existing['forecast_json'])
+        # A replay of a pre-limit record keeps its original snapshot.
+        if 'maximum_mae' in saved:
+            payload['maximum_mae'] = maximum_mae
+        if saved != payload:
+            raise ForecastOutcomeError('A different forecast from this model already exists for this issue date.')
+        return existing['prediction_id'], False
+    if maximum_mae is not None:
+        payload['maximum_mae'] = maximum_mae
     serialized = json.dumps(payload, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
     if len(serialized.encode('utf-8')) > MAX_FORECAST_BYTES:
         raise ForecastOutcomeError('The forecast is too large to save. Run without saving.')
-    if existing is not None:
-        if json.loads(existing['forecast_json']) != payload:
-            raise ForecastOutcomeError('A different forecast from this model already exists for this issue date.')
-        return existing['prediction_id'], False
     total, owned = connection.execute(
         'SELECT count(*), count(CASE WHEN scope_id=? THEN 1 END) FROM forecast_outcomes',
         (scope,)).fetchone()

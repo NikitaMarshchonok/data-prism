@@ -253,9 +253,22 @@
                     <p class="form-help">Model {{ check.model_name }} · baseline {{ check.baseline_name }}. Lower errors are better. Data Prism uses the facts you supply, and cannot verify when they became available.</p>
                     {% if check.series_label %}
                     {% set evaluation = check.series_evaluation %}
+                    {% set breaches = evaluation.leads|selectattr('quality_status', 'equalto', 'above_limit')|map(attribute='lead_days')|list %}
+                    {% if breaches %}
+                    <p class="notice notice-error"><strong>Model MAE above limit.</strong> Affected lead times in days {{ breaches|join(', ') }}.</p>
+                    {% endif %}
                     <details class="model-inference actual-correction">
                         <summary>Prospective accuracy by lead time</summary>
                         <p class="form-help">This comparison uses saved prospective forecasts for this series and this model. A lead of 1 means the next day. Coverage shows how many actuals you supplied out of the dates due after the reporting delay. Both MAE values use the same reported actuals.</p>
+                        {% if evaluation.maximum_mae is not none %}
+                        <p class="form-help">The model’s MAE limit is {{ '%.8g'|format(evaluation.maximum_mae) }} ({{ check.target_unit }}). Each lead needs at least {{ evaluation.minimum_quality_dates }} dates with all due actuals reported before the limit is checked.</p>
+                        {% set quality_labels = {
+                            'too_few_dates': 'Too few dates',
+                            'missing_actuals': 'Missing actuals',
+                            'above_limit': 'Above limit',
+                            'within_limit': 'Within limit'
+                        } %}
+                        {% endif %}
                         {% if evaluation.forecast_count == 0 %}
                         <p>No prospective forecasts are saved for this model and series.</p>
                         {% elif evaluation.leads|sum(attribute='due_count') == 0 %}
@@ -264,7 +277,7 @@
                         <p>{{ evaluation.forecast_count }} saved prospective {{ 'forecast' if evaluation.forecast_count == 1 else 'forecasts' }}.</p>
                         <table>
                             <caption>Mean absolute error by lead time</caption>
-                            <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due</th><th scope="col">Model MAE</th><th scope="col">Baseline MAE</th></tr></thead>
+                            <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due</th><th scope="col">Model MAE</th><th scope="col">Baseline MAE</th>{% if evaluation.maximum_mae is not none %}<th scope="col">Limit status</th>{% endif %}</tr></thead>
                             <tbody>
                                 {% for lead in evaluation.leads %}
                                 <tr>
@@ -272,6 +285,7 @@
                                     <td>{{ lead.matched_count }} / {{ lead.due_count }}</td>
                                     <td>{{ '%.8g'|format(lead.model_mae) if lead.model_mae is not none else 'Pending' }}</td>
                                     <td>{{ '%.8g'|format(lead.baseline_mae) if lead.baseline_mae is not none else 'Pending' }}</td>
+                                    {% if lead.quality_status %}<td>{{ quality_labels[lead.quality_status] }}</td>{% endif %}
                                 </tr>
                                 {% endfor %}
                             </tbody>

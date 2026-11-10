@@ -13,6 +13,9 @@ class ForecastSeriesError(ForecastOutcomeError):
     """The requested series binding cannot be used for this forecast."""
 
 
+MIN_QUALITY_DATES = 7
+
+
 def initialize_series(connection):
     connection.execute('''CREATE TABLE IF NOT EXISTS forecast_series (
         scope_id TEXT NOT NULL, series_id TEXT NOT NULL,
@@ -162,14 +165,20 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
         ORDER BY outcome.forecast_origin''',
         (scope, series_id, report['model_id'], now.isoformat(timespec='microseconds')))
     eligible = []
+    maximum_mae = None
     for row in rows:
-        if forecast_evaluation_timing(row['registered_at'], row['forecast_origin']) != 'prospective':
+        snapshot = json.loads(row['forecast_json'])
+        saved = snapshot['report']
+        if saved['model_sha256'] != report['model_sha256']:
             continue
-        saved = json.loads(row['forecast_json'])['report']
-        if saved['model_sha256'] == report['model_sha256']:
+        if maximum_mae is None:
+            maximum_mae = snapshot.get('maximum_mae')
+        if forecast_evaluation_timing(row['registered_at'], row['forecast_origin']) == 'prospective':
             eligible.append((row, saved['predictions']))
+    evaluation = {'forecast_count': len(eligible), 'leads': [],
+                  'maximum_mae': maximum_mae, 'minimum_quality_dates': MIN_QUALITY_DATES}
     if not eligible:
-        return {'forecast_count': 0, 'leads': []}
+        return evaluation
 
     actuals = read_series_actuals(connection, scope, {
         'series_id': series_id,
@@ -177,7 +186,6 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
         'last_day': max(row['last_day'] for row, _ in eligible),
     })
     due_through = (now.date() - timedelta(days=reporting_delay_days)).isoformat()
-    leads = []
     for lead in range(len(report['predictions'])):
         # A model has one retained forecast per issue date, so each target
         # date can appear once per lead, even if the horizons overlap.
@@ -188,11 +196,19 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
             observed = [actuals[point['date']]['value'] for point in matched]
             model_mae = score_predictions(observed, [point['prediction'] for point in matched])['mae']
             baseline_mae = score_predictions(observed, [point['baseline'] for point in matched])['mae']
-        leads.append({
+        quality_status = None
+        if maximum_mae is not None:
+            if len(due) < MIN_QUALITY_DATES:
+                quality_status = 'too_few_dates'
+            elif len(matched) < len(due):
+                quality_status = 'missing_actuals'
+            else:
+                quality_status = 'above_limit' if model_mae > maximum_mae else 'within_limit'
+        evaluation['leads'].append({
             'lead_days': lead + 1, 'due_count': len(due), 'matched_count': len(matched),
-            'model_mae': model_mae, 'baseline_mae': baseline_mae,
+            'model_mae': model_mae, 'baseline_mae': baseline_mae, 'quality_status': quality_status,
         })
-    return {'forecast_count': len(eligible), 'leads': leads}
+    return evaluation
 
 
 def count_series_corrections(connection, scope, series_id):

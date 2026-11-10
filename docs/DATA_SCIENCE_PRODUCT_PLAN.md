@@ -233,6 +233,11 @@ Linked forecasts show paired model and baseline MAE by lead for the exact
 model and series, with coverage over due dates. This records measured errors
 separately from data drift.
 
+The account also shows when a lead exceeds the frozen model's confirmed MAE
+limit. The check uses at least seven due dates and complete actuals for the
+lead. Review the rule with real prospective results before enabling
+notifications.
+
 Next, rehearse recovery on provisioned infrastructure and evaluate
 prospectively recorded forecasts with client data. Distinguish drift from
 measured quality loss, then test an explicit alert policy and candidate
