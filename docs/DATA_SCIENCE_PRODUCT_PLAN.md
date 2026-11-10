@@ -238,6 +238,10 @@ limit. The check uses at least seven due dates and complete actuals for the
 lead. Review the rule with real prospective results before enabling
 notifications.
 
+The owner can compare two saved model versions on common prospective issue
+dates and leads, using the same actuals. This supports candidate review
+alongside temporal backtests.
+
 Next, rehearse recovery on provisioned infrastructure and evaluate
 prospectively recorded forecasts with client data. Distinguish drift from
 measured quality loss, then test an explicit alert policy and candidate

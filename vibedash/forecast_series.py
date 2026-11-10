@@ -1,4 +1,5 @@
 """Explicit account-owned identity for shared forecast actuals."""
+from collections import defaultdict
 from datetime import timedelta
 import json
 import re
@@ -154,29 +155,43 @@ def read_series_actuals(connection, scope, link):
         (scope, link['series_id'], link['first_day'], link['last_day']))}
 
 
-def evaluate_series_model(connection, scope, series_id, report, *, now, reporting_delay_days):
-    """Compare one frozen model and baseline by lead across prospective issues."""
+def evaluate_series_model(connection, scope, series_id, report, *, now, reporting_delay_days, compare_to=None):
+    """Score the current model and optionally pair its issues with another version."""
     rows = connection.execute('''
         SELECT outcome.forecast_origin, outcome.registered_at, outcome.forecast_json,
                link.first_day, link.last_day
         FROM forecast_series_links AS link JOIN forecast_outcomes AS outcome
           ON outcome.scope_id=link.scope_id AND outcome.prediction_id=link.prediction_id
-        WHERE link.scope_id=? AND link.series_id=? AND outcome.model_id=? AND outcome.expires_at>?
-        ORDER BY outcome.forecast_origin''',
-        (scope, series_id, report['model_id'], now.isoformat(timespec='microseconds')))
+        WHERE link.scope_id=? AND link.series_id=? AND outcome.expires_at>?
+        ORDER BY outcome.forecast_origin, outcome.prediction_id''',
+        (scope, series_id, now.isoformat(timespec='microseconds')))
     eligible = []
     maximum_mae = None
+    candidates = {}
+    candidate_issues = {}
     for row in rows:
         snapshot = json.loads(row['forecast_json'])
         saved = snapshot['report']
-        if saved['model_sha256'] != report['model_sha256']:
-            continue
-        if maximum_mae is None:
+        sha = saved['model_sha256']
+        is_current = sha == report['model_sha256']
+        if is_current and maximum_mae is None:
             maximum_mae = snapshot.get('maximum_mae')
-        if forecast_evaluation_timing(row['registered_at'], row['forecast_origin']) == 'prospective':
+        if forecast_evaluation_timing(row['registered_at'], row['forecast_origin']) != 'prospective':
+            continue
+        if is_current:
             eligible.append((row, saved['predictions']))
+        else:
+            candidates.setdefault(sha, {
+                'sha': sha, 'model_name': saved['model_name'], 'trained_through': saved['trained_through'],
+            })
+            if sha == compare_to:
+                candidate_issues[row['forecast_origin']] = saved['predictions']
     evaluation = {'forecast_count': len(eligible), 'leads': [],
-                  'maximum_mae': maximum_mae, 'minimum_quality_dates': MIN_QUALITY_DATES}
+                  'maximum_mae': maximum_mae, 'minimum_quality_dates': MIN_QUALITY_DATES,
+                  'comparison_options': list(candidates.values()), 'comparison': candidates.get(compare_to),
+                  'comparison_unavailable': compare_to is not None and compare_to not in candidates}
+    if evaluation['comparison'] is not None:
+        evaluation['comparison'] = dict(evaluation['comparison'], leads=[])
     if not eligible:
         return evaluation
 
@@ -208,7 +223,32 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
             'lead_days': lead + 1, 'due_count': len(due), 'matched_count': len(matched),
             'model_mae': model_mae, 'baseline_mae': baseline_mae, 'quality_status': quality_status,
         })
+    if evaluation['comparison'] is not None:
+        evaluation['comparison']['leads'] = _compare_versions(eligible, candidate_issues, actuals, due_through)
     return evaluation
+
+
+def _compare_versions(current_issues, candidate_issues, actuals, due_through):
+    paired = defaultdict(list)
+    for row, current in current_issues:
+        candidate = candidate_issues.get(row['forecast_origin'], ())
+        for lead, (left, right) in enumerate(zip(current, candidate), 1):
+            if left['date'] == right['date'] and left['date'] <= due_through:
+                paired[lead].append((left, right))
+
+    leads = []
+    for lead, due in sorted(paired.items()):
+        matched = [(left, right) for left, right in due if left['date'] in actuals]
+        current_mae = candidate_mae = None
+        if matched:
+            observed = [actuals[left['date']]['value'] for left, _ in matched]
+            current_mae = score_predictions(observed, [left['prediction'] for left, _ in matched])['mae']
+            candidate_mae = score_predictions(observed, [right['prediction'] for _, right in matched])['mae']
+        leads.append({
+            'lead_days': lead, 'due_count': len(due), 'matched_count': len(matched),
+            'current_mae': current_mae, 'candidate_mae': candidate_mae,
+        })
+    return leads
 
 
 def count_series_corrections(connection, scope, series_id):

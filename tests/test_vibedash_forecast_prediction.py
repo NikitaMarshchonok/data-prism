@@ -513,8 +513,10 @@ class ForecastPredictionWebTests(unittest.TestCase):
         self.assertEqual(len(self._outcomes()), 1)
         self.assertEqual(len(self._series_rows('forecast_series_links')), 1)
 
-    def test_series_accuracy_matches_due_dates_by_lead_for_one_prospective_model(self):
-        other_model = self._queue(forecast_model_retention_days='7', forecast_reporting_delay='2',
+    def test_series_accuracy_and_model_comparison_use_the_right_prospective_pairs(self):
+        other_training = daily_frame().assign(cnt=lambda data: data['cnt'] + 20)
+        other_history = self.frame.assign(cnt=lambda data: data['cnt'] + 20)
+        other_model = self._queue(frame=other_training, forecast_model_retention_days='7', forecast_reporting_delay='2',
                                   forecast_origin='2020-06-10')
         self.assertEqual(self._complete(other_model)['status'], 'completed')
         frame = pd.concat([self.frame, pd.DataFrame({
@@ -529,7 +531,8 @@ class ForecastPredictionWebTests(unittest.TestCase):
             self.assertIn('Actuals are still pending', self.owner.get(first).get_data(as_text=True))
             self._save(frame=self.frame.iloc[:-1], forecast_origin='2020-06-12', **shared)
             with patch.object(self, 'url', f'/vibedash/account/models/{other_model}/predict'):
-                other = self._save(**shared)
+                other = self._save(frame=other_history, **shared)
+                self._save(frame=other_history.iloc[:-1], forecast_origin='2020-06-12', **shared)
             clock.return_value = datetime(2020, 6, 14, tzinfo=timezone.utc)
             second = self._save(frame=frame, forecast_origin='2020-06-14', **shared)
             clock.return_value = datetime(2020, 6, 17, tzinfo=timezone.utc)
@@ -544,10 +547,11 @@ class ForecastPredictionWebTests(unittest.TestCase):
             self.assertEqual(self._post_actuals(second, [('2020-06-15', 301)]).status_code, 303)
             self.assertEqual(self._correct(second, correction_date='2020-06-15:1',
                                            correction_value='310').status_code, 303)
-            reports = {row['prediction_id']: json.loads(row['forecast_json'])['report']['predictions']
+            reports = {row['prediction_id']: json.loads(row['forecast_json'])['report']
                        for row in self._outcomes()}
-            first_points = reports[first.rsplit('/', 1)[1]]
-            second_points = reports[second.rsplit('/', 1)[1]]
+            first_points = reports[first.rsplit('/', 1)[1]]['predictions']
+            second_points = reports[second.rsplit('/', 1)[1]]['predictions']
+            candidate = reports[other.rsplit('/', 1)[1]]
             html = ' '.join(self.owner.get(first).get_data(as_text=True).split())
             for lead, coverage, pairs in (
                 (1, '2 / 2', [(first_points[0], 300), (second_points[0], 310)]),
@@ -557,6 +561,22 @@ class ForecastPredictionWebTests(unittest.TestCase):
                 baseline = sum(abs(point['baseline'] - actual) for point, actual in pairs) / len(pairs)
                 self.assertIn(f'<th scope="row">{lead}</th> <td>{coverage}</td> '
                               f'<td>{model:.8g}</td> <td>{baseline:.8g}</td>', html)
+
+            compare = first + '?compare=' + candidate['model_sha256']
+            response = self.owner.get(compare)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers['Cache-Control'], 'private, no-store')
+            comparison = ' '.join(response.get_data(as_text=True).split()).split('Paired MAE by lead time', 1)[1]
+            self.assertNotAlmostEqual(first_points[0]['prediction'], candidate['predictions'][0]['prediction'])
+            for lead, actual in ((1, 300), (2, 310)):
+                current = abs(first_points[lead - 1]['prediction'] - actual)
+                alternative = abs(candidate['predictions'][lead - 1]['prediction'] - actual)
+                self.assertIn(f'<th scope="row">{lead}</th> <td>1 / 1</td> '
+                              f'<td>{current:.8g}</td> <td>{alternative:.8g}</td>', comparison)
+            self.assertEqual(web_app.app.test_client().get(compare).status_code, 404)
+            unavailable = self.owner.get(first + '?compare=' + 'f' * 64).get_data(as_text=True)
+            self.assertIn('Choose an available model version from this shared series.', unavailable)
+            self.assertNotIn('Paired MAE by lead time', unavailable)
             with sqlite3.connect(self.job_path) as connection:
                 connection.execute('UPDATE forecast_outcomes SET expires_at=? WHERE prediction_id=?',
                                    ('2020-06-17T00:00:00.000000+00:00', first.rsplit('/', 1)[1]))

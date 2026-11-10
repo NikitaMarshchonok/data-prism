@@ -317,7 +317,7 @@ class ForecastModelStore:
         return self._guard(scope_id, lambda connection, scope:
                            forecast_series.list_series(connection, scope, _timestamp(_now())))
 
-    def get_forecast(self, scope_id, prediction_id, *, actuals=None, correction=None):
+    def get_forecast(self, scope_id, prediction_id, *, actuals=None, correction=None, compare_to=None):
         """Read a forecast or atomically apply one type of outcome update."""
         if actuals is not None and correction is not None:
             raise ValueError('Apply either actuals or a correction.')
@@ -353,7 +353,7 @@ class ForecastModelStore:
             if link is not None:
                 view['series_evaluation'] = forecast_series.evaluate_series_model(
                     connection, scope, link['series_id'], payload['report'], now=now,
-                    reporting_delay_days=payload['reporting_delay_days'])
+                    reporting_delay_days=payload['reporting_delay_days'], compare_to=compare_to)
             return view
         return self._guard(scope_id, read_or_update)
 

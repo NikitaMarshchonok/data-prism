@@ -292,6 +292,47 @@
                         </table>
                         {% endif %}
                     </details>
+                    {% if evaluation.comparison_options or evaluation.comparison_unavailable %}
+                    <details class="model-inference actual-correction"{% if evaluation.comparison or evaluation.comparison_unavailable %} open{% endif %}>
+                        <summary>Compare model versions</summary>
+                        <p id="forecast-comparison-help" class="form-help">Both versions must have saved prospective forecasts for the same issue date and lead time. The comparison uses the same reported actuals for both versions.</p>
+                        {% if evaluation.comparison_options %}
+                        <form class="model-inference-form" method="get"
+                            action="{{ url_for('vibedash.forecast_outcome', prediction_id=check.prediction_id, _anchor='forecast-quality') }}">
+                            <label for="forecast-comparison-model">Comparison model</label>
+                            <select id="forecast-comparison-model" name="compare" aria-describedby="forecast-comparison-help" required>
+                                <option value="">Choose a model version</option>
+                                {% for model in evaluation.comparison_options %}
+                                <option value="{{ model.sha }}"{% if evaluation.comparison and evaluation.comparison.sha == model.sha %} selected{% endif %}>{{ model.model_name }} · {{ model.sha[:12] }} · trained through {{ model.trained_through }}</option>
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="button button-primary">Compare versions</button>
+                        </form>
+                        {% endif %}
+                        {% if evaluation.comparison_unavailable %}
+                        <p role="status">Choose an available model version from this shared series.</p>
+                        {% elif evaluation.comparison %}
+                        {% if evaluation.comparison.leads %}
+                        <table>
+                            <caption>Paired MAE by lead time ({{ check.target_unit }})</caption>
+                            <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due pairs</th><th scope="col">Selected model MAE</th><th scope="col">Comparison model MAE</th></tr></thead>
+                            <tbody>
+                                {% for lead in evaluation.comparison.leads %}
+                                <tr>
+                                    <th scope="row">{{ lead.lead_days }}</th>
+                                    <td>{{ lead.matched_count }} / {{ lead.due_count }}</td>
+                                    <td>{{ '%.8g'|format(lead.current_mae) if lead.current_mae is not none else 'Pending' }}</td>
+                                    <td>{{ '%.8g'|format(lead.candidate_mae) if lead.candidate_mae is not none else 'Pending' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                        {% else %}
+                        <p>No paired dates are due for these versions yet.</p>
+                        {% endif %}
+                        {% endif %}
+                    </details>
+                    {% endif %}
                     {% endif %}
                     <table>
                         <caption>{{ check.target_column }} ({{ check.target_unit }}) by date</caption>

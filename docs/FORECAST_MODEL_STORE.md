@@ -210,6 +210,12 @@ all due actuals are reported. The account shows a warning when the model's
 MAE exceeds the limit, and a status for each lead. These statuses are
 recomputed with the current actuals and retained forecasts.
 
+Open **Compare model versions** to evaluate a second model with prospective
+forecasts in the same series. A pair must share the issue date, lead and
+target date, and the date must be due. The table shows the number of pairs
+with actuals and each model's MAE on exactly those pairs. The displayed
+coverage and errors support a manual review of a candidate.
+
 A shared fact and its revisions expire when the last forecast covering that
 date is purged. The series label and ID are purged with its last forecast.
 SQLite cleanup follows parent forecast deletion inside the same transaction.
