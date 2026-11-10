@@ -229,6 +229,10 @@ Saved forecasts now distinguish same-day prospective records from retrospective
 calculations using the first server save in UTC. Source availability remains
 user-declared.
 
+Linked forecasts show paired model and baseline MAE by lead for the exact
+model and series, with coverage over due dates. This records measured errors
+separately from data drift.
+
 Next, rehearse recovery on provisioned infrastructure and evaluate
 prospectively recorded forecasts with client data. Distinguish drift from
 measured quality loss, then test an explicit alert policy and candidate

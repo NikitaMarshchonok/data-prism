@@ -512,6 +512,55 @@ class ForecastPredictionWebTests(unittest.TestCase):
         self.assertEqual(len(self._outcomes()), 1)
         self.assertEqual(len(self._series_rows('forecast_series_links')), 1)
 
+    def test_series_accuracy_matches_due_dates_by_lead_for_one_prospective_model(self):
+        other_model = self._queue(forecast_model_retention_days='7', forecast_reporting_delay='2',
+                                  forecast_origin='2020-06-10')
+        self.assertEqual(self._complete(other_model)['status'], 'completed')
+        frame = pd.concat([self.frame, pd.DataFrame({
+            'dteday': ['2020-06-12'], 'cnt': [325], 'casual': [30],
+        })], ignore_index=True)
+        with patch('vibedash.analysis_jobs.AnalysisJobStore.purge_terminal', return_value=0), \
+                patch('vibedash.forecast_models._now') as clock:
+            clock.return_value = datetime(2020, 6, 13, tzinfo=timezone.utc)
+            first = self._save(new_series_label='Store A orders', series_confirmed='yes')
+            series, = self._series_rows()
+            shared = {'series_id': series['series_id'], 'series_confirmed': 'yes'}
+            self.assertIn('Actuals are still pending', self.owner.get(first).get_data(as_text=True))
+            self._save(frame=self.frame.iloc[:-1], forecast_origin='2020-06-12', **shared)
+            with patch.object(self, 'url', f'/vibedash/account/models/{other_model}/predict'):
+                other = self._save(**shared)
+            clock.return_value = datetime(2020, 6, 14, tzinfo=timezone.utc)
+            second = self._save(frame=frame, forecast_origin='2020-06-14', **shared)
+            clock.return_value = datetime(2020, 6, 17, tzinfo=timezone.utc)
+
+            self.assertEqual(self._post_actuals(first, [('2020-06-14', 300)]).status_code, 303)
+            partial = ' '.join(self.owner.get(second).get_data(as_text=True).split())
+            self.assertIn('2 saved prospective forecasts.', partial)
+            self.assertIn('<th scope="row">1</th> <td>1 / 2</td>', partial)
+            self.assertIn('<th scope="row">2</th> <td>0 / 1</td> <td>Pending</td>', partial)
+            self.assertIn('1 saved prospective forecast.', self.owner.get(other).get_data(as_text=True))
+
+            self.assertEqual(self._post_actuals(second, [('2020-06-15', 301)]).status_code, 303)
+            self.assertEqual(self._correct(second, correction_date='2020-06-15:1',
+                                           correction_value='310').status_code, 303)
+            reports = {row['prediction_id']: json.loads(row['forecast_json'])['report']['predictions']
+                       for row in self._outcomes()}
+            first_points = reports[first.rsplit('/', 1)[1]]
+            second_points = reports[second.rsplit('/', 1)[1]]
+            html = ' '.join(self.owner.get(first).get_data(as_text=True).split())
+            for lead, coverage, pairs in (
+                (1, '2 / 2', [(first_points[0], 300), (second_points[0], 310)]),
+                (2, '1 / 1', [(first_points[1], 310)]),
+            ):
+                model = sum(abs(point['prediction'] - actual) for point, actual in pairs) / len(pairs)
+                baseline = sum(abs(point['baseline'] - actual) for point, actual in pairs) / len(pairs)
+                self.assertIn(f'<th scope="row">{lead}</th> <td>{coverage}</td> '
+                              f'<td>{model:.8g}</td> <td>{baseline:.8g}</td>', html)
+            with sqlite3.connect(self.job_path) as connection:
+                connection.execute('UPDATE forecast_outcomes SET expires_at=? WHERE prediction_id=?',
+                                   ('2020-06-17T00:00:00.000000+00:00', first.rsplit('/', 1)[1]))
+            self.assertIn('1 saved prospective forecast.', self.owner.get(second).get_data(as_text=True))
+
     def test_shared_facts_follow_remaining_date_coverage_and_account_erasure(self):
         first_url = self._save(new_series_label='Store A orders', series_confirmed='yes')
         series, = self._series_rows()
