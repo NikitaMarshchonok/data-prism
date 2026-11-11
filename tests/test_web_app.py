@@ -225,6 +225,31 @@ class WebUploadTests(unittest.TestCase):
         )
         self.assertNotIn(identity["state_id"], response.get_data(as_text=True))
 
+    def test_readiness_reports_forecast_storage_configuration_without_creating_database(self):
+        state_directory = Path(self.temporary_directory.name)
+        identity = initialize_runtime_state(state_directory)
+        forecast_database = state_directory / "jobs" / "analysis_jobs.sqlite3"
+        forecast_database.parent.mkdir()
+        with patch.dict(web_app.app.config, SESSION_KEY_PERSISTENT=True,
+                        DATA_PRISM_DEPLOYMENT_PROFILE="production",
+                        DATA_PRISM_STATE_DURABILITY="persistent",
+                        DATA_PRISM_STATE_DIRECTORY_CONFIGURED=True,
+                        DATA_PRISM_EXPECTED_STATE_ID=identity["state_id"],
+                        VIBEDASH_MODEL_STORAGE_ENABLED=False,
+                        VIBEDASH_JOB_STORE_PATH=str(forecast_database)):
+            client = web_app.app.test_client()
+            disabled = client.get("/readyz")
+            web_app.app.config["VIBEDASH_MODEL_STORAGE_ENABLED"] = True
+            configured = client.get("/readyz")
+            web_app.app.config["VIBEDASH_JOB_STORE_PATH"] = str(self.job_store_path)
+            unavailable = client.get("/readyz")
+        for response, status in ((disabled, "disabled"), (configured, "configured"), (unavailable, "unavailable")):
+            with self.subTest(status=status):
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.json["forecast_model_storage"], status)
+                self.assertNotIn(identity["state_id"], response.get_data(as_text=True))
+        self.assertFalse(forecast_database.exists())
+
     def test_readiness_rejects_existing_invalid_account_store(self):
         account_path = self.account_folder / "accounts.sqlite3"
         with sqlite3.connect(account_path) as connection:

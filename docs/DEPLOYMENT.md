@@ -151,6 +151,22 @@ Restart, then require `/readyz` to report
 missing or the identity differs, the service returns HTTP 503. Investigate the
 mount or restore instead of replacing the expected value.
 
+For a pilot that retains forecast models, enable
+`VIBEDASH_MODEL_STORAGE_ENABLED=true` on the verified persistent deployment.
+Set `PILOT_BASE_URL` to that deployment's origin and check the revision and
+forecast storage configuration before the browser test.
+
+```bash
+python release_check.py \
+  --base-url "$PILOT_BASE_URL" \
+  --expected-revision "$(git rev-parse HEAD)" \
+  --require-forecast-storage
+```
+
+The additional checks require verified production state and a configured
+forecast store. Complete an authenticated forecast save and recovery rehearsal
+with synthetic data to verify the workflow on the provisioned service.
+
 Do not apply those declarations to the free Blueprint: its filesystem remains
 ephemeral regardless of the environment-variable value.
 
