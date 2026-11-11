@@ -328,6 +328,12 @@ def readinesscheck():
         except Exception:
             issues.append('account store is unavailable.')
 
+    forecast_model_storage = 'disabled'
+    if app.config.get('VIBEDASH_MODEL_STORAGE_ENABLED') is True:
+        from vibedash.forecast_models import storage_settings
+
+        forecast_model_storage = 'configured' if storage_settings(app.config) is not None else 'unavailable'
+
     status = 'ready' if not issues else 'not_ready'
     return jsonify({
         'status': status,
@@ -338,6 +344,7 @@ def readinesscheck():
             for key, value in storage_contract.items()
             if key not in {'issues', 'warnings'}
         },
+        'forecast_model_storage': forecast_model_storage,
         'version': app.config['SERVICE_VERSION'],
     }), 200 if not issues else 503
 

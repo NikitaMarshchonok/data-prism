@@ -112,6 +112,7 @@ def verify_release(
     expected_revision: str,
     *,
     timeout: float = 90.0,
+    require_forecast_storage: bool = False,
     session: requests.Session | None = None,
     request_id: str | None = None,
     checked_at: datetime | None = None,
@@ -253,7 +254,36 @@ def verify_release(
         )
 
     runtime_storage = ready_payload.get("runtime_storage") if ready_payload else None
-    if isinstance(runtime_storage, dict) and runtime_storage.get("state_durability") == "ephemeral":
+    if require_forecast_storage:
+        identity = runtime_storage.get("state_identity") if isinstance(runtime_storage, dict) else None
+        persistent_state = (
+            isinstance(runtime_storage, dict)
+            and runtime_storage.get("deployment_profile") == "production"
+            and runtime_storage.get("state_durability") == "persistent"
+            and runtime_storage.get("production_state_satisfied") is True
+            and isinstance(identity, dict)
+            and identity.get("status") == "verified"
+            and identity.get("verified") is True
+        )
+        checks.append(_check(
+            "persistent-runtime-state",
+            persistent_state,
+            "production state identity verified"
+            if persistent_state else "verified production state on persistent storage is required",
+        ))
+        model_storage = ready_payload.get("forecast_model_storage") if ready_payload else None
+        checks.append(_check(
+            "forecast-model-storage",
+            model_storage == "configured",
+            {
+                "configured": "forecast model retention is configured",
+                "disabled": "forecast model retention is disabled",
+                "unavailable": "forecast model retention is enabled but storage configuration is ineligible",
+            }.get(model_storage if isinstance(model_storage, str) else None,
+                  "readiness response has no recognized forecast storage status"),
+        ))
+    if (not require_forecast_storage and isinstance(runtime_storage, dict)
+            and runtime_storage.get("state_durability") == "ephemeral"):
         warnings.append(
             "Runtime state is ephemeral; this pass supports only the documented "
             "supervised pilot boundary."
@@ -290,6 +320,8 @@ def render_human_report(report: dict[str, Any]) -> str:
         lines.append(f"[WARN] {warning}")
     if report["status"] == "passed":
         lines.append("Result: technical release checks passed; real-user value is not proven.")
+    elif any(item["check_id"] == "forecast-model-storage" for item in report["checks"]):
+        lines.append("Result: resolve the failed checks before a pilot with forecast retention.")
     else:
         lines.append("Result: do not start a pilot session until failed checks are resolved.")
     return "\n".join(lines)
@@ -302,6 +334,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--expected-revision", required=True)
     parser.add_argument("--timeout", type=float, default=90.0)
+    parser.add_argument(
+        "--require-forecast-storage",
+        action="store_true",
+        help="Require verified production state and configured forecast model retention.",
+    )
     parser.add_argument(
         "--json",
         action="store_true",
@@ -319,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
             args.base_url,
             args.expected_revision,
             timeout=args.timeout,
+            require_forecast_storage=args.require_forecast_storage,
         )
     except ReleaseCheckInputError as error:
         parser.error(str(error))

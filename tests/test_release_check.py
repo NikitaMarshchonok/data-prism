@@ -132,6 +132,43 @@ class ReleaseCheckTests(unittest.TestCase):
         self.assertEqual(revision["status"], "failed")
         self.assertIn("do not start a pilot", render_human_report(report))
 
+    def test_forecast_storage_requirement_fails_closed(self):
+        production_storage = {
+            "deployment_profile": "production",
+            "state_durability": "persistent",
+            "production_state_satisfied": True,
+            "state_identity": {"status": "verified", "verified": True},
+        }
+        cases = [
+            (None, None, {"persistent-runtime-state", "forecast-model-storage"}),
+            (production_storage, None, {"forecast-model-storage"}),
+            (production_storage, "disabled", {"forecast-model-storage"}),
+            (production_storage, "unavailable", {"forecast-model-storage"}),
+            (production_storage | {"state_identity": {"status": "identity_mismatch", "verified": False}},
+             "configured", {"persistent-runtime-state"}),
+            (production_storage, "configured", set()),
+        ]
+        for storage, capability, expected_failures in cases:
+            with self.subTest(storage=storage, capability=capability):
+                responses = successful_responses()
+                payload = responses[1].json()
+                if storage is not None:
+                    payload["runtime_storage"] = storage
+                if capability is not None:
+                    payload["forecast_model_storage"] = capability
+                report = verify_release(
+                    "https://data-prism.onrender.com",
+                    "e1d2bae123456789",
+                    require_forecast_storage=True,
+                    session=FakeSession(responses),
+                    request_id="release-check-test",
+                )
+                self.assertEqual({item["check_id"] for item in report["checks"] if item["status"] == "failed"},
+                                 expected_failures)
+                self.assertEqual(report["status"], "failed" if expected_failures else "passed")
+                if expected_failures:
+                    self.assertIn("pilot with forecast retention", render_human_report(report))
+
     def test_not_ready_response_and_version_difference_fail(self):
         responses = successful_responses()
         responses[1] = FakeResponse(
