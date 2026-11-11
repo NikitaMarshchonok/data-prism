@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from io import BytesIO
 import json
+import re
 import sqlite3
 import unittest
 from unittest.mock import patch
@@ -698,7 +699,9 @@ class ForecastPredictionWebTests(unittest.TestCase):
 
             candidates = sorted((json.loads(row['forecast_json'])['report'] for row in self._outcomes()
                                  if row['model_id'] == self.model_id), key=lambda report: report['forecast_origin'])
-            compare = first + '?compare=' + candidates[0]['model_sha256']
+            query = '?compare=' + candidates[0]['model_sha256']
+            compare = first + query
+            review_url = first + '/review' + query
             points = [report['predictions'][0] for report in candidates]
             actuals = [(point['date'], point['prediction']) for point in points]
 
@@ -712,11 +715,58 @@ class ForecastPredictionWebTests(unittest.TestCase):
             html = self.owner.get(compare).get_data(as_text=True)
             self.assertIn('<strong>Below criteria</strong>', html)
             self.assertIn('MAE above limit', html.split('Candidate review</th>', 1)[1])
+            previous_evidence, = re.findall(r'value="([0-9a-f]{64}):keep_selected"', html)
+            with self.owner.session_transaction() as session:
+                csrf = session['vibedash_auth_csrf_token']
+
+            def review(evidence, decision, *, client=self.owner, token=csrf):
+                return client.post(review_url, data={
+                    'csrf_token': token, 'candidate_decision': f'{evidence}:{decision}',
+                })
+
+            self.assertEqual(review(previous_evidence, 'recommend').status_code, 422)
+            self.assertEqual(review(previous_evidence, 'keep_selected', token='invalid').status_code, 400)
+            stranger = web_app.app.test_client()
+            self.assertEqual(self._register(stranger, 'stranger@example.com').status_code, 302)
+            self.assertEqual(review(previous_evidence, 'keep_selected', client=stranger).status_code, 404)
+
             self.assertEqual(self._correct(first, correction_value=str(first_actual)).status_code, 303)
-            self.assertIn('<strong>Meets criteria</strong>', self.owner.get(compare).get_data(as_text=True))
+            stale = review(previous_evidence, 'keep_selected')
+            self.assertEqual(stale.status_code, 409)
+            self.assertIn('The comparison has changed', stale.get_data(as_text=True))
+            html = self.owner.get(compare).get_data(as_text=True)
+            self.assertIn('<strong>Meets criteria</strong>', html)
+            evidence, = re.findall(r'value="([0-9a-f]{64}):recommend"', html)
+            self.assertNotEqual(evidence, previous_evidence)
+            self.assertEqual(review(evidence, 'recommend').status_code, 303)
+            self.assertEqual(review(evidence, 'recommend').status_code, 303)
+            self.assertEqual(review(evidence, 'keep_selected').status_code, 409)
+            html = self.owner.get(compare).get_data(as_text=True)
+            self.assertIn('Decision recorded', html)
+            self.assertEqual(html.count('<strong>Candidate recommended</strong>'), 1)
+            self.assertIn('7 paired dates from 2020-06-14 through 2020-06-20', html)
+
+            self.assertEqual(self._correct(first, correction_date='2020-06-14:2',
+                                           correction_value=str(first_actual + 21)).status_code, 303)
+            html = self.owner.get(compare).get_data(as_text=True)
+            self.assertIn('<strong>Below criteria</strong>', html)
+            changed, = re.findall(r'value="([0-9a-f]{64}):keep_selected"', html)
+            self.assertEqual(review(changed, 'keep_selected').status_code, 303)
 
             clock.return_value = datetime(2020, 6, 23, tzinfo=timezone.utc)
             html = self.owner.get(compare).get_data(as_text=True)
             self.assertIn('<strong>Missing paired forecasts</strong>', html)
             self.assertIn('7 / 8 forecast pairs', html)
             self.assertNotIn('<strong>Meets criteria</strong>', html)
+            self.assertIn('<strong>Candidate recommended</strong>', html)
+            self.assertIn('<strong>Selected model kept</strong>', html)
+            with sqlite3.connect(self.job_path) as connection:
+                saved = dict(connection.execute('SELECT decision, evidence_json FROM forecast_candidate_reviews'))
+            self.assertEqual(set(saved), {'recommend', 'keep_selected'})
+            self.assertAlmostEqual(json.loads(saved['recommend'])['candidate_mae'], 0)
+            self.assertAlmostEqual(json.loads(saved['keep_selected'])['candidate_mae'], 3)
+
+        # The normal retention sweep removes the forecast and its decisions.
+        self.assertEqual(self.owner.get(first).status_code, 404)
+        with sqlite3.connect(self.job_path) as connection:
+            self.assertEqual(connection.execute('SELECT count(*) FROM forecast_candidate_reviews').fetchone()[0], 0)

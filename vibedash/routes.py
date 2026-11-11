@@ -74,7 +74,9 @@ try:
         ForecastActualsTooLarge, ForecastCorrectionError, ForecastOutcomeError, MAX_ACTUALS_REQUEST_BYTES,
         RETENTION_DAYS as FORECAST_RETENTION_DAYS, correction_from_form, load_actuals,
     )
-    from .forecast_series import ForecastSeriesError, series_from_form
+    from .forecast_series import (
+        ForecastCandidateReviewError, ForecastSeriesError, candidate_review_from_form, series_from_form,
+    )
     from .forecast_prediction import ForecastHistoryTooLarge, MAX_HISTORY_REQUEST_BYTES, load_prediction_history
     from .task_capabilities import (
         TaskAdmissionError, capability_catalog, assess_task_request,
@@ -1369,7 +1371,7 @@ if vibedash_bp:
 
     def _render_account_settings(account, *, error=None, success=None, status=200,
                                  forecast_run=None, forecast_outcome=None, actuals_error=None,
-                                 correction_error=None):
+                                 correction_error=None, candidate_review_error=None):
         security_activity = []
         security_activity_unavailable = False
         try:
@@ -1417,6 +1419,7 @@ if vibedash_bp:
             forecast_outcome=forecast_outcome,
             actuals_error=actuals_error,
             correction_error=correction_error,
+            candidate_review_error=candidate_review_error,
             auth_csrf_token=_auth_csrf_token(),
             error=error,
             success=success,
@@ -1579,6 +1582,7 @@ if vibedash_bp:
 
     @vibedash_bp.route('/account/forecasts/<prediction_id>', methods=['GET', 'POST'])
     @vibedash_bp.post('/account/forecasts/<prediction_id>/correct', endpoint='forecast_outcome_correct')
+    @vibedash_bp.post('/account/forecasts/<prediction_id>/review', endpoint='forecast_candidate_review')
     def forecast_outcome(prediction_id):
         account = _current_account()
         settings = storage_settings(current_app.config)
@@ -1592,24 +1596,36 @@ if vibedash_bp:
             return unavailable()
         scope = account_scope_id(account['id'], current_app.secret_key)
         is_correction = request.endpoint == 'vibedash.forecast_outcome_correct'
-        comparison = request.args.getlist('compare') if request.method != 'POST' else []
+        is_review = request.endpoint == 'vibedash.forecast_candidate_review'
+        comparison = request.args.getlist('compare') if request.method != 'POST' or is_review else []
         if comparison and (len(comparison) != 1 or not re.fullmatch(r'[0-9a-f]{64}', comparison[0])):
             return unavailable()
+        if is_review and not comparison:
+            return unavailable()
+        compare_to = comparison[0] if comparison else None
 
         def form_error(message, status, field=None):
-            context = {'correction_error': {'message': message, 'field': field}} if is_correction else {
-                'actuals_error': message,
-            }
+            if is_review:
+                context = {'candidate_review_error': message}
+            elif is_correction:
+                context = {'correction_error': {'message': message, 'field': field}}
+            else:
+                context = {'actuals_error': message}
             return _render_account_settings(account, forecast_outcome=forecast, status=status, **context)
 
         try:
             store = ForecastModelStore(**settings)
-            forecast = store.get_forecast(scope, prediction_id, compare_to=comparison[0] if comparison else None)
+            forecast = store.get_forecast(scope, prediction_id, compare_to=compare_to)
             if forecast is None or (comparison and forecast['series_label'] is None):
                 return unavailable()
             if request.method != 'POST':
                 return _render_account_settings(account, forecast_outcome=forecast)
-            if is_correction:
+            if is_review:
+                if request.mimetype != 'application/x-www-form-urlencoded':
+                    return form_error('Use the comparison form to record a decision.', 422)
+                if request.content_length is not None and request.content_length > 8192:
+                    return form_error('The review form is too large.', 413)
+            elif is_correction:
                 if request.mimetype != 'application/x-www-form-urlencoded':
                     return form_error('Use the correction form to submit a revised actual.', 422)
                 if request.content_length is not None and request.content_length > 8192:
@@ -1619,7 +1635,10 @@ if vibedash_bp:
             tokens = request.form.getlist('csrf_token')
             if len(tokens) != 1 or not _valid_auth_csrf_token(tokens[0]):
                 return form_error('This form has expired. Reload the forecast and try again.', 400)
-            if is_correction:
+            if is_review:
+                updated = store.get_forecast(scope, prediction_id, compare_to=compare_to,
+                                             candidate_review=candidate_review_from_form(request.form))
+            elif is_correction:
                 updated = store.get_forecast(scope, prediction_id, correction=correction_from_form(request.form))
             else:
                 files = request.files.getlist('actuals_csv')
@@ -1635,8 +1654,12 @@ if vibedash_bp:
         except ScopeClosedError:
             return unavailable()
         except (ForecastActualsTooLarge, RequestEntityTooLarge):
+            if is_review:
+                return form_error('The review form is too large.', 413)
             message = 'The correction form is too large.' if is_correction else 'Use an actuals CSV of at most 16 KiB.'
             return form_error(message, 413)
+        except ForecastCandidateReviewError as error:
+            return form_error(str(error), error.status)
         except ForecastCorrectionError as error:
             return form_error(str(error), error.status, error.field)
         except ForecastOutcomeError as error:
@@ -1647,8 +1670,10 @@ if vibedash_bp:
             return unavailable(503)
         if is_correction:
             flash('Actual correction saved. Forecast errors reflect the latest actuals.', 'success')
+        if is_review:
+            flash('Model review recorded.', 'success')
         response = redirect(url_for('vibedash.forecast_outcome', prediction_id=prediction_id,
-                                    _anchor='forecast-quality'), code=303)
+                                    compare=compare_to, _anchor='forecast-quality'), code=303)
         _set_account_private_headers(response)
         return response
 
