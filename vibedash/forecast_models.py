@@ -317,10 +317,11 @@ class ForecastModelStore:
         return self._guard(scope_id, lambda connection, scope:
                            forecast_series.list_series(connection, scope, _timestamp(_now())))
 
-    def get_forecast(self, scope_id, prediction_id, *, actuals=None, correction=None, compare_to=None):
+    def get_forecast(self, scope_id, prediction_id, *, actuals=None, correction=None, compare_to=None,
+                     candidate_review=None):
         """Read a forecast or atomically apply one type of outcome update."""
-        if actuals is not None and correction is not None:
-            raise ValueError('Apply either actuals or a correction.')
+        if sum(value is not None for value in (actuals, correction, candidate_review)) > 1:
+            raise ValueError('Apply one forecast update at a time.')
         prediction_id = _validated_job_id(prediction_id)
 
         def read_or_update(connection, scope):
@@ -351,9 +352,16 @@ class ForecastModelStore:
             view = forecast_view(row, payload, merged)
             view['series_label'] = link['label'] if link is not None else None
             if link is not None:
-                view['series_evaluation'] = forecast_series.evaluate_series_model(
+                evaluation = forecast_series.evaluate_series_model(
                     connection, scope, link['series_id'], payload['report'], now=now,
                     reporting_delay_days=payload['reporting_delay_days'], compare_to=compare_to)
+                view['series_evaluation'] = evaluation
+                if candidate_review is not None:
+                    forecast_series.save_candidate_review(
+                        connection, scope, prediction_id, evaluation['comparison'], candidate_review, now)
+                view['candidate_reviews'] = forecast_series.list_candidate_reviews(connection, scope, prediction_id)
+            elif candidate_review is not None:
+                return None
             return view
         return self._guard(scope_id, read_or_update)
 

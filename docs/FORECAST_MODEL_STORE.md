@@ -224,6 +224,16 @@ the recorded thresholds on this coverage. Older snapshots still show paired
 MAE and can use the criteria from a newer retained snapshot of the same
 selected model in the same series.
 
+On a complete comparison, the owner can record a decision for one lead.
+Keeping the selected model is available for any scored comparison.
+Recommending the candidate requires meeting the recorded criteria. The server
+rechecks the displayed evidence in the write transaction and rejects stale
+submissions. A decision preserves the two version identifiers, date range,
+coverage, metrics, and criteria as they were at review time. Actual corrections
+can make a new comparison available for review. Each saved forecast holds up
+to 20 decisions and its expiry or account erasure also removes those decisions.
+The recommendation is for an owner review workflow prior to model activation.
+
 A shared fact and its revisions expire when the last forecast covering that
 date is purged. The series label and ID are purged with its last forecast.
 SQLite cleanup follows parent forecast deletion inside the same transaction.

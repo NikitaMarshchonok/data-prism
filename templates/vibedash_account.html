@@ -295,6 +295,11 @@
                     {% if evaluation.comparison_options or evaluation.comparison_unavailable %}
                     <details class="model-inference actual-correction"{% if evaluation.comparison or evaluation.comparison_unavailable %} open{% endif %}>
                         <summary>Compare model versions</summary>
+                        {% if candidate_review_error %}
+                        <p class="notice notice-error" role="alert" tabindex="-1" autofocus>{{ candidate_review_error }}
+                            <a href="{{ url_for('vibedash.forecast_outcome', prediction_id=check.prediction_id, compare=evaluation.comparison.sha if evaluation.comparison else none, _anchor='forecast-quality') }}">Reload comparison</a>
+                        </p>
+                        {% endif %}
                         <p id="forecast-comparison-help" class="form-help">Both versions must have saved prospective forecasts for the same issue date and lead time. The comparison uses the same reported actuals for both versions.</p>
                         {% if evaluation.comparison_options %}
                         <form class="model-inference-form" method="get"
@@ -326,6 +331,7 @@
                         <p class="form-help">Candidate review requires recorded decision criteria from the selected model.</p>
                         {% endif %}
                         {% if evaluation.comparison.leads %}
+                        {% set recorded_evidence = check.candidate_reviews|map(attribute='evidence_sha256')|list %}
                         <table>
                             <caption>Paired MAE by lead time ({{ check.target_unit }})</caption>
                             <thead><tr><th scope="col">Lead (days)</th><th scope="col">Matched / due pairs</th><th scope="col">Selected model MAE</th><th scope="col">Comparison model MAE</th>{% if policy %}<th scope="col">Candidate review</th>{% endif %}</tr></thead>
@@ -349,6 +355,9 @@
                                             {% if not lead.review.checks.maximum_mae %}
                                             <br>MAE above limit
                                             {% endif %}
+                                            {% if lead.evidence_sha256 in recorded_evidence %}
+                                            <br><a href="#candidate-review-history">Decision recorded</a>
+                                            {% endif %}
                                         {% endif %}
                                     </td>
                                     {% endif %}
@@ -356,10 +365,52 @@
                                 {% endfor %}
                             </tbody>
                         </table>
+                        {% set reviewable = evaluation.comparison.leads|selectattr('evidence_sha256', 'defined')|rejectattr('evidence_sha256', 'in', recorded_evidence)|list %}
+                        {% if reviewable %}
+                        <form class="model-inference-form" method="post"
+                            action="{{ url_for('vibedash.forecast_candidate_review', prediction_id=check.prediction_id, compare=evaluation.comparison.sha, _anchor='forecast-quality') }}">
+                            <input type="hidden" name="csrf_token" value="{{ auth_csrf_token }}">
+                            <label for="candidate-decision">Decision by forecast lead</label>
+                            <select id="candidate-decision" name="candidate_decision" required>
+                                <option value="">Choose a lead and decision</option>
+                                {% for lead in reviewable %}
+                                <option value="{{ lead.evidence_sha256 }}:keep_selected">{{ lead.lead_days }}-day lead · Keep selected model</option>
+                                {% if lead.review.status == 'meets_criteria' %}
+                                <option value="{{ lead.evidence_sha256 }}:recommend">{{ lead.lead_days }}-day lead · Recommend candidate</option>
+                                {% endif %}
+                                {% endfor %}
+                            </select>
+                            <button type="submit" class="button button-primary">Record decision</button>
+                        </form>
+                        {% endif %}
                         {% else %}
                         <p>No paired dates are due for these versions yet.</p>
                         {% endif %}
                         {% endif %}
+                    </details>
+                    {% endif %}
+                    {% if check.candidate_reviews %}
+                    <details class="model-inference actual-correction" id="candidate-review-history" open>
+                        <summary>Recorded model decisions</summary>
+                        <ul>
+                            {% for record in check.candidate_reviews %}
+                            {% set evidence = record.evidence %}
+                            <li>
+                                <strong>{{ 'Candidate recommended' if record.decision == 'recommend' else 'Selected model kept' }}</strong>
+                                · {{ evidence.lead_days }}-day lead ·
+                                <time datetime="{{ record.recorded_at }}">{{ record.recorded_at[:16]|replace('T', ' ') }} UTC</time>
+                                <br>{{ evidence.selected_sha[:12] }} → {{ evidence.candidate_sha[:12] }}
+                                · {{ evidence.matched_count }} paired dates from {{ evidence.first_date }} through {{ evidence.last_date }}
+                                <br>MAE {{ '%.8g'|format(evidence.current_mae) }} → {{ '%.8g'|format(evidence.candidate_mae) }} ({{ check.target_unit }})
+                                · Weighted error {{ '%.8g'|format(evidence.review.current_weighted_error) }} → {{ '%.8g'|format(evidence.review.candidate_weighted_error) }}
+                                <br>Required improvement {{ '%.8g'|format(100 * evidence.policy.minimum_improvement) }}%
+                                {% if evidence.policy.maximum_mae is not none %}
+                                · MAE limit {{ '%.8g'|format(evidence.policy.maximum_mae) }} ({{ check.target_unit }})
+                                {% endif %}
+                                · Error weights {{ '%.8g'|format(evidence.policy.underprediction_weight) }} under / {{ '%.8g'|format(evidence.policy.overprediction_weight) }} over
+                            </li>
+                            {% endfor %}
+                        </ul>
                     </details>
                     {% endif %}
                     {% endif %}

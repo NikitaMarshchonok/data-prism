@@ -245,6 +245,11 @@ lead has at least seven due dates and full forecast and actual coverage over
 the comparison period. This gives the owner prospective evidence alongside
 temporal backtests for a model replacement decision.
 
+The owner can record a recommendation or keep the selected model for an
+evaluated lead. The recorded decision retains the model versions, criteria,
+coverage and scores used at the time. Later corrections can produce a new
+review with its own evidence.
+
 Next, rehearse recovery on provisioned infrastructure and evaluate
 prospectively recorded forecasts with client data. Distinguish drift from
 measured quality loss, then test an explicit alert policy and candidate

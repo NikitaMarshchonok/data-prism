@@ -1,6 +1,7 @@
 """Explicit account-owned identity for shared forecast actuals."""
 from collections import defaultdict
 from datetime import timedelta
+import hashlib
 import json
 import re
 import unicodedata
@@ -15,7 +16,14 @@ class ForecastSeriesError(ForecastOutcomeError):
     """The requested series binding cannot be used for this forecast."""
 
 
+class ForecastCandidateReviewError(ForecastOutcomeError):
+    def __init__(self, message, *, status=422):
+        super().__init__(message)
+        self.status = status
+
+
 MIN_QUALITY_DATES = 7
+MAX_CANDIDATE_REVIEWS = 20
 
 
 def initialize_series(connection):
@@ -38,6 +46,16 @@ def initialize_series(connection):
         actual_json TEXT NOT NULL, correction_count INTEGER NOT NULL,
         PRIMARY KEY(scope_id, series_id, day)
     )''')
+    connection.execute('''CREATE TABLE IF NOT EXISTS forecast_candidate_reviews (
+        scope_id TEXT NOT NULL, prediction_id TEXT NOT NULL, evidence_sha256 TEXT NOT NULL,
+        decision TEXT NOT NULL, recorded_at TEXT NOT NULL, evidence_json TEXT NOT NULL,
+        PRIMARY KEY(scope_id, prediction_id, evidence_sha256)
+    )''')
+    connection.execute('''CREATE TRIGGER IF NOT EXISTS forecast_candidate_reviews_cleanup
+        AFTER DELETE ON forecast_outcomes BEGIN
+            DELETE FROM forecast_candidate_reviews
+            WHERE scope_id=OLD.scope_id AND prediction_id=OLD.prediction_id;
+        END''')
     # A shared fact lives only while some retained forecast still covers it.
     # Keeping cleanup on the parent DELETE also covers expiry and account
     # erasure through an older application version using this same database.
@@ -232,11 +250,13 @@ def evaluate_series_model(connection, scope, series_id, report, *, now, reportin
         })
     if evaluation['comparison'] is not None:
         evaluation['comparison']['leads'] = _compare_versions(
-            eligible, candidate_issues, actuals, due_through, review_policy=review_policy)
+            eligible, candidate_issues, actuals, due_through, review_policy=review_policy,
+            selected_sha=report['model_sha256'], candidate_sha=compare_to)
     return evaluation
 
 
-def _compare_versions(current_issues, candidate_issues, actuals, due_through, *, review_policy):
+def _compare_versions(current_issues, candidate_issues, actuals, due_through, *,
+                      review_policy, selected_sha, candidate_sha):
     paired = defaultdict(list)
     expected = defaultdict(int)
     review_start = min(candidate_issues)
@@ -263,14 +283,31 @@ def _compare_versions(current_issues, candidate_issues, actuals, due_through, *,
                 observed, [left['prediction'] for left, _ in matched], decision_policy=review_policy)
             candidate_scores = score_predictions(
                 observed, [right['prediction'] for _, right in matched], decision_policy=review_policy)
-        leads.append({
+        comparison = {
             'lead_days': lead, 'due_count': len(due), 'matched_count': len(matched),
             'current_mae': current_scores['mae'] if current_scores is not None else None,
             'candidate_mae': candidate_scores['mae'] if candidate_scores is not None else None,
             'review': (_review_candidate(review_policy, candidate_scores, current_scores,
                                          expected[lead], len(due), len(matched))
                        if review_policy is not None else None),
-        })
+        }
+        review = comparison['review']
+        if review is not None and 'checks' in review:
+            dates = [left['date'] for left, _ in matched]
+            evidence = {
+                'selected_sha': selected_sha, 'candidate_sha': candidate_sha,
+                'first_date': dates[0], 'last_date': dates[-1], 'policy': review_policy,
+                **comparison,
+            }
+            inputs = [
+                (day, left['prediction'], right['prediction'], actuals[day]['value'],
+                 actuals[day]['received_at'], len(actuals[day].get('superseded', [])))
+                for (left, right), day in zip(matched, dates)
+            ]
+            fingerprint = hashlib.sha256(json.dumps(
+                [evidence, inputs], sort_keys=True, allow_nan=False).encode()).hexdigest()
+            comparison.update(evidence=evidence, evidence_sha256=fingerprint)
+        leads.append(comparison)
     return leads
 
 
@@ -286,6 +323,48 @@ def _review_candidate(policy, candidate_scores, current_scores, expected, paired
     return {'status': 'meets_criteria' if all(checks.values()) else 'below_criteria',
             'candidate_weighted_error': result['weighted_absolute_error'],
             'current_weighted_error': result['baseline_weighted_absolute_error'], 'checks': checks}
+
+
+def candidate_review_from_form(form):
+    values = form.getlist('candidate_decision')
+    match = re.fullmatch(r'([0-9a-f]{64}):(recommend|keep_selected)', values[0]) if len(values) == 1 else None
+    if match is None:
+        raise ForecastCandidateReviewError('Use the comparison form to record one decision.')
+    return match.groups()
+
+
+def save_candidate_review(connection, scope, prediction_id, comparison, submission, now):
+    evidence_sha, decision = submission
+    existing = connection.execute('''SELECT decision FROM forecast_candidate_reviews
+        WHERE scope_id=? AND prediction_id=? AND evidence_sha256=?''',
+        (scope, prediction_id, evidence_sha)).fetchone()
+    if existing is not None:
+        if existing['decision'] == decision:
+            return
+        raise ForecastCandidateReviewError('A decision is already recorded for this evidence.', status=409)
+    evidence = next((lead['evidence'] for lead in (comparison or {}).get('leads', ())
+                     if lead.get('evidence_sha256') == evidence_sha), None)
+    if evidence is None:
+        raise ForecastCandidateReviewError('The comparison has changed. Review the latest results.', status=409)
+    if decision == 'recommend' and evidence['review']['status'] != 'meets_criteria':
+        raise ForecastCandidateReviewError('The candidate must meet the criteria before recommendation.')
+    count = connection.execute('''SELECT count(*) FROM forecast_candidate_reviews
+        WHERE scope_id=? AND prediction_id=?''', (scope, prediction_id)).fetchone()[0]
+    if count >= MAX_CANDIDATE_REVIEWS:
+        raise ForecastCandidateReviewError('This saved forecast has reached its review limit.', status=409)
+    connection.execute('''INSERT INTO forecast_candidate_reviews
+        (scope_id, prediction_id, evidence_sha256, decision, recorded_at, evidence_json)
+        VALUES (?, ?, ?, ?, ?, ?)''',
+        (scope, prediction_id, evidence_sha, decision, now.isoformat(timespec='microseconds'),
+         json.dumps(evidence, allow_nan=False)))
+
+
+def list_candidate_reviews(connection, scope, prediction_id):
+    return [{'evidence_sha256': row['evidence_sha256'], 'decision': row['decision'],
+             'recorded_at': row['recorded_at'], 'evidence': json.loads(row['evidence_json'])}
+            for row in connection.execute('''SELECT evidence_sha256, decision, recorded_at, evidence_json
+                FROM forecast_candidate_reviews WHERE scope_id=? AND prediction_id=?
+                ORDER BY recorded_at DESC, evidence_sha256''', (scope, prediction_id))]
 
 
 def count_series_corrections(connection, scope, series_id):
