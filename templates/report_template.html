@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Отчет Data Prism</title>
+    <title>Data Prism Report</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
         body {
@@ -80,41 +80,41 @@
     </style>
 </head>
 <body>
-    <h1>Отчет Data Prism</h1>
+    <h1>Data Prism Report</h1>
 
     <!-- 🔽 Кнопка для ручного создания и скачивания PDF -->
     <div>
-        <a href="/download-pdf" class="download-button">📄 Скачать отчет в PDF</a>
+        <a href="/download-pdf" class="download-button">📄 Download PDF report</a>
     </div>
 
     {% if data_quality %}
     <div class="section">
-        <h2>🛡️ Качество данных: {{ data_quality.score }}/100 — {{ data_quality.status }}</h2>
+        <h2>🛡️ Data quality: {{ data_quality.score }}/100 — {{ data_quality.status }}</h2>
         <div class="quality-summary">
             <div class="quality-card">
                 <strong>{{ data_quality.missing_percent }}%</strong>
-                Пропущено ячеек: {{ data_quality.missing_cells }}
+                Missing cells: {{ data_quality.missing_cells }}
             </div>
             <div class="quality-card">
                 <strong>{{ data_quality.duplicate_percent }}%</strong>
-                Строк-дубликатов: {{ data_quality.duplicate_rows }}
+                Duplicate rows: {{ data_quality.duplicate_rows }}
             </div>
             <div class="quality-card">
                 <strong>{{ data_quality.constant_columns | length }}</strong>
-                Постоянных столбцов
+                Constant columns
             </div>
             <div class="quality-card">
                 <strong>{{ data_quality.outlier_cells }}</strong>
-                Числовых выбросов по IQR
+                Potential numeric outliers (IQR)
             </div>
         </div>
 
         {% if data_quality.constant_columns %}
-        <p><b>Постоянные столбцы:</b> {{ data_quality.constant_columns | join(', ') }}</p>
+        <p><b>Constant columns:</b> {{ data_quality.constant_columns | join(', ') }}</p>
         {% endif %}
 
         {% if data_quality.outliers %}
-        <p><b>Выбросы по столбцам:</b>
+        <p><b>Potential outliers by column:</b>
             {% for column, count in data_quality.outliers.items() %}
                 {{ column }} — {{ count }}{% if not loop.last %}; {% endif %}
             {% endfor %}
@@ -122,7 +122,7 @@
         {% endif %}
 
         <div class="recommendations">
-            <b>Рекомендации</b>
+            <b>Recommendations</b>
             <ul>
                 {% for recommendation in data_quality.recommendations %}
                 <li>{{ recommendation }}</li>
@@ -134,12 +134,12 @@
 
     {% if column_overview %}
     <div class="section">
-        <h2>📋 Типы данных и уникальные значения</h2>
+        <h2>📋 Data types and unique values</h2>
         <table>
             <tr>
-                <th>Столбец</th>
-                <th>Тип данных</th>
-                <th>Уникальные значения</th>
+                <th>Column</th>
+                <th>Data type</th>
+                <th>Unique values</th>
             </tr>
             {% for col, info in column_overview.items() %}
             <tr>
@@ -153,15 +153,15 @@
     {% endif %}
 
     <div class="section">
-        <h2>📊 Статистика данных</h2>
+        <h2>📊 Descriptive statistics</h2>
         <table>
             <tr>
-                <th>Столбец</th>
-                <th>Среднее</th>
-                <th>Медиана</th>
-                <th>Стандартное отклонение</th>
-                <th>Мин</th>
-                <th>Макс</th>
+                <th>Column</th>
+                <th>Mean</th>
+                <th>Median</th>
+                <th>Standard deviation</th>
+                <th>Min</th>
+                <th>Max</th>
             </tr>
             {% for col, metrics in stats.items() %}
             <tr>
@@ -178,11 +178,11 @@
 
     {% if missing_data %}
     <div class="section">
-        <h2>📉 Пропущенные значения</h2>
+        <h2>📉 Missing values</h2>
         <table>
             <tr>
-                <th>Столбец</th>
-                <th>Кол-во</th>
+                <th>Column</th>
+                <th>Count</th>
                 <th>%</th>
             </tr>
             {% for col, info in missing_data.items() %}
@@ -198,19 +198,19 @@
 
     {% if corr_chart %}
     <div class="section">
-        <h2>🧠 Корреляционная матрица</h2>
+        <h2>🧠 Correlation matrix</h2>
         {{ corr_chart | safe }}
-        <p style="font-size: 15px; color: #444;">Показаны взаимосвязи между числовыми переменными. Чем ближе значение к 1 или -1 — тем сильнее связь между столбцами.</p>
+        <p style="font-size: 15px; color: #444;">Values closer to 1 or -1 indicate a stronger linear association between numeric columns.</p>
     </div>
     {% endif %}
 
     {% if categorical_data %}
     <div class="section">
-        <h2>🔠 Категориальные переменные</h2>
+        <h2>🔠 Categorical variables</h2>
         {% for col, info in categorical_data.items() %}
             <h3>{{ col }}</h3>
             <table>
-                <tr><th>Значение</th><th>Количество</th></tr>
+                <tr><th>Value</th><th>Count</th></tr>
                 {% for val, count in info.table.items() %}
                 <tr>
                     <td>{{ val }}</td>
@@ -220,7 +220,7 @@
             </table>
             <div class="chart">
                 {{ info.chart | safe }}
-                <p>Эта диаграмма показывает, насколько часто встречаются значения в столбце <b>{{ col }}</b>. Это помогает выявить доминирующие категории в данных.</p>
+                <p>This chart shows how often each value appears in <b>{{ col }}</b>.</p>
             </div>
         {% endfor %}
     </div>
@@ -228,14 +228,14 @@
 
     {% if time_trends %}
     <div class="section">
-        <h2>🕒 Временные тренды</h2>
+        <h2>🕒 Trends over time</h2>
         {% for col, chart_html in time_trends.items() %}
         <div class="chart">
             <h3>{{ col }}</h3>
             {{ chart_html | safe }}
             <p>
-                Этот график показывает <strong>динамику</strong> переменной <strong>{{ col }}</strong> со временем.
-                Он помогает выявить тренды, пики и провалы в распределении данных.
+                This chart shows how <strong>{{ col }}</strong> changes over time.
+                Look for trends, peaks, and dips in the series.
             </p>
         </div>
         {% endfor %}
@@ -243,7 +243,7 @@
     {% endif %}
 
     <div class="section">
-        <h2>📈 Интерактивные графики</h2>
+        <h2>📈 Interactive charts</h2>
         {% for col, chart_html in interactive_charts.items() %}
         <div class="chart">
             {{ chart_html | safe }}

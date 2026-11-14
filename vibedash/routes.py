@@ -1224,7 +1224,7 @@ if vibedash_bp:
         preset_prompts = {
             "saas_review": "Review weekly SaaS performance: compare revenue, customer count and churn across periods and available segments. Check data quality and show supporting numbers and limitations. Identify what needs investigation before making a business decision.",
             "sales": "Sales dashboard for a monthly CSV: main KPIs (Total Sales, Orders, AOV), top 10 categories, revenue trend by week, bar by region, filter by region, highlight YoY growth.",
-            "finance": "Финансы: сумма дохода и расходов, дельта, тренд по неделям, топ-категории расходов, фильтр по отделу, комментарий по выбросам.",
+            "finance": "Show total income and expenses, their difference and weekly trends. Identify the largest expense categories, include a department filter, and flag unusual values for review.",
             "real_estate": "Real-estate listing analysis: median price by city, distribution by rooms, time trend by posting date (W), filter by city, show top 10 streets by average price."
         }
         

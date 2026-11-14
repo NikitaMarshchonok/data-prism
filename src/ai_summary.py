@@ -65,28 +65,28 @@ def generate_ai_summary_openai(df: pd.DataFrame, max_rows=4) -> str:
     num_rows, num_cols = df.shape
 
     prompt = (
-        f"Проанализируй таблицу данных. Кол-во строк: {num_rows}, колонок: {num_cols}.\n"
-        "Сделай краткий и чёткий отчёт в формате:\n\n"
-        "**Общие данные:**\n"
-        "- Кол-во строк: ...\n"
-        "- Колонок: ...\n\n"
-        "**Ключевые наблюдения:**\n"
+        f"Summarize the dataset. Rows: {num_rows}. Columns: {num_cols}.\n"
+        "Use these headings and limit observations to the provided preview:\n\n"
+        "**Dataset overview:**\n"
+        "- Rows: ...\n"
+        "- Columns: ...\n\n"
+        "**Key observations:**\n"
         "- ...\n\n"
-        "**Аномалии:**\n"
+        "**Potential anomalies:**\n"
         "- ...\n\n"
-        "**Вывод:**\n"
+        "**Conclusion:**\n"
         "...\n\n"
-        f"Вот первые строки таблицы:\n{preview}"
+        f"First rows:\n{preview}"
     )
 
     try:
         client = _openai_client()
         if client is None:
-            return "⚠️ AI Summary недоступен: переменная OPENAI_API_KEY не настроена."
+            return "⚠️ AI summary is unavailable because OPENAI_API_KEY is not configured."
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",  # или gpt-4, если доступен
             messages=[
-                {"role": "system", "content": "Ты — профессиональный дата-аналитик."},
+                {"role": "system", "content": "Write the summary in English. Preserve quoted source column names and values in their original form."},
                 {"role": "user", "content": prompt}
             ],
             temperature=0.5,
@@ -96,4 +96,4 @@ def generate_ai_summary_openai(df: pd.DataFrame, max_rows=4) -> str:
         return response.choices[0].message.content.strip()
 
     except Exception as e:
-        return f"❌ Ошибка при генерации AI Summary с ChatGPT: {e}"
+        return f"❌ Could not generate the AI summary: {e}"

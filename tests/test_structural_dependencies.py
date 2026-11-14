@@ -213,9 +213,9 @@ class StructuralDependencyTests(unittest.TestCase):
         data = frame()
         correlation = DataScienceAI(data).analyze_question("correlation")
         self.assertIn("cnt = casual + registered", correlation["answer"])
-        self.assertIn("не являются независимыми открытиями", correlation["answer"])
+        self.assertIn("share a built-in arithmetic relationship", correlation["answer"])
         self.assertNotIn("registered ↔ cnt", correlation["answer"])
-        self.assertNotIn("Самые коррелирующие колонки", " ".join(
+        self.assertNotIn("registered ↔ cnt", " ".join(
             item for item in correlation["insights"] if isinstance(item, str)))
         statistics = DataScienceAI(data).analyze_question("statistical tests")
         self.assertIn("observed arithmetic relationship", statistics["answer"])

@@ -28,7 +28,7 @@ def load_data(file_path, max_rows=100000):
 
     try:
         if not isinstance(max_rows, int) or max_rows <= 0:
-            raise ValueError("max_rows должен быть положительным целым числом.")
+            raise ValueError("max_rows must be a positive integer.")
 
         read_limit = max_rows + 1
         if ext in ['.xlsx', '.xls']:
@@ -50,12 +50,12 @@ def load_data(file_path, max_rows=100000):
                 except Exception:
                     continue
             else:
-                raise ValueError("❌ Ни одна из кодировок не подошла для CSV.")
+                raise ValueError("❌ The CSV could not be read with the supported encodings.")
         else:
-            raise ValueError(f"❌ Формат файла '{ext}' не поддерживается.")
+            raise ValueError(f"❌ Unsupported file format '{ext}'.")
 
         if df is None or df.shape[1] == 0:
-            raise ValueError("❌ Файл не содержит доступных для анализа столбцов.")
+            raise ValueError("❌ The file contains no columns available for analysis.")
 
         if len(df) > max_rows:
             df = df.iloc[:max_rows].copy()

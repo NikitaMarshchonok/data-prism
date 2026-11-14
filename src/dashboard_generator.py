@@ -21,24 +21,24 @@ def generate_summary(df):
     summary_lines = []
 
     # 🧾 Общая информация
-    summary_lines.append(f"Всего строк: {len(df):,}")
-    summary_lines.append(f"Колонок: {len(df.columns)}")
+    summary_lines.append(f"Total rows: {len(df):,}")
+    summary_lines.append(f"Columns: {len(df.columns)}")
 
     # 📉 Пропуски
     missing_cols = df.columns[df.isnull().any()].tolist()
     if missing_cols:
-        summary_lines.append(f"Колонки с пропущенными значениями: {', '.join(missing_cols)}")
+        summary_lines.append(f"Columns with missing values: {', '.join(missing_cols)}")
     else:
-        summary_lines.append("Пропущенных значений нет.")
+        summary_lines.append("No missing values.")
 
     # 🧮 Типы данных
     type_counts = df.dtypes.value_counts()
-    summary_lines.append("Типы данных: " + ", ".join([f"{t}: {c}" for t, c in type_counts.items()]))
+    summary_lines.append("Data types: " + ", ".join([f"{t}: {c}" for t, c in type_counts.items()]))
 
     # 📊 Категориальные колонки
     cat_cols = [col for col in df.columns if df[col].nunique() <= 20 and df[col].dtype == 'object']
     for col in cat_cols[:3]:
-        summary_lines.append(f"Колонка '{col}' содержит {df[col].nunique()} уникальных значений: {', '.join(map(str, df[col].dropna().unique()[:5])) + ('...' if df[col].nunique() > 5 else '')}")
+        summary_lines.append(f"Column '{col}' has {df[col].nunique()} distinct values: {', '.join(map(str, df[col].dropna().unique()[:5])) + ('...' if df[col].nunique() > 5 else '')}")
 
     return "<br>".join(summary_lines)
 
@@ -47,33 +47,33 @@ def generate_missing_comment(df):
     missing = missing[missing > 0].sort_values(ascending=False)
 
     if missing.empty:
-        return "✅ Пропущенные значения отсутствуют."
+        return "✅ No missing values."
 
     top_col = missing.idxmax()
     top_pct = (missing.max() / len(df)) * 100
     total_cols = missing.shape[0]
 
-    return f"🔍 Наибольшее количество пропусков — в колонке '{top_col}' ({top_pct:.1f}%). Всего колонок с пропусками: {total_cols}. Рекомендуем рассмотреть заполнение или удаление строк."
+    return f"🔍 '{top_col}' has the highest share of missing values ({top_pct:.1f}%). Columns with missing values: {total_cols}. Consider imputing values or excluding rows where appropriate."
 
 
 
 def generate_chart_comment(df, col, chart_type):
     if chart_type == "hist":
         desc = df[col].describe()
-        return f"📊 {col}: медиана — {df[col].median():.1f}, min — {desc['min']:.1f}, max — {desc['max']:.1f}"
+        return f"📊 {col}: median = {df[col].median():.1f}, min = {desc['min']:.1f}, max = {desc['max']:.1f}"
 
     elif chart_type == "cat":
         top_val = df[col].value_counts().idxmax()
         top_count = df[col].value_counts().max()
         total = df[col].count()
         percent = top_count / total * 100
-        return f"🔢 Самая частая категория — '{top_val}' ({percent:.1f}%)"
+        return f"🔢 Most frequent category: '{top_val}' ({percent:.1f}%)"
 
     elif chart_type == "trend":
-        return f"📉 Значения {col} со временем — {df[col].min():.1f} → {df[col].max():.1f}"
+        return f"📉 Range of observed {col} values: {df[col].min():.1f} → {df[col].max():.1f}"
 
     else:
-        return "ℹ️ Комментарий недоступен."
+        return "ℹ️ No description available."
 
 
 def generate_sparklines(df):
@@ -127,9 +127,9 @@ def generate_dashboard_data(df, target_column=None):
 
 
     kpis = {
-        'Всего записей': f"{df.shape[0]:,}",
-        'Кол-во колонок': str(df.shape[1]),
-        'Пропущенных значений': str(df.isnull().sum().sum())
+        'Total rows': f"{df.shape[0]:,}",
+        'Columns': str(df.shape[1]),
+        'Missing values': str(df.isnull().sum().sum())
     }
 
     custom_kpis = generate_dynamic_kpis(df)
@@ -166,9 +166,9 @@ def generate_dashboard_data(df, target_column=None):
         sparklines[col] = fig.to_html(full_html=False, include_plotlyjs=False)
 
 
-    fill_percent = custom_kpis.pop('📦 Заполненность данных', None)
-    unique_percent = custom_kpis.pop('🔁 Уникальность', None)
-    first_col_name = custom_kpis.pop('🧬 Первая колонка', None)
+    fill_percent = custom_kpis.pop('📦 Data completeness', None)
+    unique_percent = custom_kpis.pop('🔁 Uniqueness', None)
+    first_col_name = custom_kpis.pop('🧬 First column', None)
 
     kpis.update(custom_kpis)
 
@@ -180,11 +180,11 @@ def generate_dashboard_data(df, target_column=None):
         variances = df[numeric_cols].var().sort_values(ascending=False)
         top3 = variances.head(3)
         top_dispersion = ', '.join([f"{col} ({var:.1f})" for col, var in top3.items()])
-        kpis['📈 Топ-дисперсия'] = top_dispersion
+        kpis['📈 Highest variance'] = top_dispersion
 
     # 🔹 Гистограммы с современным стилем
     for col in numeric_cols[:2]:
-        fig = px.histogram(df, x=col, title=f"Распределение: {col}")
+        fig = px.histogram(df, x=col, title=f"Distribution: {col}")
         fig.update_layout(
             plot_bgcolor='#131c2c',
             paper_bgcolor='#131c2c',
@@ -196,11 +196,11 @@ def generate_dashboard_data(df, target_column=None):
             marker_color='rgba(0, 200, 255, 0.7)',
             marker_line_color='rgba(0, 200, 255, 1)',
             marker_line_width=1.5,
-            hovertemplate='Значение: %{x}<br>Частота: %{y}<extra></extra>'
+            hovertemplate='Value: %{x}<br>Frequency: %{y}<extra></extra>'
         )
         comment = generate_chart_comment(df, col, "hist")
         top_charts.append({
-            'title': f'Гистограмма: {col}',
+            'title': f'Histogram: {col}',
             'html': fig.to_html(full_html=False),
             'comment': comment
         })
@@ -213,7 +213,7 @@ def generate_dashboard_data(df, target_column=None):
     for col in filtered_cats[:2]:
         top_values = df[col].value_counts().reset_index()
         top_values.columns = [col, 'count']
-        fig = px.bar(top_values, x=col, y='count', title=f'Частотный график: {col}')
+        fig = px.bar(top_values, x=col, y='count', title=f'Frequency chart: {col}')
         fig.update_layout(
             plot_bgcolor='#131c2c',
             paper_bgcolor='#131c2c',
@@ -225,11 +225,11 @@ def generate_dashboard_data(df, target_column=None):
             marker_color='rgba(255, 99, 132, 0.7)',
             marker_line_color='rgba(255, 99, 132, 1)',
             marker_line_width=1.5,
-            hovertemplate='Категория: %{x}<br>Частота: %{y}<extra></extra>'
+            hovertemplate='Category: %{x}<br>Frequency: %{y}<extra></extra>'
         )
         comment = generate_chart_comment(df, col, "cat")
         top_charts.append({
-            'title': f'Частотный график: {col}',
+            'title': f'Frequency chart: {col}',
             'html': fig.to_html(full_html=False),
             'comment': comment
         })
@@ -257,16 +257,16 @@ def generate_dashboard_data(df, target_column=None):
             )
         )
         fig.update_layout(
-            title='📊 Матрица корреляции',
+            title='📊 Correlation matrix',
             font=dict(color='white'),
             paper_bgcolor='#131c2c',
             plot_bgcolor='#131c2c',
             margin=dict(t=40, b=30, l=0, r=0)
         )
         top_charts.append({
-            'title': '📊 Матрица корреляции',
+            'title': '📊 Correlation matrix',
             'html': fig.to_html(full_html=False),
-            'comment': '🔗 Коэффициенты корреляции между числовыми признаками'
+            'comment': '🔗 Correlation coefficients between numeric features'
         })
 
 
@@ -281,7 +281,7 @@ def generate_dashboard_data(df, target_column=None):
     for time_col in time_cols[:1]:
         df['_time'] = pd.to_datetime(df[time_col], errors='coerce')
         for num_col in numeric_cols[:2]:
-            fig = px.scatter(df, x='_time', y=num_col, title=f"📉 Тренд по дате: {num_col}")
+            fig = px.scatter(df, x='_time', y=num_col, title=f"📉 Trend over time: {num_col}")
             fig.update_layout(
                 plot_bgcolor='#131c2c',
                 paper_bgcolor='#131c2c',
@@ -294,11 +294,11 @@ def generate_dashboard_data(df, target_column=None):
                     size=6,
                     line=dict(width=1, color='rgba(0, 255, 180, 1)')
                 ),
-                hovertemplate='Дата: %{x}<br>Значение: %{y}<extra></extra>'
+                hovertemplate='Date: %{x}<br>Value: %{y}<extra></extra>'
             )
             comment = generate_chart_comment(df, num_col, "trend")
             top_charts.append({
-                'title': f'📉 Тренд по дате: {num_col}',
+                'title': f'📉 Trend over time: {num_col}',
                 'html': fig.to_html(full_html=False),
                 'comment': comment
             })
@@ -347,8 +347,9 @@ def generate_dashboard_data(df, target_column=None):
         try:
             percent = float(fill_percent.replace('%', '').replace(',', '.'))
             top_charts.insert(0, {
-                'title': '📦 Индикатор заполненности данных',
-                'html': create_gauge("📦 Заполненность данных", percent)
+                'title': '📦 Data completeness indicator',
+                'type': 'indicator',
+                'html': create_gauge("📦 Data completeness", percent)
             })
         except Exception as e:
             print(f"⚠️ Индикатор заполненности не построен: {e}")
@@ -357,21 +358,21 @@ def generate_dashboard_data(df, target_column=None):
         try:
             percent = float(unique_percent.replace('%', '').replace(',', '.'))
             top_charts.insert(1, {
-                'title': f'🔁 Уникальность значений: {first_col_name}',
-                'html': create_gauge(f"🔁 Уникальность: {first_col_name}", percent)
+                'title': f'🔁 Uniqueness of values: {first_col_name}',
+                'html': create_gauge(f"🔁 Uniqueness: {first_col_name}", percent)
             })
         except Exception as e:
             print(f"⚠️ Индикатор уникальности не построен: {e}")
 
     table1 = {
-        'title': '🔍 Первые 5 строк набора данных',
+        'title': '🔍 First 5 rows',
         'headers': list(df.columns),
         'rows': df.head(5).values.tolist()
     }
 
     table2 = {
-        'title': '📌 Типы данных колонок',
-        'headers': ['Колонка', 'Тип данных'],
+        'title': '📌 Column data types',
+        'headers': ['Column', 'Data type'],
         'rows': [[col, str(dtype)] for col, dtype in df.dtypes.items()]
     }
 
@@ -380,8 +381,8 @@ def generate_dashboard_data(df, target_column=None):
     if not missing.empty:
         total = len(df)
         table3 = {
-            'title': '📉 Пропущенные значения по колонкам',
-            'headers': ['Колонка', 'Пропущено', 'Процент'],
+            'title': '📉 Missing values by column',
+            'headers': ['Column', 'Missing', 'Percent'],
             'rows': [
                 [col, int(missing[col]), f"{(missing[col]/total*100):.1f}%"]
                 for col in missing.index
@@ -390,8 +391,8 @@ def generate_dashboard_data(df, target_column=None):
         }
     else:
         table3 = {
-            'title': '📉 Пропущенные значения',
-            'headers': ['✅ Все значения заполнены!'],
+            'title': '📉 Missing values',
+            'headers': ['✅ All values are present'],
             'rows': [],
             'comment': generate_missing_comment(df)
         }
@@ -414,8 +415,8 @@ def generate_dashboard_data(df, target_column=None):
 
     if outlier_rows:
         table4 = {
-            'title': '📉 Выбросы по IQR',
-            'headers': ['Колонка', 'Кол-во выбросов', '% выбросов'],
+            'title': '📉 IQR outliers',
+            'headers': ['Column', 'Outlier count', 'Outlier percentage'],
             'rows': outlier_rows
         }
         tables.append(table4)
@@ -428,10 +429,10 @@ def generate_dashboard_data(df, target_column=None):
     try:
         ml_result = predict_target(df, target_column)
         ml_card = {
-            "target": ml_result.get("target_col", "Не определена"),
+            "target": ml_result.get("target_col", "Unspecified"),
             "task_type": ml_result.get("task_type"),
             "model_name": ml_result.get("model_name"),
-            "metric": ml_result.get("metric", "Нет метрики"),
+            "metric": ml_result.get("metric", "Metric unavailable"),
             "predictive_support": ml_result.get("predictive_support", {}),
             "plot": ml_result.get("feature_importance_plot", None),
             "model_comparison": ml_result.get("model_comparison", []),

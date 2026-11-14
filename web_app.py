@@ -214,10 +214,10 @@ def save_uploaded_dataset(uploaded_file):
     """Безопасно сохраняет исходник и нормализованную CSV-копию датасета."""
     original_filename = secure_filename(uploaded_file.filename or '')
     if not original_filename:
-        raise ValueError('Некорректное имя файла.')
+        raise ValueError('Invalid file name.')
     if not is_supported_data_file(original_filename):
         supported = ', '.join(sorted(SUPPORTED_DATA_EXTENSIONS))
-        raise ValueError(f'Неподдерживаемый формат. Допустимые расширения: {supported}.')
+        raise ValueError(f'Unsupported file format. Supported extensions: {supported}.')
 
     dataset_id = uuid.uuid4().hex
     source_filename = f'{dataset_id}_{original_filename}'
@@ -227,7 +227,7 @@ def save_uploaded_dataset(uploaded_file):
     data, truncated = load_data(source_path)
     if data is None:
         os.remove(source_path)
-        raise ValueError('Не удалось прочитать файл. Проверьте его формат и содержимое.')
+        raise ValueError('Could not read the file. Check its format and contents.')
 
     dataset_filename = f'{dataset_id}.csv'
     dataset_path = os.path.join(app.config['UPLOAD_FOLDER'], dataset_filename)
@@ -248,7 +248,7 @@ def save_uploaded_dataset(uploaded_file):
 def baseline_profile_path(filename):
     """Resolve only server-generated baseline profile names."""
     if not isinstance(filename, str) or not re.fullmatch(r'[0-9a-f]{32}\.json', filename):
-        raise ValueError('Некорректная ссылка на baseline-профиль.')
+        raise ValueError('Invalid baseline profile reference.')
     return os.path.join(app.config['BASELINE_FOLDER'], filename)
 
 
@@ -272,7 +272,7 @@ def get_drift_store():
 @app.errorhandler(413)
 def upload_too_large(_error):
     max_upload_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
-    return f'Файл слишком большой. Максимальный размер: {max_upload_mb} МБ.', 413
+    return f'The file is too large. Maximum size: {max_upload_mb} MB.', 413
 
 
 @app.get('/healthz')
@@ -353,18 +353,18 @@ def readinesscheck():
 def upload_file():
     if request.method == 'POST':
         if 'datafile' not in request.files:
-            return 'Нет файла в запросе!', 400
+            return 'No file was submitted.', 400
         file = request.files['datafile']
         if file.filename == '':
-            return 'Файл не выбран!', 400
+            return 'Select a file to upload.', 400
         if file:
             try:
                 data, truncated, dataset_id, dataset_filename = save_uploaded_dataset(file)
             except ValueError as error:
                 return str(error), 400
             except Exception:
-                app.logger.exception('Не удалось сохранить загруженный датасет')
-                return 'Внутренняя ошибка при сохранении файла.', 500
+                app.logger.exception('Could not save the uploaded dataset')
+                return 'Could not save the file.', 500
 
             report_filename = f'{dataset_id}.html'
             report_path = os.path.join(app.config['REPORT_FOLDER'], report_filename)
@@ -376,7 +376,7 @@ def upload_file():
             # ⏱️ Временные колонки
             data, detected_time_cols = convert_time_columns(data.copy())
             if detected_time_cols:
-                print(f"🕒 Найдены временные колонки: {', '.join(detected_time_cols)}")
+                print(f"🕒 Detected time columns: {', '.join(detected_time_cols)}")
 
             # 📊 Анализ
             stats, numeric_cols = analyze_data(data)
@@ -425,14 +425,14 @@ def upload_file():
     max_upload_mb = app.config['MAX_CONTENT_LENGTH'] // (1024 * 1024)
     return f'''
     <!doctype html>
-    <html lang="ru">
-    <head><meta charset="UTF-8"><title>Загрузите файл с данными</title></head>
+    <html lang="en">
+    <head><meta charset="UTF-8"><title>Upload a data file</title></head>
     <body>
-        <h1>Загрузите файл с данными</h1>
+        <h1>Upload a data file</h1>
         <form method="post" enctype="multipart/form-data">
             <input type="file" name="datafile" accept=".csv,.tsv,.xlsx,.xls,.json,.parquet" required>
-            <p>Поддерживаются CSV, TSV, Excel, JSON и Parquet до {max_upload_mb} МБ.</p>
-            <input type="submit" value="Загрузить">
+            <p>Supports CSV, TSV, Excel, JSON, and Parquet files up to {max_upload_mb} MB.</p>
+            <input type="submit" value="Upload">
         </form>
     </body>
     </html>
@@ -449,21 +449,21 @@ def show_report(filename):
 def download_pdf():
     report_filename = session.get('report_filename')
     if not report_filename:
-        return 'Сначала загрузите датасет и создайте HTML-отчёт!', 400
+        return 'Upload a dataset and generate an HTML report first.', 400
 
     html_report = os.path.join(app.config['REPORT_FOLDER'], report_filename)
     pdf_filename = f'{os.path.splitext(report_filename)[0]}.pdf'
     pdf_report = os.path.join(app.config['REPORT_FOLDER'], pdf_filename)
     if not os.path.exists(html_report):
-        return 'HTML-отчёт не найден. Загрузите датасет повторно.', 404
+        return 'HTML report unavailable. Upload the dataset again.', 404
 
     try:
         export_report_to_pdf(html_report, pdf_report)
-        print("✅ PDF успешно создан вручную.")
+        print("✅ PDF report created.")
         return send_from_directory(app.config['REPORT_FOLDER'], pdf_filename, as_attachment=True)
     except Exception:
-        app.logger.exception('Не удалось создать PDF-отчёт')
-        return 'Не удалось создать PDF-отчёт.', 500
+        app.logger.exception('Could not create the PDF report')
+        return 'Could not create the PDF report.', 500
 
 
 # ✅ Маршрут: BI-дэшборд
@@ -474,34 +474,34 @@ def show_dashboard():
 
     dataset_filename = session.get('dataset_filename')
     if not dataset_filename:
-        return '<h2>Сначала загрузите датасет на главной странице.</h2>', 400
+        return '<h2>Upload a dataset on the home page first.</h2>', 400
 
     # Загружаем датасет только из текущей пользовательской сессии
     dataset_path = os.path.join(app.config['UPLOAD_FOLDER'], dataset_filename)
     df, _ = load_data(dataset_path)
     if df is None:
-        return "<h2>❌ Ошибка загрузки данных</h2>", 404
+        return "<h2>Could not load the dataset</h2>", 404
 
     drift_store = None
     drift_store_error = None
     try:
         drift_store = get_drift_store()
     except (OSError, sqlite3.Error, ValueError):
-        app.logger.exception('Не удалось открыть журнал drift-мониторинга')
-        drift_store_error = 'Журнал drift-мониторинга временно недоступен.'
+        app.logger.exception('Could not open the drift history')
+        drift_store_error = 'Drift history is temporarily unavailable.'
 
     if request.method == 'POST' and request.form.get('dashboard_action') == 'acknowledge_drift_alert':
         if drift_store is None:
-            return 'Журнал drift-мониторинга недоступен.', 503
+            return 'Drift history is unavailable.', 503
         try:
             alert_id = int(request.form.get('alert_id', ''))
             if not drift_store.acknowledge_alert(alert_id):
-                return 'Alert не найден или уже подтверждён.', 404
+                return 'The alert is unavailable or has already been acknowledged.', 404
         except (TypeError, ValueError):
-            return 'Некорректный идентификатор alert.', 400
+            return 'Invalid alert ID.', 400
         except sqlite3.Error:
-            app.logger.exception('Не удалось подтвердить drift alert')
-            return 'Журнал drift-мониторинга недоступен.', 503
+            app.logger.exception('Could not acknowledge the drift alert')
+            return 'Drift history is unavailable.', 503
         return redirect(url_for('show_dashboard'))
 
     # Явно фиксируем текущий датасет как эталон.
@@ -521,9 +521,9 @@ def show_dashboard():
             )
             session['baseline_profile_filename'] = baseline_filename
         except (OSError, ValueError):
-            app.logger.exception('Не удалось сохранить baseline-профиль')
+            app.logger.exception('Could not save the baseline profile')
             return (
-                'Не удалось сохранить baseline-профиль текущего датасета.',
+                'Could not save the current dataset as the baseline.',
                 400,
             )
         return redirect(url_for('show_dashboard'))
@@ -539,11 +539,11 @@ def show_dashboard():
             drift_report = compare_to_baseline(df, baseline_profile)
         except (OSError, ValueError):
             app.logger.exception(
-                'Не удалось сравнить датасет с baseline-профилем'
+                'Could not compare the dataset with the baseline profile'
             )
             drift_error = (
-                'Baseline-профиль недоступен или повреждён. '
-                'Сохраните новый эталон.'
+                'The baseline profile is unavailable or corrupted. '
+                'Save a new baseline.'
             )
 
     if drift_report is not None and drift_store is not None:
@@ -554,10 +554,10 @@ def show_dashboard():
                 dataset_name=session.get('dataset_name', dataset_filename),
             )
         except (sqlite3.Error, TypeError, ValueError):
-            app.logger.exception('Не удалось записать drift-событие')
+            app.logger.exception('Could not record the drift event')
             drift_store_error = (
-                'Не удалось записать результат в журнал '
-                'drift-мониторинга.'
+                'Could not save the result to the '
+                'drift history.'
             )
 
     if drift_store is not None:
@@ -566,10 +566,10 @@ def show_dashboard():
             drift_alerts = drift_store.list_alerts(limit=10)
         except sqlite3.Error:
             app.logger.exception(
-                'Не удалось прочитать журнал drift-мониторинга'
+                'Could not read drift history'
             )
             drift_store_error = (
-                'Журнал drift-мониторинга временно недоступен.'
+                'Drift history is temporarily unavailable.'
             )
 
     # Получаем список подходящих колонок для целевой переменной
@@ -603,8 +603,8 @@ def show_dashboard():
             selected_target=selected_target
         )
     except Exception:
-        app.logger.exception('Не удалось сформировать BI-дашборд')
-        return "<h2>❌ Не удалось сформировать дашборд.</h2>", 500
+        app.logger.exception('Could not build the BI dashboard')
+        return "<h2>Could not build the dashboard.</h2>", 500
 
 
 

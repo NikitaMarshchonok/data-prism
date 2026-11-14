@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>📊 BI-Дэшборд – Data Prism</title>
+    <title>📊 BI Dashboard – Data Prism</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
     <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
@@ -170,34 +170,34 @@
 
 <!-- 🔹 Навигация -->
 <div class="nav-bar">
-    <a href="#kpi">📌 Показатели</a>
+    <a href="#kpi">📌 Metrics</a>
     <a href="#drift">🛰️ Data drift</a>
-    <a href="#charts">📈 Графики</a>
-    <a href="#tables">📋 Таблицы</a>
+    <a href="#charts">📈 Charts</a>
+    <a href="#tables">📋 Tables</a>
 </div>
 
-<h1>📊 BI-Дэшборд по данным</h1>
+<h1>📊 BI Dashboard</h1>
 
-<!-- 🧾 Сводка по данным -->
+<!-- 🧾 Dataset overview -->
 <div style="background-color: #1e2a3b; padding: 20px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-    <h2 style="color: #00cec9;">🧾 Сводка по данным</h2>
+    <h2 style="color: #00cec9;">🧾 Dataset overview</h2>
     <p style="line-height: 1.6; font-size: 15px;">{{ summary | safe }}</p>
 </div>
 
 <!-- Красивый AI Summary -->
 {% if ai_summary %}
 <div style="background-color: #1e2a3b; padding: 20px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-    <h2 style="color: #00cec9;">🧠 AI-Анализ датасета</h2>
+    <h2 style="color: #00cec9;">🧠 AI dataset summary</h2>
     <div style="line-height: 1.6; font-size: 15px;">{{ ai_summary | markdown }}</div>
 </div>
 {% endif %}
 
-<h1>📊 BI-Дэшборд по данным</h1>
+<h1>📊 BI Dashboard</h1>
 
 <!-- 🎯 Dropdown для выбора целевой переменной -->
 <form method="POST" action="/dashboard" style="margin-bottom: 20px;">
     <label for="target_column" style="color: white; font-weight: bold;">
-        🎯 Выберите целевую переменную:
+        🎯 Select a target variable:
     </label>
     <select id="target_column" name="target_column" onchange="this.form.submit()" style="margin-left: 10px; padding: 5px; font-size: 14px;">
         {% for col in selectable_columns %}
@@ -209,15 +209,15 @@
 
 <!-- 🛰️ Baseline-to-current data drift -->
 <div id="drift" style="background-color: #1e2a3b; padding: 20px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-    <h2 style="color: #00cec9;">🛰️ Мониторинг data drift</h2>
+    <h2 style="color: #00cec9;">🛰️ Data drift monitoring</h2>
     <p style="color: #b2bec3; line-height: 1.5;">
-        Зафиксируйте проверенный датасет как baseline. Следующие загруженные наборы будут сравниваться
-        с его агрегированным профилем; исходные строки в baseline не сохраняются.
+        Save a reviewed dataset as the baseline. Future uploads will be compared
+        with its aggregate profile. The profile stores summary statistics.
     </p>
     <form method="POST" action="/dashboard" style="margin: 14px 0 20px;">
         <input type="hidden" name="dashboard_action" value="set_drift_baseline">
         <button type="submit" style="padding: 9px 14px; border: 0; border-radius: 7px; background: #0984e3; color: white; cursor: pointer;">
-            {% if baseline_configured %}Обновить baseline текущими данными{% else %}Сохранить текущий датасет как baseline{% endif %}
+            {% if baseline_configured %}Update the baseline with current data{% else %}Save the current dataset as the baseline{% endif %}
         </button>
     </form>
 
@@ -229,20 +229,20 @@
         <p style="color: #ff7675;">{{ drift_error }}</p>
     {% elif drift_report %}
         <p style="color: {% if drift_report.status == 'critical' %}#ff7675{% elif drift_report.status == 'warning' %}#ffeaa7{% else %}#55efc4{% endif %};">
-            <strong>Статус: {{ drift_report.status }}</strong> — {{ drift_report.summary }}
+            <strong>Status: {{ drift_report.status }}</strong> — {{ drift_report.summary }}
         </p>
         <p style="color: #b2bec3;">
-            Baseline: {{ drift_report.baseline_dataset_name or 'без имени' }},
-            {{ drift_report.baseline_rows }} строк; текущий набор: {{ drift_report.current_rows }} строк.
+            Baseline: {{ drift_report.baseline_dataset_name or 'unnamed' }},
+            {{ drift_report.baseline_rows }} rows. Current dataset: {{ drift_report.current_rows }} rows.
         </p>
 
         {% set schema = drift_report.schema_changes %}
         {% if schema.missing_columns or schema.new_columns or schema.type_changes %}
             <div style="color: #ffeaa7; margin: 12px 0;">
-                {% if schema.missing_columns %}<p><strong>Удалённые колонки:</strong> {{ schema.missing_columns | join(', ') }}</p>{% endif %}
-                {% if schema.new_columns %}<p><strong>Новые колонки:</strong> {{ schema.new_columns | join(', ') }}</p>{% endif %}
+                {% if schema.missing_columns %}<p><strong>Removed columns:</strong> {{ schema.missing_columns | join(', ') }}</p>{% endif %}
+                {% if schema.new_columns %}<p><strong>New columns:</strong> {{ schema.new_columns | join(', ') }}</p>{% endif %}
                 {% if schema.type_changes %}
-                    <p><strong>Изменения типов:</strong>
+                    <p><strong>Data type changes:</strong>
                     {% for item in schema.type_changes %}
                         {{ item.feature }} ({{ item.baseline_type }} → {{ item.current_type }}){% if not loop.last %}; {% endif %}
                     {% endfor %}
@@ -255,9 +255,9 @@
             <div style="overflow-x: auto;">
                 <table style="width: 100%; border-collapse: collapse; margin: 12px 0 18px;">
                     <thead><tr style="text-align: left; color: #dfe6e9;">
-                        <th style="padding: 8px;">Признак</th><th style="padding: 8px;">Метрика</th>
-                        <th style="padding: 8px;">Значение</th><th style="padding: 8px;">Δ пропусков</th>
-                        <th style="padding: 8px;">Уровень</th>
+                        <th style="padding: 8px;">Feature</th><th style="padding: 8px;">Metric</th>
+                        <th style="padding: 8px;">Value</th><th style="padding: 8px;">Change in missing values</th>
+                        <th style="padding: 8px;">Severity</th>
                     </tr></thead>
                     <tbody>{% for item in drift_report.feature_drift[:10] %}
                         <tr style="color: #b2bec3; border-top: 1px solid #2d3b4f;">
@@ -272,15 +272,15 @@
             </div>
         {% endif %}
         <p style="color: #ffeaa7; font-size: 0.85rem;">
-            PSI/TV-пороги служат для первичного контроля и должны быть откалиброваны под бизнес-контекст.
-            Проверки пока не запускаются по расписанию, а alerts не отправляются во внешние каналы.
+            Calibrate the PSI and TV thresholds for the business context.
+            Checks run on demand. Review alerts here.
         </p>
     {% else %}
-        <p style="color: #ffeaa7;">Baseline пока не задан — сравнение drift ещё не выполняется.</p>
+        <p style="color: #ffeaa7;">Save a baseline to start comparing datasets.</p>
     {% endif %}
 
     {% if drift_alerts %}
-        <h3 style="color: #ff7675; margin-top: 22px;">Активные drift alerts</h3>
+        <h3 style="color: #ff7675; margin-top: 22px;">Active drift alerts</h3>
         {% for alert in drift_alerts %}
             <div style="border-left: 4px solid {% if alert.severity == 'critical' %}#d63031{% else %}#fdcb6e{% endif %}; background: #172235; padding: 12px; margin: 10px 0;">
                 <strong>{{ alert.title }}</strong>
@@ -290,7 +290,7 @@
                     <input type="hidden" name="dashboard_action" value="acknowledge_drift_alert">
                     <input type="hidden" name="alert_id" value="{{ alert.id }}">
                     <button type="submit" style="padding: 5px 9px; border: 0; border-radius: 5px; background: #636e72; color: white; cursor: pointer;">
-                        Подтвердить
+                        Acknowledge
                     </button>
                 </form>
             </div>
@@ -298,12 +298,12 @@
     {% endif %}
 
     {% if drift_history %}
-        <h3 style="color: #74b9ff; margin-top: 22px;">Последние drift-проверки</h3>
+        <h3 style="color: #74b9ff; margin-top: 22px;">Recent drift checks</h3>
         <div style="overflow-x: auto;">
             <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
                 <thead><tr style="text-align: left; color: #dfe6e9;">
-                    <th style="padding: 8px;">Время</th><th style="padding: 8px;">Датасет</th>
-                    <th style="padding: 8px;">Статус</th><th style="padding: 8px;">Результат</th>
+                    <th style="padding: 8px;">Time</th><th style="padding: 8px;">Dataset</th>
+                    <th style="padding: 8px;">Status</th><th style="padding: 8px;">Result</th>
                 </tr></thead>
                 <tbody>{% for run in drift_history %}
                     <tr style="color: #b2bec3; border-top: 1px solid #2d3b4f;">
@@ -321,46 +321,46 @@
 
 
 
-<!-- 🎯 ML-предсказание -->
+<!-- 🎯 Predictive evaluation -->
 {% if ml_card %}
 <div style="background-color: #1e2a3b; padding: 20px; border-radius: 15px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-    <h2 style="color: #00cec9;">🎯 ML-предсказание</h2>
-    <p><strong>Целевая переменная:</strong> {{ ml_card.target }}</p>
+    <h2 style="color: #00cec9;">🎯 Predictive evaluation</h2>
+    <p><strong>Target variable:</strong> {{ ml_card.target }}</p>
     {% if ml_card.task_type %}
-        <p><strong>Тип задачи:</strong> {{ ml_card.task_type }}</p>
+        <p><strong>Task type:</strong> {{ ml_card.task_type }}</p>
     {% endif %}
     {% if ml_card.model_name %}
-        <p><strong>Модель:</strong> {{ ml_card.model_name }}</p>
+        <p><strong>Model:</strong> {{ ml_card.model_name }}</p>
     {% endif %}
-    <p><strong>Метрика модели:</strong> {{ ml_card.metric }}</p>
+    <p><strong>Model metric:</strong> {{ ml_card.metric }}</p>
     {% if ml_card.predictive_support %}
-        <h3 style="color: #74b9ff; margin-top: 20px;">Проверка предсказательной поддержки</h3>
+        <h3 style="color: #74b9ff; margin-top: 20px;">Predictive support</h3>
         <p style="color: {% if ml_card.predictive_support.status == 'supported_on_holdout' %}#55efc4{% else %}#ffeaa7{% endif %};">
             {{ ml_card.predictive_support.summary }}
         </p>
         {% if ml_card.predictive_support.permutation_p_value is defined %}
             <p style="color: #b2bec3;">
                 {{ ml_card.predictive_support.primary_metric }}:
-                {{ ml_card.predictive_support.observed_score }} против baseline
+                {{ ml_card.predictive_support.observed_score }} versus baseline
                 {{ ml_card.predictive_support.baseline_score }};
                 permutation p={{ ml_card.predictive_support.permutation_p_value }}.
             </p>
         {% endif %}
     {% endif %}
     {% if ml_card.model_comparison %}
-        <h3 style="color: #74b9ff; margin-top: 20px;">Сравнение моделей</h3>
+        <h3 style="color: #74b9ff; margin-top: 20px;">Model comparison</h3>
         <p style="color: #b2bec3;">
-            {{ ml_card.cv_folds }}-fold cross-validation только на обучающей выборке;
-            метрика: {{ ml_card.cv_metric }}.
+            {{ ml_card.cv_folds }}-fold cross-validation on the training set.
+            Metric: {{ ml_card.cv_metric }}.
         </p>
         <div style="overflow-x: auto;">
             <table style="width: 100%; border-collapse: collapse; margin: 12px 0 18px;">
                 <thead>
                     <tr style="text-align: left; color: #dfe6e9;">
-                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Модель</th>
-                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Среднее</th>
-                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Ст. отклонение</th>
-                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Результат</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Model</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Mean</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Standard deviation</th>
+                        <th style="padding: 8px; border-bottom: 1px solid #44546a;">Result</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -371,11 +371,11 @@
                             <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">{{ "%.4f"|format(candidate.mean_score) }}</td>
                             <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">{{ "%.4f"|format(candidate.std_score) }}</td>
                             <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">
-                                {% if candidate.selected %}✅ выбрана{% else %}оценена{% endif %}
+                                {% if candidate.selected %}Selected{% else %}Evaluated{% endif %}
                             </td>
                         {% else %}
-                            <td colspan="2" style="padding: 8px; border-bottom: 1px solid #2d3b4f;">Ошибка оценки</td>
-                            <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">не выбрана</td>
+                            <td colspan="2" style="padding: 8px; border-bottom: 1px solid #2d3b4f;">Evaluation failed</td>
+                            <td style="padding: 8px; border-bottom: 1px solid #2d3b4f;">—</td>
                         {% endif %}
                     </tr>
                 {% endfor %}
@@ -384,11 +384,11 @@
         </div>
     {% endif %}
     {% if ml_card.diagnostics.type == "classification" %}
-        <h3 style="color: #74b9ff; margin-top: 20px;">Диагностика по классам</h3>
+        <h3 style="color: #74b9ff; margin-top: 20px;">Per-class metrics</h3>
         <div style="overflow-x: auto;">
             <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
                 <thead><tr style="text-align: left; color: #dfe6e9;">
-                    <th style="padding: 8px;">Класс</th><th style="padding: 8px;">Precision</th>
+                    <th style="padding: 8px;">Class</th><th style="padding: 8px;">Precision</th>
                     <th style="padding: 8px;">Recall</th><th style="padding: 8px;">F1</th>
                     <th style="padding: 8px;">Support</th>
                 </tr></thead>
@@ -411,7 +411,7 @@
             </p>
         {% endif %}
     {% elif ml_card.diagnostics.type == "regression" %}
-        <h3 style="color: #74b9ff; margin-top: 20px;">Диагностика ошибок</h3>
+        <h3 style="color: #74b9ff; margin-top: 20px;">Error diagnostics</h3>
         <p style="color: #b2bec3;">
             Mean error: {{ ml_card.diagnostics.residual_summary.mean_error }};
             median absolute error: {{ ml_card.diagnostics.residual_summary.median_absolute_error }};
@@ -420,12 +420,12 @@
         </p>
     {% endif %}
     {% if ml_card.reliability %}
-        <h3 style="color: #74b9ff; margin-top: 20px;">Надёжность оценки</h3>
+        <h3 style="color: #74b9ff; margin-top: 20px;">Evaluation reliability</h3>
         <p style="color: {% if ml_card.reliability.status == 'warning' %}#ffeaa7{% else %}#b2bec3{% endif %};">
             {{ ml_card.reliability.summary }}
         </p>
         {% if ml_card.reliability.feature_stability %}
-            <p style="color: #b2bec3;"><strong>Наибольшие различия train/holdout:</strong>
+            <p style="color: #b2bec3;"><strong>Largest differences between training and holdout:</strong>
                 {% for item in ml_card.reliability.feature_stability[:3] %}
                     {{ item.feature }}={{ "%.3f"|format(item.distance) }} ({{ item.severity }}){% if not loop.last %}; {% endif %}
                 {% endfor %}
@@ -435,8 +435,8 @@
             <div style="overflow-x: auto;">
                 <table style="width: 100%; border-collapse: collapse; margin-bottom: 16px;">
                     <thead><tr style="text-align: left; color: #dfe6e9;">
-                        <th style="padding: 8px;">Подгруппа</th><th style="padding: 8px;">Метрика</th>
-                        <th style="padding: 8px;">Gap</th><th style="padding: 8px;">Худшая группа</th>
+                        <th style="padding: 8px;">Subgroup</th><th style="padding: 8px;">Metric</th>
+                        <th style="padding: 8px;">Gap</th><th style="padding: 8px;">Worst-performing group</th>
                     </tr></thead>
                     <tbody>{% for item in ml_card.reliability.subgroup_performance %}
                         <tr style="color: #b2bec3; border-top: 1px solid #2d3b4f;">
@@ -465,7 +465,7 @@
         {% endif %}
         <img src="{{ ml_card.plot }}" style="max-width: 100%; border-radius: 10px; margin-top: 10px;">
     {% else %}
-        <p>❌ Нет графика важности признаков.</p>
+        <p>Feature importance is unavailable.</p>
     {% endif %}
 </div>
 {% endif %}
@@ -486,10 +486,10 @@
 
 
 
-<!-- 🔘 Gauge-индикаторы -->
+<!-- Gauge indicators -->
 <div style="display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 40px;">
     {% for chart in top_charts %}
-        {% if "Индикатор" in chart.title %}
+        {% if chart.type == "indicator" %}
         <div style="flex: 1; min-width: 320px; background: #1e2a3b; padding: 20px; border-radius: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); margin-bottom: 20px;">
             <h3 style="color: #00cec9; font-size: 18px;">{{ chart.title }}</h3>
             {{ chart.html | safe }}
@@ -498,11 +498,11 @@
     {% endfor %}
 </div>
 
-<!-- 🔹 Графики -->
+<!-- 🔹 Charts -->
 <div id="charts" class="section">
-    <h2>📈 Графики</h2>
+    <h2>📈 Charts</h2>
     {% for chart in top_charts %}
-    {% if "Индикатор" not in chart.title %}
+    {% if chart.type != "indicator" %}
     <div class="chart">
         <h3>{{ chart.title }}</h3>
         {{ chart.html | safe }}
@@ -516,9 +516,9 @@
     {% endfor %}
 </div>
 
-<!-- 🔹 Таблицы -->
+<!-- 🔹 Tables -->
 <div id="tables" class="section">
-    <h2>📋 Таблицы</h2>
+    <h2>📋 Tables</h2>
     {% for table in tables %}
     <div class="table-section">
         <div class="table-title">{{ table.title }}</div>
@@ -567,16 +567,16 @@
                 autoWidth: false,
                 order: [],
                 language: {
-                    search: "Поиск:",
-                    lengthMenu: "Показать _MENU_ записей",
-                    info: "Показано _START_–_END_ из _TOTAL_ записей",
+                    search: "Search:",
+                    lengthMenu: "Show _MENU_ records",
+                    info: "Showing _START_–_END_ of _TOTAL_ records",
                     paginate: {
-                        first: "Первый",
-                        last: "Последний",
+                        first: "First",
+                        last: "Last",
                         next: "➡",
                         previous: "⬅"
                     },
-                    zeroRecords: "Ничего не найдено"
+                    zeroRecords: "No matching records"
                 }
             });
         }

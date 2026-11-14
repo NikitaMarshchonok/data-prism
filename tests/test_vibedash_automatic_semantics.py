@@ -46,9 +46,9 @@ class VibeDashAutomaticSemanticsTests(unittest.TestCase):
             role: sum(profile["role"] == role for profile in profiles.values())
             for role in ("category", "temporal", "identifier")
         }
-        self.assertIn(f"Найдено {counts['category']} категориальных колонок", spec.comments)
-        self.assertIn("Временные поля: 1", spec.comments)
-        self.assertIn("Идентификаторы (не числовые меры): 1", spec.comments)
+        self.assertIn(f"Categorical columns: {counts['category']}", spec.comments)
+        self.assertIn("Time columns: 1", spec.comments)
+        self.assertIn("Identifier columns: 1", spec.comments)
         self.assertEqual(counts["category"], 7)
         self.assertEqual(counts["temporal"], 1)
         self.assertEqual(counts["identifier"], 1)
@@ -65,8 +65,8 @@ class VibeDashAutomaticSemanticsTests(unittest.TestCase):
         spec = parse_prompt_to_viz_spec(
             "Show revenue over time", list(frame.columns), dataframe=frame, column_profiles=profiles,
         )
-        self.assertIn("Найдено 1 категориальных колонок", spec.comments)
-        self.assertIn("Временные поля: 1", spec.comments)
+        self.assertIn("Categorical columns: 1", spec.comments)
+        self.assertIn("Time columns: 1", spec.comments)
         self.assertFalse(any(chart.group == "Region" for chart in spec.charts))
 
     @staticmethod

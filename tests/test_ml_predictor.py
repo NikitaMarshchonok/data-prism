@@ -100,7 +100,7 @@ class ModelEvaluationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["model_comparison"], [])
-        self.assertIn("минимум 3 наблюдения", result["metric"])
+        self.assertIn("at least 3 observations", result["metric"])
 
     def test_too_small_dataset_returns_explanatory_error(self):
         data = pd.DataFrame({"feature": [1, 2, 3], "target": [0, 1, 0]})
@@ -109,7 +109,7 @@ class ModelEvaluationTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "error")
         self.assertIsNone(result["feature_importance_plot"])
-        self.assertIn("минимум", result["metric"])
+        self.assertIn("at least", result["metric"])
 
 
 if __name__ == "__main__":

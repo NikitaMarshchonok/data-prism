@@ -20,14 +20,14 @@ class AnalyzeDataQualityTests(unittest.TestCase):
         result = analyze_data_quality(data)
 
         self.assertEqual(result["score"], 100)
-        self.assertEqual(result["status"], "Отличное")
+        self.assertEqual(result["status"], "Excellent")
         self.assertEqual(result["missing_cells"], 0)
         self.assertEqual(result["duplicate_rows"], 0)
         self.assertEqual(result["constant_columns"], [])
         self.assertEqual(result["outliers"], {})
         self.assertEqual(
             result["recommendations"],
-            ["Критичных проблем качества не обнаружено."],
+            ["The quality checks found no critical issues."],
         )
 
     def test_detects_common_quality_problems(self):
@@ -51,7 +51,7 @@ class AnalyzeDataQualityTests(unittest.TestCase):
         result = analyze_data_quality(pd.DataFrame())
 
         self.assertEqual(result["score"], 0)
-        self.assertEqual(result["status"], "Нет данных")
+        self.assertEqual(result["status"], "No data")
         self.assertEqual(len(result["recommendations"]), 1)
 
     def test_quality_audit_is_rendered_in_report(self):
@@ -71,9 +71,9 @@ class AnalyzeDataQualityTests(unittest.TestCase):
             )
             report_html = output_file.read_text(encoding="utf-8")
 
-        self.assertIn("Качество данных:", report_html)
-        self.assertIn("Постоянные столбцы:</b> constant", report_html)
-        self.assertIn("Удалите постоянные столбцы", report_html)
+        self.assertIn("Data quality:", report_html)
+        self.assertIn("Constant columns:</b> constant", report_html)
+        self.assertIn("Consider excluding constant columns", report_html)
 
 
 if __name__ == "__main__":

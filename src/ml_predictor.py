@@ -62,30 +62,30 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None, *,
             return _error_report(str(error), target_column)
         return forecast_series(df, task)
     if not isinstance(df, pd.DataFrame) or df.empty:
-        return _error_report("Не удалось обучить модель: датасет пуст.")
+        return _error_report("Model training requires a dataset with at least one row.")
     if not df.columns.is_unique:
-        return _error_report("Названия колонок должны быть уникальными.")
+        return _error_report("Column names must be unique.")
     if target_column is not None and (not isinstance(target_column, str) or not target_column.strip()):
-        return _error_report("Укажите непустое имя целевой колонки.")
+        return _error_report("Enter a target column name.")
     if target_column is not None and target_column not in df.columns:
-        return _error_report("Указанная целевая колонка отсутствует; другая цель не выбирается.", target_column)
+        return _error_report("The selected target column is missing from the dataset.", target_column)
     if sampling_design not in (None, "independent_rows"):
-        return _error_report("Неизвестный дизайн проверки модели.", target_column)
+        return _error_report("Unknown model validation design.", target_column)
     profiles = profile_dataframe_columns(df)
     if (sampling_design is None and any(column_role(column, profiles) == "temporal" for column in df)):
         return _error_report(
-            "В данных есть время: случайное разделение не подтверждает качество прогноза. "
-            "Задайте forecast_task с целью, временем и горизонтом; для независимых объектов "
-            "нужно явно подтвердить sampling_design='independent_rows'.", target_column)
+            "The data contains time information. Forecast evaluation requires a time-based split. "
+            "Specify a forecast_task with a target, time column, and horizon. For independent observations, "
+            "explicitly set sampling_design='independent_rows'.", target_column)
 
     target_col = _select_target(df, target_column)
     if target_col is None:
-        return _error_report("Не удалось выбрать целевую переменную.")
+        return _error_report("A target column could not be selected.")
 
     modelling_data = df.dropna(subset=[target_col]).copy()
     if len(modelling_data) < MIN_TRAINING_ROWS:
         return _error_report(
-            f"Недостаточно строк для оценки модели: нужно минимум {MIN_TRAINING_ROWS}.",
+            f"Model evaluation requires at least {MIN_TRAINING_ROWS} rows.",
             target_col,
         )
 
@@ -94,10 +94,10 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None, *,
     if task_type == "classification":
         class_counts = y.value_counts()
         if len(class_counts) < 2:
-            return _error_report("Целевая переменная содержит только один класс.", target_col)
+            return _error_report("The target column contains a single class.", target_col)
         if int(class_counts.min()) < 3:
             return _error_report(
-                "Для честного разделения и кросс-валидации нужно минимум 3 наблюдения в каждом классе.",
+                "A train-test split and cross-validation require at least 3 observations per class.",
                 target_col,
             )
     if task_type == "regression":
@@ -106,11 +106,11 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None, *,
         modelling_data = modelling_data.loc[valid_target]
         y = y.loc[valid_target]
         if y.nunique(dropna=True) < 2:
-            return _error_report("Числовая цель не содержит достаточной вариативности.", target_col)
+            return _error_report("The numeric target has insufficient variation.", target_col)
 
     X, dropped_features = _prepare_features(modelling_data.drop(columns=[target_col]), y)
     if X.empty or not len(X.columns):
-        return _error_report("После проверки качества не осталось пригодных признаков.", target_col)
+        return _error_report("No features passed the quality checks.", target_col)
 
     numeric_columns = list(X.select_dtypes(include=[np.number]).columns)
     categorical_columns = [column for column in X.columns if column not in numeric_columns]
@@ -128,7 +128,7 @@ def predict_target(df: pd.DataFrame, target_column: Optional[str] = None, *,
         pipeline.fit(X_train, y_train)
         predictions = pipeline.predict(X_test)
     except ValueError as error:
-        return _error_report(f"Не удалось сформировать корректную выборку: {error}", target_col)
+        return _error_report(f"Could not prepare data for model evaluation: {error}", target_col)
 
     if task_type == "classification":
         metrics, metric_text, baseline_text = _classification_metrics(
@@ -449,7 +449,7 @@ def _select_model_with_cv(
     if task_type == "classification":
         cv_folds = min(5, int(y_train.value_counts().min()))
         if cv_folds < 2:
-            raise ValueError("Недостаточно примеров каждого класса в обучающей выборке.")
+            raise ValueError("Too few observations per class in the training set.")
         splitter = StratifiedKFold(
             n_splits=cv_folds,
             shuffle=True,
@@ -460,7 +460,7 @@ def _select_model_with_cv(
     else:
         cv_folds = min(5, len(X_train))
         if cv_folds < 2:
-            raise ValueError("Недостаточно строк для кросс-валидации.")
+            raise ValueError("Too few rows for cross-validation.")
         splitter = KFold(n_splits=cv_folds, shuffle=True, random_state=RANDOM_STATE)
         scoring = "neg_mean_absolute_error"
         metric_label = "MAE; lower is better"
@@ -512,7 +512,7 @@ def _select_model_with_cv(
         successful_candidates.append((raw_mean, model, entry))
 
     if not successful_candidates:
-        raise ValueError("Все модели завершили кросс-валидацию с ошибкой.")
+        raise ValueError("Cross-validation failed for every model.")
 
     _, selected_model, selected_entry = max(successful_candidates, key=lambda item: item[0])
     selected_entry["selected"] = True
@@ -530,7 +530,7 @@ def _split_data(X, y, task_type: str):
         maximum_test_count = len(X) - (2 * class_count)
         if maximum_test_count < class_count:
             raise ValueError(
-                "Недостаточно строк, чтобы сохранить классы в train, test и кросс-валидации."
+                "Too few rows to represent each class in the training set, test set, and cross-validation folds."
             )
         test_count = min(max(test_count, class_count), maximum_test_count)
         stratify = y
@@ -838,7 +838,7 @@ def _permutation_feature_importance(pipeline, X_test, y_test, task_type: str):
 def _error_report(message: str, target_col: Optional[Any] = None) -> Dict[str, Any]:
     return {
         "status": "error",
-        "target_col": str(target_col) if target_col is not None else "Не определена",
+        "target_col": str(target_col) if target_col is not None else "Unspecified",
         "task_type": None,
         "model_name": None,
         "metric": f"⚠️ {message}",
