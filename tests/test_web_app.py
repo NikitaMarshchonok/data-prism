@@ -91,7 +91,7 @@ class WebUploadTests(unittest.TestCase):
             filename="payload.exe",
         )
 
-        with self.assertRaisesRegex(ValueError, "Неподдерживаемый формат"):
+        with self.assertRaisesRegex(ValueError, "Unsupported file format"):
             web_app.save_uploaded_dataset(uploaded_file)
 
         self.assertEqual(list(self.upload_folder.iterdir()), [])
@@ -333,11 +333,11 @@ class WebUploadTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(duplicate_response.status_code, 200)
         html = response.get_data(as_text=True)
-        self.assertIn("Мониторинг data drift", html)
-        self.assertIn("Статус: critical", html)
+        self.assertIn("Data drift monitoring", html)
+        self.assertIn("Status: critical", html)
         self.assertIn("amount", html)
-        self.assertIn("Активные drift alerts", html)
-        self.assertIn("Последние drift-проверки", html)
+        self.assertIn("Active drift alerts", html)
+        self.assertIn("Recent drift checks", html)
         store = web_app.DriftStore(self.drift_store_path, scope_id)
         self.assertEqual(len(store.list_runs()), 1)
         self.assertEqual(len(store.list_alerts()), 1)

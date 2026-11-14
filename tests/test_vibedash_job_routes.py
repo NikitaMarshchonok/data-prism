@@ -195,6 +195,51 @@ class VibeDashJobRouteTests(unittest.TestCase):
         self.assertEqual(response.get_json()["status"], "queued")
         submit.assert_called_once()
 
+    def test_uploaded_data_gets_english_report_without_translating_source_fields(self):
+        question = "Покажи распределение по регионам"
+        csv_rows = "value,регион\n" + "\n".join(
+            f"{index * 10},{'север' if index % 2 else 'юг'}"
+            for index in range(40)
+        )
+        with (
+            patch.dict(os.environ, {"DATA_PRISM_STATE_DIR": self.temporary_directory.name}),
+            web_app.app.test_client() as client,
+        ):
+            proposal = client.post(
+                "/vibedash/readiness",
+                data={"datafile": (BytesIO(csv_rows.encode()), "regions.csv")},
+            ).get_json()["semantic_contract"]
+            proposal["confirmed"] = True
+            queued = client.post(
+                "/vibedash/jobs",
+                data={
+                    "prompt": question,
+                    "semantic_contract": json.dumps(proposal),
+                    "datafile": (BytesIO(csv_rows.encode()), "regions.csv"),
+                },
+            )
+            self.assertEqual(queued.status_code, 202)
+            status_url = queued.get_json()["status_url"]
+            for _ in range(100):
+                status = client.get(status_url).get_json()
+                if status["status"] in {"completed", "failed"}:
+                    break
+                time.sleep(0.05)
+
+            self.assertEqual(status["status"], "completed")
+            report = client.get(status["result_url"])
+            self.assertEqual(report.status_code, 200)
+
+        html = report.get_data(as_text=True)
+        self.assertIn('<html lang="en">', html)
+        self.assertIn("Analysis dashboard", html)
+        self.assertIn("Numeric measures: 1", html)
+        self.assertIn("Categorical columns: 1", html)
+        self.assertIn(question, html)
+        self.assertIn("регион", html)
+        self.assertIn("север", html)
+        self.assertNotIn("Аналитический дашборд", html)
+
     @patch("vibedash.routes.analysis_job_dispatcher.submit", return_value=True)
     def test_contract_for_different_schema_is_rejected_and_upload_removed(self, submit):
         csv_rows = "date,revenue,region\n" + "\n".join(

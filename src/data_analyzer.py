@@ -53,7 +53,7 @@ def plot_correlation_heatmap(data):
 
     fig = ff.create_annotated_heatmap(z, x=x, y=y, colorscale='Blues')
     fig.update_layout(
-        title="🧠 Корреляционная матрица",
+        title="🧠 Correlation matrix",
         title_font_size=22,
         margin=dict(t=50, l=0, r=0, b=0),
         width=800, height=600
@@ -73,8 +73,8 @@ def analyze_categorical_column(data, column, top_n=5):
     fig = px.bar(
         x=value_counts.index,
         y=value_counts.values,
-        labels={'x': column, 'y': 'Частота'},
-        title=f'🔠 Распределение значений: {column}',
+        labels={'x': column, 'y': 'Frequency'},
+        title=f'🔠 Distribution: {column}',
         color_discrete_sequence=['#00AEEF']
     )
     fig.update_layout(height=400, template='plotly_white')
@@ -106,7 +106,7 @@ def generate_description_for_column(data, column):
     desc = ""
 
     if not np.issubdtype(series.dtype, np.number):
-        return f"Столбец <b>{column}</b> не является числовым, поэтому график построен без числового описания."
+        return f"A numeric summary is unavailable for <b>{column}</b>."
 
     mean = series.mean()
     median = series.median()
@@ -118,24 +118,24 @@ def generate_description_for_column(data, column):
     skewness = series.skew()
     outliers = ((series < (mean - 3 * std)) | (series > (mean + 3 * std))).sum()
 
-    desc += f"Признак <b>{column}</b> содержит {count} наблюдений. "
-    desc += f"Среднее значение: {mean:.2f}, медиана: {median:.2f}, стандартное отклонение: {std:.2f}. "
-    desc += f"Минимум: {min_val}, максимум: {max_val}. "
+    desc += f"<b>{column}</b> contains {count} observations. "
+    desc += f"Mean: {mean:.2f}, median: {median:.2f}, standard deviation: {std:.2f}. "
+    desc += f"Minimum: {min_val}, maximum: {max_val}. "
 
     # Добавим оценку симметрии
     if skewness < -1:
-        desc += "Распределение имеет сильную левостороннюю асимметрию. "
+        desc += "The distribution is strongly left-skewed. "
     elif skewness < -0.5:
-        desc += "Распределение немного скошено влево. "
+        desc += "The distribution is slightly left-skewed. "
     elif skewness < 0.5:
-        desc += "Распределение близко к симметричному. "
+        desc += "The distribution is approximately symmetric. "
     elif skewness < 1:
-        desc += "Распределение немного скошено вправо. "
+        desc += "The distribution is slightly right-skewed. "
     else:
-        desc += "Распределение имеет сильную правостороннюю асимметрию. "
+        desc += "The distribution is strongly right-skewed. "
 
     if outliers > 0:
-        desc += f"Обнаружено выбросов: {outliers} (значения вне 3σ от среднего)."
+        desc += f"Potential outliers: {outliers} (values more than 3 standard deviations from the mean)."
 
     return desc
 
@@ -222,7 +222,7 @@ def analyze_data_quality(data):
     if row_count == 0 or column_count == 0:
         return {
             "score": 0,
-            "status": "Нет данных",
+            "status": "No data",
             "missing_cells": 0,
             "missing_percent": 0.0,
             "duplicate_rows": 0,
@@ -231,7 +231,7 @@ def analyze_data_quality(data):
             "outliers": {},
             "outlier_cells": 0,
             "recommendations": [
-                "Загрузите непустой набор данных, чтобы выполнить аудит качества."
+                "Upload a dataset with at least one row to run the quality audit."
             ],
         }
 
@@ -285,33 +285,33 @@ def analyze_data_quality(data):
     score = max(0, round(100 - penalty))
 
     if score >= 90:
-        status = "Отличное"
+        status = "Excellent"
     elif score >= 75:
-        status = "Хорошее"
+        status = "Good"
     elif score >= 50:
-        status = "Требует внимания"
+        status = "Needs attention"
     else:
-        status = "Низкое"
+        status = "Poor"
 
     recommendations = []
     if missing_cells:
         recommendations.append(
-            "Проверьте пропуски: заполните их или исключите строки и столбцы, где это оправдано."
+            "Review missing values. Consider imputing them or excluding affected rows or columns where appropriate."
         )
     if duplicate_rows:
         recommendations.append(
-            "Проверьте дублирующиеся строки и удалите повторы, если они не несут отдельного смысла."
+            "Review duplicate rows and remove any that represent the same observation."
         )
     if constant_columns:
         recommendations.append(
-            "Удалите постоянные столбцы: они не добавляют информации для анализа и моделей."
+            "Consider excluding constant columns from analysis and modeling."
         )
     if outlier_cells:
         recommendations.append(
-            "Изучите числовые выбросы: это могут быть ошибки ввода или важные редкие наблюдения."
+            "Review numeric outliers for data entry errors and meaningful rare observations."
         )
     if not recommendations:
-        recommendations.append("Критичных проблем качества не обнаружено.")
+        recommendations.append("The quality checks found no critical issues.")
 
     return {
         "score": score,

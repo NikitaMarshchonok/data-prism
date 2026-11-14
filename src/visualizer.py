@@ -24,15 +24,15 @@ def plot_histogram_interactive(data, column):
         x=column,
         nbins=nbins,
         marginal="box",
-        title=f"📊 Распределение: {column}",
+        title=f"📊 Distribution: {column}",
         template="plotly_white",
         color_discrete_sequence=["#5470C6"]  # Приятный синий цвет
     )
 
     fig.update_layout(
         title_font_size=20,
-        xaxis_title=f"{column} (значения)",  # перевод оси X
-        yaxis_title="Частота",  # перевод оси Y
+        xaxis_title=f"{column} (values)",  # перевод оси X
+        yaxis_title="Frequency",  # перевод оси Y
         bargap=0.05,
         height=450
     )
@@ -52,9 +52,9 @@ def plot_histogram(data, column, output_path):
 
     plt.figure(figsize=(8, 4))
     sns.histplot(data[column].dropna(), kde=True)
-    plt.title(f'Распределение: {column}')
+    plt.title(f'Distribution: {column}')
     plt.xlabel(column)
-    plt.ylabel('Частота')
+    plt.ylabel('Frequency')
     plt.savefig(output_path)
     plt.close()
     print(f"График для столбца {column} сохранён в {output_path}")
@@ -89,12 +89,12 @@ def plot_time_trend(df, time_col, value_col=None):
     if value_col:
         grouped = df_copy.groupby(time_col)[value_col].mean().reset_index()
         fig = px.line(grouped, x=time_col, y=value_col,
-                      title=f"Среднее значение {value_col} по времени ({time_col})")
+                      title=f"Mean {value_col} over time ({time_col})")
     else:
         grouped = df_copy[time_col].value_counts().sort_index().reset_index()
-        grouped.columns = [time_col, "Количество"]
-        fig = px.bar(grouped, x=time_col, y="Количество",
-                     title=f"Распределение записей по {time_col}")
+        grouped.columns = [time_col, "Count"]
+        fig = px.bar(grouped, x=time_col, y="Count",
+                     title=f"Record count by {time_col}")
 
     fig.update_layout(template="simple_white", height=400)
     return fig.to_html(full_html=False, include_plotlyjs='cdn')

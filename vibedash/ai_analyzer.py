@@ -98,7 +98,7 @@ class DataScienceAI:
         
         if len(numeric_cols) < 2:
             return {
-                "answer": "❌ Недостаточно числовых колонок для анализа корреляций",
+                "answer": "❌ Correlation analysis requires at least two numeric columns.",
                 "charts": [],
                 "insights": []
             }
@@ -136,30 +136,30 @@ class DataScienceAI:
         )
         
         # Формируем ответ
-        answer = f"📊 **Анализ корреляций**\n\n"
-        answer += f"Проанализировал {len(numeric_cols)} числовых колонок.\n\n"
+        answer = f"📊 **Correlation analysis**\n\n"
+        answer += f"Numeric columns analyzed: {len(numeric_cols)}.\n\n"
         
         if strong_correlations:
-            answer += "🔗 **Сильные корреляции (>0.7):**\n"
+            answer += "🔗 **Strong correlations (absolute r > 0.7):**\n"
             for corr in strong_correlations[:5]:
                 answer += f"• {corr['col1']} ↔ {corr['col2']}: {corr['correlation']:.3f}\n"
         else:
-            answer += "ℹ️ Среди остальных проверенных пар сильных корреляций не найдено.\n"
+            answer += "ℹ️ No strong correlations among the remaining pairs.\n"
 
         if dependencies:
-            answer += "\nАрифметические зависимости в проанализированных строках:\n"
+            answer += "\nArithmetic relationships in the rows analyzed:\n"
             for dependency in dependencies:
-                answer += f"• {dependency['equation']} — {dependency['evaluated_rows']} строк.\n"
+                answer += f"• {dependency['equation']} — {dependency['evaluated_rows']} rows.\n"
             answer += (
-                "Связи суммы с её составляющими не являются независимыми открытиями. "
-                "Матрица сохраняет эти коэффициенты для проверки. Перед моделированием "
-                "нужно подтвердить определения и доступность составляющих в момент прогноза.\n"
+                "The total and its components share a built-in arithmetic relationship. "
+                "The matrix includes these coefficients for inspection. Before modeling, "
+                "confirm the column definitions and check when the components become available.\n"
             )
         
         insights = [
-            f"Найдено {len(strong_correlations)} сильных корреляций вне обнаруженных связей суммы с её составляющими",
-            "Положительная корреляция означает, что значения растут вместе",
-            "Отрицательная корреляция означает обратную зависимость"
+            f"Strong correlations outside detected total-component relationships: {len(strong_correlations)}",
+            "With positive correlation, higher values of one variable tend to accompany higher values of the other.",
+            "With negative correlation, higher values of one variable tend to accompany lower values of the other."
         ]
         
         return {
@@ -186,7 +186,7 @@ class DataScienceAI:
         
         if not time_cols:
             return {
-                "answer": "❌ Временные колонки не найдены для анализа трендов",
+                "answer": "❌ Trend analysis requires a time column.",
                 "charts": [],
                 "insights": []
             }
@@ -196,7 +196,7 @@ class DataScienceAI:
         
         if len(numeric_cols) == 0:
             return {
-                "answer": "❌ Нет числовых колонок для анализа трендов",
+                "answer": "❌ Trend analysis requires a numeric column.",
                 "charts": [],
                 "insights": []
             }
@@ -231,18 +231,18 @@ class DataScienceAI:
                     last_val = df_clean[col].iloc[-1]
                     change = ((last_val - first_val) / first_val * 100) if first_val != 0 else 0
                     
-                    trend_direction = "📈 растет" if change > 0 else "📉 падает" if change < 0 else "➡️ стабилен"
-                    insights.append(f"{col}: {trend_direction} на {abs(change):.1f}%")
+                    trend_direction = "📈 increased" if change > 0 else "📉 decreased" if change < 0 else "➡️ unchanged"
+                    insights.append(f"{col}: {trend_direction} ({abs(change):.1f}% change)")
                 
             except Exception as e:
                 continue
         
-        answer = f"📈 **Анализ трендов**\n\n"
-        answer += f"Проанализировал тренды по колонке времени: {time_col}\n"
-        answer += f"Создал {len(charts)} графиков трендов\n\n"
+        answer = f"📈 **Trend analysis**\n\n"
+        answer += f"Time column: {time_col}\n"
+        answer += f"Trend charts: {len(charts)}\n\n"
         
         if insights:
-            answer += "**Основные наблюдения:**\n"
+            answer += "**Key observations:**\n"
             for insight in insights[:5]:
                 answer += f"• {insight}\n"
         
@@ -258,7 +258,7 @@ class DataScienceAI:
         
         if len(numeric_cols) == 0:
             return {
-                "answer": "❌ Нет числовых колонок для анализа распределений",
+                "answer": "❌ Distribution analysis requires a numeric column.",
                 "charts": [],
                 "insights": []
             }
@@ -288,23 +288,23 @@ class DataScienceAI:
                 skewness = self.df[col].skew()
                 
                 if abs(skewness) < 0.5:
-                    shape = "нормальное"
+                    shape = "roughly symmetric"
                 elif skewness > 0.5:
-                    shape = "правостороннее (положительная асимметрия)"
+                    shape = "right-skewed"
                 else:
-                    shape = "левостороннее (отрицательная асимметрия)"
+                    shape = "left-skewed"
                 
-                insights.append(f"{col}: {shape} распределение, среднее: {stats['mean']:.2f}")
+                insights.append(f"{col}: {shape} distribution, mean: {stats['mean']:.2f}")
                 
             except Exception as e:
                 continue
         
-        answer = f"📊 **Анализ распределений**\n\n"
-        answer += f"Проанализировал распределения {len(numeric_cols)} числовых колонок\n"
-        answer += f"Создал {len(charts)} гистограмм\n\n"
+        answer = f"📊 **Distribution analysis**\n\n"
+        answer += f"Numeric columns reviewed: {len(numeric_cols)}\n"
+        answer += f"Histograms: {len(charts)}\n\n"
         
         if insights:
-            answer += "**Характеристики распределений:**\n"
+            answer += "**Distribution summaries:**\n"
             for insight in insights[:5]:
                 answer += f"• {insight}\n"
         
@@ -320,7 +320,7 @@ class DataScienceAI:
         
         if len(numeric_cols) == 0:
             return {
-                "answer": "❌ Нет числовых колонок для анализа выбросов",
+                "answer": "❌ Outlier analysis requires a numeric column.",
                 "charts": [],
                 "insights": []
             }
@@ -362,24 +362,24 @@ class DataScienceAI:
                 })
                 
                 if outlier_count > 0:
-                    insights.append(f"{col}: {outlier_count} выбросов ({outlier_percent:.1f}%)")
+                    insights.append(f"{col}: {outlier_count} potential outliers ({outlier_percent:.1f}%)")
                 else:
-                    insights.append(f"{col}: выбросов не найдено")
+                    insights.append(f"{col}: no potential outliers found")
                 
             except Exception as e:
                 continue
         
-        answer = f"🔍 **Анализ выбросов**\n\n"
-        answer += f"Проанализировал {len(numeric_cols)} числовых колонок на наличие выбросов\n"
-        answer += f"Создал {len(charts)} box plots\n\n"
+        answer = f"🔍 **Outlier analysis**\n\n"
+        answer += f"Numeric columns reviewed for outliers: {len(numeric_cols)}\n"
+        answer += f"Box plots: {len(charts)}\n\n"
         
         if outlier_data:
-            answer += "**Найденные выбросы:**\n"
+            answer += "**Potential outliers:**\n"
             for data in outlier_data:
                 if data['count'] > 0:
-                    answer += f"• {data['column']}: {data['count']} выбросов ({data['percent']:.1f}%)\n"
+                    answer += f"• {data['column']}: {data['count']} potential outliers ({data['percent']:.1f}%)\n"
                 else:
-                    answer += f"• {data['column']}: выбросов нет\n"
+                    answer += f"• {data['column']}: no potential outliers found\n"
         
         return {
             "answer": answer,
@@ -394,30 +394,30 @@ class DataScienceAI:
             include=["object", "string", "category", "bool"]
         ).columns
         
-        answer = f"📋 **Общий анализ данных**\n\n"
-        answer += f"**Размер данных:** {len(self.df)} строк, {len(self.df.columns)} колонок\n"
-        answer += f"**Числовые колонки:** {len(numeric_cols)}\n"
-        answer += f"**Категориальные колонки:** {len(categorical_cols)}\n\n"
+        answer = f"📋 **Dataset overview**\n\n"
+        answer += f"**Dataset size:** {len(self.df)} rows, {len(self.df.columns)} columns\n"
+        answer += f"**Numeric columns:** {len(numeric_cols)}\n"
+        answer += f"**Categorical columns:** {len(categorical_cols)}\n\n"
         
         # Пропущенные значения
         missing_data = self.df.isnull().sum()
         missing_cols = missing_data[missing_data > 0]
         
         if len(missing_cols) > 0:
-            answer += f"**Пропущенные значения:** {len(missing_cols)} колонок\n"
+            answer += f"**Missing values:** {len(missing_cols)} affected columns\n"
             for col, count in missing_cols.head(3).items():
                 percent = (count / len(self.df)) * 100
                 answer += f"• {col}: {count} ({percent:.1f}%)\n"
         else:
-            answer += "**Пропущенные значения:** отсутствуют\n"
+            answer += "**Missing values:** None\n"
         
-        answer += "\n**Рекомендации:**\n"
+        answer += "\n**Recommendations:**\n"
         if len(numeric_cols) > 0:
-            answer += "• Проанализируйте корреляции между числовыми колонками\n"
+            answer += "• Review correlations between numeric columns.\n"
         if len(categorical_cols) > 0:
-            answer += "• Изучите распределение по категориям\n"
+            answer += "• Review the frequency of each category.\n"
         if len(missing_cols) > 0:
-            answer += "• Обработайте пропущенные значения\n"
+            answer += "• Review missing values and decide how to handle them.\n"
         
         # Добавляем простой график для тестирования
         charts = []
@@ -454,9 +454,9 @@ class DataScienceAI:
             "answer": answer,
             "charts": charts,
             "insights": [
-                f"Данные содержат {len(numeric_cols)} числовых и {len(categorical_cols)} категориальных колонок",
-                f"Общий размер: {len(self.df)} записей",
-                "Рекомендуется начать с анализа корреляций и распределений"
+                f"The dataset has {len(numeric_cols)} numeric columns and {len(categorical_cols)} categorical columns.",
+                f"Total rows: {len(self.df)}",
+                "Start with correlations and distributions."
             ]
         }
     
@@ -469,7 +469,7 @@ class DataScienceAI:
         
         if len(categorical_cols) == 0 or len(numeric_cols) == 0:
             return {
-                "answer": "❌ Недостаточно данных для сравнительного анализа",
+                "answer": "❌ This comparison requires a numeric column and a categorical column.",
                 "charts": [],
                 "insights": []
             }
@@ -500,19 +500,19 @@ class DataScienceAI:
             # Статистика по категориям
             category_stats = self.df.groupby(cat_col)[num_col].agg(['mean', 'median', 'std']).round(2)
             
-            insights.append(f"Сравнение {num_col} по {cat_col}:")
+            insights.append(f"Comparing {num_col} by {cat_col}:")
             for category, stats in category_stats.head(5).iterrows():
-                insights.append(f"• {category}: среднее={stats['mean']:.2f}, медиана={stats['median']:.2f}")
+                insights.append(f"• {category}: mean={stats['mean']:.2f}, median={stats['median']:.2f}")
             
         except Exception as e:
             pass
         
-        answer = f"⚖️ **Сравнительный анализ**\n\n"
-        answer += f"Сравниваю {num_col} по категориям {cat_col}\n"
-        answer += f"Создал {len(charts)} графиков сравнения\n\n"
+        answer = f"⚖️ **Comparison**\n\n"
+        answer += f"Comparing {num_col} across {cat_col} categories.\n"
+        answer += f"Comparison charts: {len(charts)}\n\n"
         
         if insights:
-            answer += "**Результаты сравнения:**\n"
+            answer += "**Comparison results:**\n"
             for insight in insights[:5]:
                 answer += f"{insight}\n"
         
@@ -524,8 +524,8 @@ class DataScienceAI:
     
     def _general_analysis(self, question: str) -> Dict[str, Any]:
         """Общий анализ на основе вопроса"""
-        answer = f"🤖 **AI Анализ**\n\n"
-        answer += f"Проанализировал ваш вопрос: \"{question}\"\n\n"
+        answer = f"🤖 **Data analysis**\n\n"
+        answer += f"Your question: \"{question}\"\n\n"
         
         # Базовые метрики
         numeric_cols = self.df.select_dtypes(include='number').columns
@@ -533,25 +533,25 @@ class DataScienceAI:
             include=["object", "string", "category", "bool"]
         ).columns
         
-        answer += f"**Данные для анализа:**\n"
-        answer += f"• {len(self.df)} записей\n"
-        answer += f"• {len(numeric_cols)} числовых колонок: {', '.join(numeric_cols[:3])}\n"
-        answer += f"• {len(categorical_cols)} категориальных колонок: {', '.join(categorical_cols[:3])}\n\n"
+        answer += f"**Available data:**\n"
+        answer += f"• {len(self.df)} rows\n"
+        answer += f"• {len(numeric_cols)} numeric columns: {', '.join(numeric_cols[:3])}\n"
+        answer += f"• {len(categorical_cols)} categorical columns: {', '.join(categorical_cols[:3])}\n\n"
         
-        answer += "**Рекомендации для анализа:**\n"
+        answer += "**Suggested analyses:**\n"
         if len(numeric_cols) > 1:
-            answer += "• Спросите о корреляциях между числовыми колонками\n"
+            answer += "• Ask about correlations between numeric columns.\n"
         if len(categorical_cols) > 0:
-            answer += "• Изучите распределение по категориям\n"
+            answer += "• Review the frequency of each category.\n"
         if len(numeric_cols) > 0:
-            answer += "• Проанализируйте тренды и выбросы\n"
+            answer += "• Explore trends and potential outliers.\n"
         
         return {
             "answer": answer,
             "charts": [],
             "insights": [
-                "Используйте конкретные вопросы для получения детального анализа",
-                "Попробуйте спросить о корреляциях, трендах или распределениях"
+                "Name the columns and the analysis you want.",
+                "Try asking about correlations, trends, or distributions."
             ]
         }
     
@@ -561,7 +561,7 @@ class DataScienceAI:
         
         if len(numeric_cols) < 2:
             return {
-                "answer": "❌ Недостаточно числовых колонок для предсказаний",
+                "answer": "❌ This model requires at least two numeric columns.",
                 "charts": [],
                 "insights": []
             }
@@ -580,7 +580,7 @@ class DataScienceAI:
             df_clean = self.df[[X_col, y_col]].dropna()
             if len(df_clean) < 10:
                 return {
-                    "answer": "❌ Недостаточно данных для построения модели (минимум 10 записей)",
+                    "answer": "❌ Model training requires at least 10 usable rows.",
                     "charts": [],
                     "insights": []
                 }
@@ -634,27 +634,27 @@ class DataScienceAI:
             )
             
             # Формируем ответ
-            answer = f"🔮 **ML Предсказательная модель**\n\n"
-            answer += f"**Модель:** Линейная регрессия\n"
-            answer += f"**Целевая переменная:** {y_col}\n"
-            answer += f"**Признак:** {X_col}\n"
-            answer += f"**Точность (R²):** {r2:.3f}\n"
-            answer += f"**Средняя ошибка (MSE):** {mse:.3f}\n\n"
+            answer = f"🔮 **Predictive model**\n\n"
+            answer += f"**Model:** Linear regression\n"
+            answer += f"**Target:** {y_col}\n"
+            answer += f"**Feature:** {X_col}\n"
+            answer += f"**Test-set R²:** {r2:.3f}\n"
+            answer += f"**Test-set mean squared error (MSE):** {mse:.3f}\n\n"
             
             if r2 > 0.7:
-                answer += "✅ **Отличная модель** - высокая точность предсказаний\n"
+                answer += "✅ **High test-set R²**\n"
             elif r2 > 0.5:
-                answer += "⚠️ **Удовлетворительная модель** - средняя точность\n"
+                answer += "⚠️ **Moderate test-set R²**\n"
             else:
-                answer += "❌ **Слабая модель** - низкая точность, нужны дополнительные признаки\n"
+                answer += "❌ **Low test-set R²**\n"
             
-            answer += f"\n**Уравнение:** {y_col} = {model.coef_[0]:.3f} × {X_col} + {model.intercept_:.3f}\n"
+            answer += f"\n**Equation:** {y_col} = {model.coef_[0]:.3f} × {X_col} + {model.intercept_:.3f}\n"
             
             insights = [
-                f"Модель объясняет {r2*100:.1f}% вариации данных",
-                f"Средняя ошибка предсказания: {np.sqrt(mse):.2f}",
-                "Линейная регрессия показывает простую зависимость между переменными",
-                "Для улучшения точности можно добавить больше признаков"
+                f"Test-set R²: {r2:.3f}",
+                f"Test-set root mean squared error: {np.sqrt(mse):.2f}",
+                "Linear regression estimates a linear relationship between the two variables.",
+                "Additional available features can be evaluated on held-out data."
             ]
             
             return {
@@ -668,13 +668,13 @@ class DataScienceAI:
             
         except ImportError:
             return {
-                "answer": "❌ Для ML анализа требуется scikit-learn. Установите: pip install scikit-learn",
+                "answer": "❌ The modeling service requires scikit-learn.",
                 "charts": [],
                 "insights": []
             }
         except Exception as e:
             return {
-                "answer": f"❌ Ошибка при построении модели: {str(e)}",
+                "answer": f"❌ Could not fit the model: {str(e)}",
                 "charts": [],
                 "insights": []
             }

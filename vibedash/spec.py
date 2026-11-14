@@ -471,13 +471,13 @@ def _parse_heuristics(
     """Эвристический парсинг промпта"""
     
     # Определяем тип дашборда по ключевым словам
-    title = "Аналитический дашборд"
+    title = "Analysis dashboard"
     if any(word in prompt for word in ["продаж", "sales", "revenue", "доход"]):
-        title = "Дашборд продаж"
+        title = "Sales dashboard"
     elif any(word in prompt for word in ["финанс", "finance", "расход", "expense"]):
-        title = "Финансовый дашборд"
+        title = "Finance dashboard"
     elif any(word in prompt for word in ["недвижим", "real estate", "property", "квартир"]):
-        title = "Анализ недвижимости"
+        title = "Real estate analysis"
     
     # Разделяем роли по реальным значениям, затем учитываем явные указания
     # пользователя. Числовой dtype сам по себе не делает поле метрикой.
@@ -667,9 +667,9 @@ def _parse_heuristics(
         filters.append(Filter(field=business_categories[0], values=None))
     
     # Комментарии
-    comments.append("Дашборд создан автоматически на основе вашего запроса")
+    comments.append("Dashboard generated from your request.")
     if numeric_cols:
-        comments.append(f"Проанализировано {len(numeric_cols)} числовых колонок")
+        comments.append(f"Numeric measures: {len(numeric_cols)}")
     # categorical_cols also holds temporal fields for chart construction.
     # Report schema roles separately, not that internal working list.
     role_counts = {
@@ -680,11 +680,11 @@ def _parse_heuristics(
         for role in ("category", "temporal", "identifier")
     }
     if role_counts["category"]:
-        comments.append(f"Найдено {role_counts['category']} категориальных колонок")
+        comments.append(f"Categorical columns: {role_counts['category']}")
     if role_counts["temporal"]:
-        comments.append(f"Временные поля: {role_counts['temporal']}")
+        comments.append(f"Time columns: {role_counts['temporal']}")
     if role_counts["identifier"]:
-        comments.append(f"Идентификаторы (не числовые меры): {role_counts['identifier']}")
+        comments.append(f"Identifier columns: {role_counts['identifier']}")
     
     return VizSpec(
         title=title,
@@ -716,17 +716,17 @@ def _improve_with_ollama(prompt: str, spec: VizSpec, df_columns: List[str]) -> O
         
         # Создаем промпт для Ollama
         system_prompt = f"""
-        Ты эксперт по анализу данных. Создай JSON спецификацию дашборда на основе:
-        - Промпт пользователя: "{prompt}"
-        - Доступные колонки: {df_columns}
+        Create a JSON dashboard specification. Write all generated titles and comments in English. Preserve source column names and category values exactly.
+        - User request: "{prompt}"
+        - Available columns: {df_columns}
         
-        Верни JSON в формате:
+        Return JSON in this format:
         {{
-            "title": "Название дашборда",
-            "metrics": [{{"title": "Название", "expr": "выражение", "fmt": "формат"}}],
-            "charts": [{{"type": "тип", "x": "колонка_x", "y": "колонка_y", "title": "название"}}],
-            "filters": [{{"field": "поле", "values": ["значения"]}}],
-            "comments": ["комментарий"]
+            "title": "Dashboard title",
+            "metrics": [{{"title": "Metric title", "expr": "expression", "fmt": "format"}}],
+            "charts": [{{"type": "chart type", "x": "x column", "y": "y column", "title": "Chart title"}}],
+            "filters": [{{"field": "column", "values": ["values"]}}],
+            "comments": ["Comment"]
         }}
         """
         

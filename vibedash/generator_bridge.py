@@ -183,7 +183,7 @@ def generate_dashboard_data(
             "kpis": [],
             "charts": [],
             "tables": [],
-            "ai_summary": "Нет данных для анализа",
+            "ai_summary": "No data to analyze.",
             "insights": [],
             "statistical_validation": StatisticalValidationEngine(empty_df).analyze(),
             "pattern_analysis": AnomalySegmentationEngine(empty_df).analyze(),
@@ -285,7 +285,7 @@ def _apply_filters(df: pd.DataFrame, filters: List[Filter]) -> pd.DataFrame:
                 mask = _evaluate_filter_condition(filtered_df, filter_obj.where)
                 filtered_df = filtered_df.loc[mask]
             except Exception as e:
-                print(f"⚠️ Ошибка в фильтре {filter_obj.field}: {e}")
+                print(f"Filter error for {filter_obj.field}: {e}")
                 continue
         
         if filter_obj.values:
@@ -311,7 +311,7 @@ def _generate_kpis(df: pd.DataFrame, metrics: List[Metric]) -> List[Dict[str, st
                 "tooltip": f"Calculation: {metric.expr}"
             })
         except Exception as e:
-            print(f"⚠️ Ошибка в метрике {metric.title}: {e}")
+            print(f"Metric error for {metric.title}: {e}")
             kpis.append({
                 "title": metric.title,
                 "value": "Unavailable",
@@ -467,15 +467,15 @@ def _generate_charts(
                 column_profiles=column_profiles,
             )
             chart_list.append({
-                "title": chart.title or f"График: {chart.type}",
+                "title": chart.title or f"Chart: {chart.type}",
                 "type": chart.type,
                 "kind": chart_kind_label(chart.type),
                 "html": html
             })
         except Exception as e:
-            print(f"⚠️ Ошибка в графике {chart.title}: {e}")
+            print(f"Chart error for {chart.title}: {e}")
             chart_list.append({
-                "title": chart.title or f"График: {chart.type}",
+                "title": chart.title or f"Chart: {chart.type}",
                 "type": chart.type,
                 "kind": chart_kind_label(chart.type),
                 "html": f"<div>Chart generation error: {escape(str(e))}</div>"
