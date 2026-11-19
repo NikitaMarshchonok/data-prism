@@ -9,6 +9,7 @@ from tests.test_forecast_policy import POLICY_FORM
 from vibedash.forecast_tasks import forecast_task_from_form, run_confirmed_forecast
 from src.forecasting import ForecastTask
 from src.forecast_backtest import historical_forecast_backtest
+from src.forecast_diagnostics import build_forecast_diagnostics
 
 
 class ForecastResultRenderingTests(unittest.TestCase):
@@ -88,22 +89,41 @@ class ForecastResultRenderingTests(unittest.TestCase):
         self.assertIn('not an accuracy percentage', html)
         self.assertIn('This does not reselect the final future model', html)
 
+    def test_error_direction_and_lead_tables_are_accessible_and_define_sign_and_coverage(self):
+        html = self.render_forecast(self.forecast)
+        self.assertIn('Error direction and horizon risk', html)
+        self.assertIn('aria-label="Final holdout error direction" tabindex="0"', html)
+        self.assertIn('aria-label="Historical errors by forecast lead" tabindex="0"', html)
+        self.assertIn('Signed error is forecast minus observed', html)
+        self.assertIn('Contributions divide by all holdout days', html)
+        self.assertIn('Failed or unevaluated origins are missing observations', html)
+        self.assertIn('The last historical window overlaps the final holdout', html)
+        self.assertNotIn('Method weighted loss', html)
+        old = copy.deepcopy(self.forecast)
+        old.pop('error_diagnostics')
+        self.assertNotIn('Error direction and horizon risk', self.render_forecast(old))
+
     def test_short_history_and_failed_windows_are_not_rendered_as_success(self):
         report = copy.deepcopy(self.forecast)
         report['historical_backtest'] = historical_forecast_backtest(daily_frame().iloc[:70], ForecastTask('cnt', 'dteday', 7))
+        report['error_diagnostics'] = build_forecast_diagnostics(report)
         html = self.render_forecast(report)
         self.assertIn('Not evaluated — insufficient history', html)
         self.assertIn('Required: 79 daily rows; supplied: 70', html)
         self.assertIn('Not scored', html)
+        self.assertIn('0 of 3 historical origins contribute', html)
+        self.assertIn('Not assessed', html)
         report = copy.deepcopy(self.forecast)
         backtest = report['historical_backtest']
         backtest['status'] = 'completed_with_issues'
         backtest['summary'].update(failed_windows=1, scored_windows=2)
         backtest['windows'][0].update(status='error', metrics=None, baseline_metrics=None, comparison=None)
+        report['error_diagnostics'] = build_forecast_diagnostics(report)
         html = self.render_forecast(report)
         self.assertIn('Evaluation has issues: 1 failed windows', html)
         self.assertIn('Evaluation failed', html)
         self.assertIn('Not scored', html)
+        self.assertIn('2 of 3 historical origins contribute', html)
 
     def test_window_labels_are_escaped_and_weighted_errors_are_visible(self):
         frame = daily_frame()
@@ -114,6 +134,8 @@ class ForecastResultRenderingTests(unittest.TestCase):
         self.assertIn('&lt;script&gt;untrusted method&lt;/script&gt;', html)
         self.assertNotIn('<script>untrusted method</script>', html)
         self.assertIn('Weighted loss:', html)
+        self.assertIn('Method weighted loss', html)
+        self.assertIn('Weighted loss from underprediction', html)
         self.assertIn('weighted absolute error under the declared preferences', html)
 
 

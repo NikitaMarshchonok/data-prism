@@ -287,6 +287,40 @@ checks returned evidence, not fitting internals,
 predictor availability, leakage freedom, usefulness or professional competence.
 Those require the separate temporal tests and independent real-case evaluation.
 
+### Descriptive error direction and forecast lead
+
+New web/CLI evaluations add `error_diagnostics` after the source-bound main
+result and historical backtest checks succeed. `forecast-error-diagnostics-v1`
+defines signed error as **prediction minus actual**: positive means
+overprediction, negative means underprediction. For the final holdout, separate
+method/reference profiles report counts of under/over/exact days, mean signed
+error, MAE contributions and largest observed under/overprediction. Counts use
+unrounded values. Mean underprediction is `sum(max(actual-prediction, 0))/N`;
+overprediction uses the opposite sign and the same denominator **all N days**,
+including exact days. These two contributions add to MAE. A mean signed error
+near zero can conceal offsetting errors.
+
+When a decision policy is supplied, each contribution is multiplied by its
+declared relative weight; their sum is weighted absolute error. Missing policy
+means these fields are `null`, not an inferred monetary cost or financial gain.
+Largest errors are descriptive sample maxima, not future error bounds.
+
+`historical_by_lead` groups the three historical origins by days **after their
+issue date**, starting at lead 1 even with a nonzero reporting delay. Every lead
+records its actual observation count and method/reference profiles. Failed and
+unevaluated origins contribute no samples and are never padded with zero error.
+With no scored origins, all leads remain explicit with zero observations and
+`null` profiles. Numerically scored candidate/domain failures remain included,
+alongside their existing visible failure flags. The final holdout is not added
+to these lead summaries: the last historical horizon already overlaps it.
+
+These dependent, small historical samples do not establish a systematic future
+bias, subgroup reliability or calibrated uncertainty. The diagnostic does not
+fit, reselect, correct, clip or approve forecasts, and does not change recorded
+criteria. Its extra summaries stay in the owner-scoped report and CLI output;
+they are not added to the aggregate audit. Existing reports without diagnostics
+remain readable and do not acquire a retroactive assessment.
+
 ### Historical evaluation on the uploaded series
 
 New completed web and CLI runs additionally include `historical_backtest`: three

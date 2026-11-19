@@ -182,6 +182,13 @@ Inconsistent historical evidence rejects delivery without retries or model
 reselection. A consistent report can still contain losses, failed windows or
 insufficient history; this check is not professional or predictive acceptance.
 
+New verified web/CLI evaluations also describe under/overprediction and errors
+by forecast lead, comparing the selected method with its reference. They expose
+actual sample counts, missing origins and asymmetric penalty contributions;
+the final holdout is not double-counted in historical lead summaries. These
+diagnostics are descriptive and do not change model selection, criteria,
+predictions or operational approval. See [FORECAST_EVALUATION.md](FORECAST_EVALUATION.md).
+
 ## 4. Model and outcome lifecycle
 
 The CLI can now explicitly save a private, versioned declarative JSON snapshot

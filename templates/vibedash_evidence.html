@@ -165,6 +165,44 @@
                 <p>Only one series and three historical origins are assessed. Missing evaluation is not success. No operational approval, confidence interval or live outcome monitoring is provided.</p>
             </article>
             {% endif %}
+            {% if forecast.error_diagnostics %}
+            {% set diagnostics = forecast.error_diagnostics %}
+            <article class="table-card rolling-backtest forecast-error-diagnostics" aria-labelledby="forecast-errors-heading">
+                <h3 id="forecast-errors-heading">Error direction and horizon risk</h3>
+                <p>Final holdout only: {{ diagnostics.holdout.model.observations }} days. Signed error is forecast minus observed: positive means overprediction, negative means underprediction. A mean near zero can hide errors that cancel each other.</p>
+                <div class="table-scroll" role="region" aria-label="Final holdout error direction" tabindex="0"><table>
+                    <caption>Direction, magnitude and worst observed errors in the target’s stored units</caption>
+                    <thead><tr><th scope="col">Diagnostic</th><th scope="col">Selected method</th><th scope="col">Reference baseline</th></tr></thead>
+                    <tbody>
+                        <tr><th scope="row">Underpredicted days</th><td>{{ diagnostics.holdout.model.underpredicted_days }}</td><td>{{ diagnostics.holdout.baseline.underpredicted_days }}</td></tr>
+                        <tr><th scope="row">Overpredicted days</th><td>{{ diagnostics.holdout.model.overpredicted_days }}</td><td>{{ diagnostics.holdout.baseline.overpredicted_days }}</td></tr>
+                        <tr><th scope="row">Exact days</th><td>{{ diagnostics.holdout.model.exact_days }}</td><td>{{ diagnostics.holdout.baseline.exact_days }}</td></tr>
+                        <tr><th scope="row">Mean signed error</th><td>{{ '%+.3f'|format(diagnostics.holdout.model.mean_signed_error) }}</td><td>{{ '%+.3f'|format(diagnostics.holdout.baseline.mean_signed_error) }}</td></tr>
+                        <tr><th scope="row">Underprediction contribution to MAE</th><td>{{ '%.3f'|format(diagnostics.holdout.model.underprediction_mae_contribution) }}</td><td>{{ '%.3f'|format(diagnostics.holdout.baseline.underprediction_mae_contribution) }}</td></tr>
+                        <tr><th scope="row">Overprediction contribution to MAE</th><td>{{ '%.3f'|format(diagnostics.holdout.model.overprediction_mae_contribution) }}</td><td>{{ '%.3f'|format(diagnostics.holdout.baseline.overprediction_mae_contribution) }}</td></tr>
+                        <tr><th scope="row">Largest underprediction</th><td>{{ '%.3f'|format(diagnostics.holdout.model.maximum_underprediction) }}</td><td>{{ '%.3f'|format(diagnostics.holdout.baseline.maximum_underprediction) }}</td></tr>
+                        <tr><th scope="row">Largest overprediction</th><td>{{ '%.3f'|format(diagnostics.holdout.model.maximum_overprediction) }}</td><td>{{ '%.3f'|format(diagnostics.holdout.baseline.maximum_overprediction) }}</td></tr>
+                        {% if forecast.decision_policy %}
+                        <tr><th scope="row">Weighted loss from underprediction</th><td>{{ '%.3f'|format(diagnostics.holdout.model.underprediction_weighted_contribution) }}</td><td>{{ '%.3f'|format(diagnostics.holdout.baseline.underprediction_weighted_contribution) }}</td></tr>
+                        <tr><th scope="row">Weighted loss from overprediction</th><td>{{ '%.3f'|format(diagnostics.holdout.model.overprediction_weighted_contribution) }}</td><td>{{ '%.3f'|format(diagnostics.holdout.baseline.overprediction_weighted_contribution) }}</td></tr>
+                        {% endif %}
+                    </tbody>
+                </table></div>
+                <p>Contributions divide by all holdout days, including exact days. Underprediction and overprediction contributions sum to MAE. Day counts use unrounded values. Weighted contributions use the declared relative penalties, not currency. Largest errors describe this sample and are not future bounds.</p>
+                <h4>Historical errors by forecast lead</h4>
+                <p>{{ diagnostics.scored_origins }} of {{ diagnostics.scheduled_origins }} historical origins contribute. Each lead has at most three observations from dependent windows. Failed or unevaluated origins are missing observations, never zero-error forecasts. Scored results with candidate or count-domain failures remain included and flagged in the historical table above.</p>
+                <div class="table-scroll" role="region" aria-label="Historical errors by forecast lead" tabindex="0"><table>
+                    <caption>Day after each historical issue date; signed error uses forecast minus observed</caption>
+                    <thead><tr><th scope="col">Lead (days)</th><th scope="col">Observations</th><th scope="col">Method MAE</th><th scope="col">Reference MAE</th><th scope="col">Method mean error</th><th scope="col">Reference mean error</th>{% if forecast.decision_policy %}<th scope="col">Method weighted loss</th><th scope="col">Reference weighted loss</th>{% endif %}</tr></thead>
+                    <tbody>{% for lead in diagnostics.historical_by_lead %}<tr>
+                        <th scope="row">{{ lead.lead_days }}</th><td>{{ lead.observations }}</td>
+                        {% if lead.model is not none %}<td>{{ '%.3f'|format(lead.model.mae) }}</td><td>{{ '%.3f'|format(lead.baseline.mae) }}</td><td>{{ '%+.3f'|format(lead.model.mean_signed_error) }}</td><td>{{ '%+.3f'|format(lead.baseline.mean_signed_error) }}</td>{% if forecast.decision_policy %}<td>{{ '%.3f'|format(lead.model.weighted_absolute_error) }}</td><td>{{ '%.3f'|format(lead.baseline.weighted_absolute_error) }}</td>{% endif %}
+                        {% else %}<td>Not assessed</td><td>Not assessed</td><td>Not assessed</td><td>Not assessed</td>{% if forecast.decision_policy %}<td>Not assessed</td><td>Not assessed</td>{% endif %}{% endif %}
+                    </tr>{% endfor %}</tbody>
+                </table></div>
+                <p>The last historical window overlaps the final holdout. These summaries are separate views of historical evidence, not additional independent tests, calibrated intervals or operational approval. They do not change forecasts or model selection.</p>
+            </article>
+            {% endif %}
             {% if forecast.domain_constraints.status != 'failed' %}
             <article class="table-card"><h3>Exploratory future point forecast</h3><p>Separate refit through {{ forecast.future_fit_through }} after evaluation. Not approved for operational use. No calibrated prediction interval or automated monitoring is available.</p><div class="table-scroll"><table><thead><tr><th>Date</th><th>Point forecast</th></tr></thead><tbody>{% for row in forecast.future_forecast %}<tr><td>{{ row.date }}</td><td>{{ "%.2f"|format(row.prediction) }}</td></tr>{% endfor %}</tbody></table></div></article>
             {% endif %}
