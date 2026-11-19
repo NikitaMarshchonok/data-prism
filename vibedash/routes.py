@@ -1234,6 +1234,7 @@ if vibedash_bp:
         account = _current_account()
         return render_template('vibedash_landing.html',
                              preset_prompts=preset_prompts,
+                             task_capabilities=capability_catalog(),
                              demo_prompt=DEMO_PROMPT,
                              retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
                              pilot_csrf_token=_decision_csrf_token(),
@@ -2250,6 +2251,11 @@ if vibedash_bp:
     @vibedash_bp.post('/readiness')
     def dataset_readiness():
         """Assess an uploaded CSV without retaining its rows."""
+        if 'task_type' in request.form:
+            try:
+                resolve_analysis_task(request.form)
+            except TaskAdmissionError as error:
+                return jsonify({'error': str(error), 'task_intake': error.assessment}), 422
         uploaded_file = request.files.get('datafile')
         if uploaded_file is None or not uploaded_file.filename:
             return jsonify({'error': 'A CSV file is required.'}), 400

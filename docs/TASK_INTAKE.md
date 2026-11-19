@@ -33,6 +33,23 @@ be `needs_clarification`, `not_supported`, `unsupported_workflow`,
 The catalogue/assessment is not permission for a client to bypass upload,
 semantic review, CSRF, ownership, capacity or retention controls.
 
+### Choose the result before uploading
+
+The browser presents task choices from the same capability catalogue before
+the file picker. Each choice states the expected output and its availability.
+Daily forecasting opens its settings during column review. Period comparison
+links to the existing two-file form. For a standalone task under development,
+the form explains its current scope and disables the single-file upload and
+analysis controls until the user selects an available task.
+
+Changing the task cancels an outstanding preflight and clears the previous
+column confirmation. A selected file is reviewed again for an available
+single-file task. The preflight request includes the explicit task type, and
+the server checks its workflow before reading the CSV. Clients omitting the
+task type retain their existing dataset-only preflight. Task choice records
+the user's requested result. Free-text intent interpretation still requires
+further development.
+
 ## Explicit submission
 
 Add a `task_type` form field to `POST /vibedash/jobs` alongside the existing

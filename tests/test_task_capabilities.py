@@ -1,6 +1,7 @@
 """Task availability is not domain expertise, data approval or permission to fit."""
 import copy
 import json
+from io import BytesIO
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -122,6 +123,53 @@ class TaskCapabilityRouteTests(unittest.TestCase):
                 response = client.post('/vibedash/preview', data={'task_type': 'classification'})
                 self.assertEqual(response.status_code, 302)
             load.assert_not_called()
+            submit.assert_not_called()
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+
+    def test_preflight_rejects_unsupported_tasks_before_reading_source(self):
+        with patch('vibedash.routes._load_vibedash_csv') as load, \
+                patch('vibedash.routes.analysis_job_dispatcher.submit') as submit, \
+                web_app.app.test_client() as client:
+            for fields, expected in (
+                ({'task_type': 'classification'}, 'not_supported'),
+                ({'task_type': 'regression'}, 'not_supported'),
+                ({'task_type': 'anomaly_detection'}, 'not_supported'),
+                ({'task_type': 'segmentation'}, 'not_supported'),
+                ({'task_type': 'causal_analysis'}, 'not_supported'),
+                ({'task_type': 'period_comparison'}, 'workflow_mismatch'),
+                ({'task_type': 'daily_forecast', 'analysis_mode': 'evidence'}, 'conflicting_task'),
+                ({'task_type': ''}, 'needs_clarification'),
+            ):
+                with self.subTest(fields=fields):
+                    response = client.post('/vibedash/readiness', data={
+                        **fields, 'datafile': (BytesIO(b'private header\nprivate row\n'), 'sample.csv'),
+                    })
+                    self.assertEqual(response.status_code, 422)
+                    payload = response.get_json()
+                    self.assertEqual(payload['task_intake']['status'], expected)
+                    self.assertFalse(payload['task_intake']['ready_for_execution'])
+                    self.assertNotIn('private', response.get_data(as_text=True))
+            load.assert_not_called()
+            submit.assert_not_called()
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
+
+    def test_supported_task_preflight_preserves_legacy_dataset_review(self):
+        rows = b'value,region\n' + b''.join(
+            f'{index},{"north" if index % 2 else "south"}\n'.encode()
+            for index in range(50)
+        )
+        with patch('vibedash.routes.analysis_job_dispatcher.submit') as submit, \
+                web_app.app.test_client() as client:
+            payloads = []
+            for task_fields in ({}, {'task_type': 'descriptive_analysis'}, {'task_type': 'daily_forecast'}):
+                response = client.post('/vibedash/readiness', data={
+                    **task_fields, 'datafile': (BytesIO(rows), 'sample.csv'),
+                })
+                self.assertEqual(response.status_code, 200)
+                payloads.append(response.get_json())
+            self.assertEqual(payloads[0], payloads[1])
+            self.assertEqual(payloads[0], payloads[2])
+            self.assertTrue(payloads[0]['readiness']['analysis_allowed'])
             submit.assert_not_called()
         self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
 

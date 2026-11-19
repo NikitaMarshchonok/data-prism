@@ -162,6 +162,16 @@
                 <input type="hidden" name="semantic_contract" id="semantic-contract-value" value="">
                 <input type="hidden" name="task_type" id="task-type" value="descriptive_analysis">
                 <input type="hidden" name="task_deliverable" id="task-deliverable" value="evidence_summary">
+                <div class="field-card form-wide task-choice">
+                    <label for="analysis-mode"><strong>What result do you need?</strong></label>
+                    <select id="analysis-mode" name="analysis_mode" aria-describedby="task-choice-guidance">
+                        {% for task in task_capabilities.tasks %}
+                        <option value="{{ task.analysis_mode or task.task_type }}" data-task-type="{{ task.task_type }}" data-status="{{ task.status }}" data-workflow="{{ task.workflow or '' }}" data-description="{{ task.description }}">{{ task.label }}{% if task.status != 'available' %} — under development{% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <p id="task-choice-guidance" role="status" aria-live="polite">{{ task_capabilities.tasks[0].description }}</p>
+                    <a id="task-comparison-link" href="#period-comparison-heading" hidden>Open the two-period comparison form</a>
+                </div>
                 <div class="field-card upload-card">
                     <label for="datafile">
                         <span class="field-number">1</span>
@@ -209,11 +219,6 @@
                     <p class="semantic-intro">Data Prism inferred these roles and units from the schema and observed values. Correct any mistakes before analysis; the confirmed contract controls calculations, charts, and the audit record.</p>
                     <div class="semantic-error" id="semantic-error" role="alert" tabindex="-1" hidden></div>
                     <div class="semantic-primary-fields">
-                        <label for="analysis-mode">
-                            <span>What result do you need?</span>
-                            <select id="analysis-mode" name="analysis_mode"><option value="evidence">Descriptive evidence</option><option value="forecast">Daily forecast evaluation (pilot)</option></select>
-                            <small>Forecasting compares past-only models with simple baselines. Training does not establish usefulness.</small>
-                        </label>
                         <label for="task-observation-unit">
                             <span>What does one row represent?</span>
                             <input id="task-observation-unit" name="task_observation_unit" type="text" maxlength="240" required aria-describedby="task-unit-guidance">
@@ -301,7 +306,7 @@
                 <div class="period-comparison-heading">
                     <div>
                         <div class="eyebrow"><span></span> Separate workflow</div>
-                        <h2 id="period-comparison-heading">Compare two periods.</h2>
+                        <h2 id="period-comparison-heading" tabindex="-1">Compare two periods.</h2>
                     </div>
                     <p>Run an independent observational comparison against two CSV snapshots. Keep the same row unit and metric definitions in both files; inputs are CSV-only and processing is temporary.</p>
                 </div>
@@ -412,6 +417,8 @@
         const semanticConfirmed = document.getElementById('semantic-confirmed');
         const semanticContractValue = document.getElementById('semantic-contract-value');
         const analysisMode = document.getElementById('analysis-mode');
+        const taskChoiceGuidance = document.getElementById('task-choice-guidance');
+        const taskComparisonLink = document.getElementById('task-comparison-link');
         const taskType = document.getElementById('task-type');
         const taskDeliverable = document.getElementById('task-deliverable');
         const taskObservationUnit = document.getElementById('task-observation-unit');
@@ -470,6 +477,19 @@
             }
         });
 
+        analysisMode.addEventListener('change', async () => {
+            resetReadiness();
+            invalidateTaskConfirmation(true);
+            syncTaskResult();
+            if (supportsSingleFileTask() && fileInput.files[0]) {
+                await checkDatasetReadiness(fileInput.files[0]);
+            }
+        });
+
+        taskComparisonLink.addEventListener('click', () => {
+            document.getElementById('period-comparison-heading').focus();
+        });
+
         document.querySelectorAll('[data-prompt]').forEach((button) => {
             button.addEventListener('click', () => {
                 prompt.value = button.dataset.prompt;
@@ -510,6 +530,7 @@
         function updateAnalysisSubmitState() {
             submitButton.disabled = !(
                 !analysisBusy
+                && supportsSingleFileTask()
                 &&
                 readinessState === 'allowed'
                 && semanticProposal
@@ -542,17 +563,31 @@
             updateAnalysisSubmitState();
         }
 
+        function supportsSingleFileTask() {
+            const choice = analysisMode.selectedOptions[0];
+            return choice?.dataset.status === 'available' && choice.dataset.workflow === 'analysis_jobs';
+        }
+
         function syncTaskResult() {
             const forecasting = analysisMode.value === 'forecast';
+            const choice = analysisMode.selectedOptions[0];
+            const supported = supportsSingleFileTask();
+            taskType.value = choice?.dataset.taskType || '';
+            taskChoiceGuidance.textContent = choice?.dataset.description || 'Choose the result you need.';
+            taskComparisonLink.hidden = choice?.dataset.workflow !== 'period_comparison_jobs';
+            fileInput.disabled = !supported;
+            prompt.disabled = !supported;
             if (!forecasting && forecastModelRetention) forecastModelRetention.value = '';
             forecastSettings.hidden = !forecasting;
             forecastSettings.disabled = !forecasting;
-            submitButton.firstChild.textContent = forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ';
-            taskType.value = forecasting ? 'daily_forecast' : 'descriptive_analysis';
+            submitButton.firstChild.textContent = supported
+                ? (forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ')
+                : 'Choose a supported task ';
             taskDeliverable.value = forecasting ? 'forecast_evaluation' : 'evidence_summary';
             taskResultDescription.textContent = forecasting
                 ? 'A daily forecast evaluation against simple baselines, plus an exploratory future forecast.'
                 : 'A descriptive evidence summary with calculations and limitations.';
+            updateAnalysisSubmitState();
         }
 
         function showTaskQuestions(review) {
@@ -784,6 +819,7 @@
         }
 
         async function checkDatasetReadiness(file) {
+            if (!supportsSingleFileTask()) return;
             if (readinessRequest) readinessRequest.abort();
             const controller = new AbortController();
             readinessRequest = controller;
@@ -797,6 +833,7 @@
             submitButton.disabled = true;
 
             const formData = new FormData();
+            formData.append('task_type', taskType.value);
             formData.append('datafile', file);
             try {
                 const response = await fetch(readinessUrl, {
@@ -868,7 +905,7 @@
 
         analysisForm.addEventListener('submit', async (event) => {
             event.preventDefault();
-            if (analysisBusy) return;
+            if (analysisBusy || !supportsSingleFileTask()) return;
             const selectedFile = fileInput.files[0];
             if (!selectedFile) return;
             if (readinessState !== 'allowed') {
@@ -1179,6 +1216,7 @@
         window.addEventListener('pageshow', () => {
             analysisBusy = false;
             taskRevision += 1;
+            syncTaskResult();
             demoSubmit.disabled = false;
             demoSubmit.classList.remove('is-loading');
             demoSubmitLabel.textContent = 'Run the live demo';

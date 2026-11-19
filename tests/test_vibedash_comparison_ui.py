@@ -3,6 +3,8 @@ from pathlib import Path
 
 from flask import Flask, render_template
 
+from vibedash.task_capabilities import capability_catalog
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,6 +39,7 @@ class VibeDashComparisonUITests(unittest.TestCase):
         with app.test_request_context("/vibedash/"):
             html = render_template(
                 "vibedash_landing.html",
+                task_capabilities=capability_catalog(),
                 pilot_csrf_token="token",
                 demo_prompt="Demo",
                 preset_prompts={"saas_review": "Review", "sales": "Sales", "finance": "Finance", "real_estate": "Property"},
