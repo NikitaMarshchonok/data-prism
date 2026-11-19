@@ -225,8 +225,8 @@ post-holdout method reselection manufactures a valid result. Failed historical
 forecasts remain visible as evidence. The audit contains only aggregate scope
 counts, not offending values, dates or source rows.
 
-Earlier validation-fold predictions are not retained and are not certified by
-this check. Non-negative output alone does not establish domain validity,
+Earlier validation-fold predictions have separate evidence checks; their
+non-negativity is not certified by this count-domain check. Non-negative output alone does not establish domain validity,
 usefulness or calibrated expected demand. General numeric targets do not
 inherit non-negativity assumptions. Older retained domain metadata without the
 new contract does not establish that all three scopes were checked; stored
@@ -235,13 +235,37 @@ historical reports are not retroactively recomputed or reclassified.
 ### Delivery consistency, not acceptance
 
 Before accepting a newly calculated result, the web worker and local CLI run
-`forecast-result-integrity-v1`. The checker binds returned holdout dates and
+`forecast-result-integrity-v2`. The checker binds returned holdout dates and
 actuals to the uploaded chronological target series, independently recomputes
 method/reference MAE, RMSE and (when declared) asymmetric weighted error with
 scalar arithmetic, and checks the relative improvement, support label and
 business-policy flags. The future dates, available refit cutoff and complete
 finite point-forecast horizon must match the confirmed task and delay convention.
 It does not trust an existing `result_integrity` badge on a returned object.
+
+The v2 delivery check also verifies `forecast-validation-evidence-v1`. Every
+successful candidate retains its three daily `fold_predictions` lists alongside
+`fold_metrics`; failed candidates keep empty lists and their original slots.
+The independent selection checker reconstructs all fold dates and released
+training cutoffs, matches validation facts to the source, recomputes each
+candidate's MAE/RMSE/declared weighted error and reconciles the three-fold means.
+It independently reconstructs simple reference predictions from each released
+prefix. Method and baseline must match the stable, ordered minimum of the
+verified **declared objective**, with exactly one selected successful candidate.
+Thus a lower MAE cannot override the asymmetric preference objective. Exact
+ties retain the protocol's earlier, simple candidate; the final holdout and
+future outcomes never determine this check's ranking.
+
+The checker does not fit or replay learned estimators. Retained learned
+predictions and their source-bound scores can be verified, but fitting isolation
+still requires the existing prefix/mutation tests. Daily validation evidence
+makes raw Python/CLI reports data-bearing, as their holdout/future rows already
+are. It is excluded from the aggregate audit, which records only a nested
+`forecast-selection-integrity-v1` marker, objective and checked counts. The
+candidate suites, fitting, scores and selection algorithm are unchanged; no
+extra fitting is introduced. Older retained reports and frozen model artifacts
+remain readable, but an old raw report without validation evidence needs a new
+evaluation to pass the v2 delivery check.
 
 Material inconsistencies reject the result; the checker does not replace
 metrics, clip predictions, retry another method, change criteria or refit a
@@ -259,7 +283,7 @@ distinct and source facts/dates must match exactly. Decision predicates are
 checked on the verified reported metrics, so independent summation does not
 silently move an exact business threshold. This numerical tolerance is not an
 acceptance threshold or proof of exact real-arithmetic equality. The guard
-checks returned evidence, not fitting internals, all earlier validation scores,
+checks returned evidence, not fitting internals,
 predictor availability, leakage freedom, usefulness or professional competence.
 Those require the separate temporal tests and independent real-case evaluation.
 

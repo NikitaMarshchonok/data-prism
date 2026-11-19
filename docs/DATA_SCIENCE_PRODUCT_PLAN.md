@@ -156,6 +156,14 @@ cannot bypass rechecking. Inconsistent evidence is rejected, not silently
 rewritten. This guard does not certify fit isolation, real-world predictive
 value or the professional acceptance target; those remain separate work.
 
+The v2 delivery guard now also reconciles all candidates' three validation
+horizons against retained daily forecasts and source facts. It checks released
+cutoffs, simple references, independent errors, fold means, failed candidate
+slots and the validation-only ranking under the declared loss. A forged model
+identity or an MAE-based choice conflicting with asymmetric preferences is
+rejected. This adds no fitting or change to the candidate selection protocol;
+it does not independently replay learned models or prove absence of leakage.
+
 New uploaded-series web and CLI runs now also evaluate the service procedure
 at three fixed historical issue dates, not just on one final holdout. Each call
 receives only its released prefix; outer errors and simple references are scored

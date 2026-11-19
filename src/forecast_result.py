@@ -12,7 +12,7 @@ import re
 import pandas as pd
 
 
-CONTRACT = 'forecast-result-integrity-v1'
+CONTRACT = 'forecast-result-integrity-v2'
 REL_TOL = 1e-9
 ABS_TOL = 1e-12
 
@@ -122,11 +122,14 @@ def validate_forecast_result(report, frame, expected_task, *, decision_policy=No
     Decision predicates are checked on the verified reported metrics so rounding
     differences in an independent sum do not silently move a policy threshold.
     """
+    from src.forecast_selection_result import validate_forecast_selection
+
     try:
         if not isinstance(report, Mapping) or report.get('status') != 'ok':
             raise ValueError('A completed forecast result is required.')
         if report.get('task') != expected_task or report.get('decision_policy') != decision_policy:
             raise ValueError('Forecast evidence does not match the confirmed task and decision policy.')
+        selection = validate_forecast_selection(report, frame, expected_task, decision_policy=decision_policy)
         target, time = expected_task['target_column'], expected_task['time_column']
         h, delay = expected_task['horizon'], expected_task.get('reporting_delay_days', 0)
         if type(h) is not int or not 1 <= h <= 90 or type(delay) is not int or not 0 <= delay <= 30:
@@ -196,6 +199,7 @@ def validate_forecast_result(report, frame, expected_task, *, decision_policy=No
             raise ValueError('Forecast support claims do not match the reported historical comparison.')
         _business(report['business_evaluation'], decision_policy, method, baseline)
         return {'contract': CONTRACT, 'status': 'consistent', 'checked_holdout_rows': h, 'checked_future_rows': h,
+                'validation_selection': selection,
                 'source_facts': 'matched', 'metrics': 'independently_recomputed',
                 'relative_tolerance': REL_TOL, 'absolute_tolerance': ABS_TOL,
                 'production_readiness': 'not_established'}

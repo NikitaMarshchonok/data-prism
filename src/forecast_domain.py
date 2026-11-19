@@ -17,8 +17,8 @@ def evaluate_count_forecast(report, horizon):
     An incomplete/non-numeric result cannot be labelled nonnegative just because
     `any(value < 0)` was false. Such malformed results are rejected, while valid
     numerical results with negative values retain their original metrics/rows.
-    Earlier validation predictions are not retained by the engine and are not
-    certified by this check.
+    Earlier validation predictions have separate evidence checks; their
+    non-negativity is not certified by this check.
     """
     if type(horizon) is not int or not 1 <= horizon <= 90:
         raise ValueError('A supported expected forecast horizon is required.')

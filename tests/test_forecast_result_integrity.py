@@ -12,7 +12,7 @@ import numpy as np
 
 from evaluate_forecast import main as forecast_cli
 from src.forecasting import ForecastTask, forecast_series, forecast_task_settings
-from src.forecast_result import CONTRACT, validate_forecast_result
+from src.forecast_result import CONTRACT, validate_forecast_result, _scores, _business
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
 from tests.test_forecast_policy import POLICY_FORM
 from vibedash.forecast_tasks import ForecastTaskError, forecast_task_from_form, run_confirmed_forecast, forecast_audit_view
@@ -138,7 +138,13 @@ class ForecastResultIntegrityTests(unittest.TestCase):
             status='criteria_met_on_holdout', weighted_absolute_error=6.5,
             baseline_weighted_absolute_error=15., relative_improvement=1 - 6.5 / 15.,
             checks={'strictly_lower_weighted_error': True, 'minimum_improvement': True, 'maximum_mae': True})
-        self.assertEqual(validate_forecast_result(report, data, settings, decision_policy=policy)['status'], 'consistent')
+        # Keep the independent arithmetic oracle, while refusing to call this
+        # manually replaced method a validation-selected forecasting result.
+        self.assertEqual(_scores([10., 10.], [8., 13.], policy), report['holdout']['metrics'])
+        _business(report['business_evaluation'], policy, report['holdout']['metrics'],
+                  report['holdout']['baseline_metrics'])
+        with self.assertRaises(ValueError):
+            validate_forecast_result(report, data, settings, decision_policy=policy)
 
     def test_source_order_and_all_availability_modes_are_verified(self):
         for delay, origin in ((0, None), (10, None), (2, '2020-06-10')):
