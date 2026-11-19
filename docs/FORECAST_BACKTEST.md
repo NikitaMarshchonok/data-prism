@@ -76,6 +76,25 @@ evaluation or negative count result cannot be promoted to operational approval.
 
 ## Evidence, audit and boundaries
 
+Before web or CLI delivery, `validate_historical_backtest` independently
+reconciles all three scheduled slots with the validated source and task. It
+reconstructs origin dates, available cutoffs, history requirements and every
+simple reference from the released prefix, matches scored actuals exactly,
+recomputes MAE/RMSE/weighted errors, and checks comparisons, policy flags and
+summary counters. It also reconciles missing/failed slots and count-domain
+statuses, checking negative outer forecasts against retained predictions.
+Inner count-holdout values are not retained in this report; their counters can
+only be structurally reconciled here, after the existing inner-run check.
+
+Inconsistent evidence rejects the result before delivery or optional local
+model creation. The validator never fits, changes forecasts, retries failures
+or reselects a method. A preexisting success marker cannot skip the check.
+Valid unsuccessful windows and insufficient history remain reportable results.
+New delivered reports carry `result_integrity` with a
+`forecast-backtest-integrity-v1` aggregate marker; old reports are not upgraded.
+This verifies evidence consistency, not fitted-model correctness, selection
+optimality, absence of training leakage, or usefulness on unseen client data.
+
 Web results show a per-window comparison table, textual failure/criteria labels,
 and the evaluation limitation. The table has explicit row/column headers and a
 keyboard-focusable horizontal scroll region for narrow screens. CLI JSON also

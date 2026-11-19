@@ -10,6 +10,7 @@ import pandas as pd
 from src.forecasting import MAX_ROWS, ForecastTask, forecast_series, forecast_task_settings
 from src.forecast_result import validate_forecast_result
 from src.forecast_backtest import historical_forecast_backtest
+from src.forecast_backtest_result import validate_historical_backtest
 from src.forecast_artifact import create_artifact, save_artifact
 
 
@@ -52,6 +53,8 @@ def main(argv=None):
             if report.get('status') == 'ok':
                 report['result_integrity'] = validate_forecast_result(report, data, forecast_task_settings(task))
                 report['historical_backtest'] = historical_forecast_backtest(data, task, candidate_suite=report['candidate_suite'])
+                report['historical_backtest']['result_integrity'] = validate_historical_backtest(
+                    report['historical_backtest'], data, task, candidate_suite=report['candidate_suite'])
         except ValueError:
             report = {'status': 'error', 'message': 'The forecast result failed its evidence-consistency check; no result was accepted.',
                       'error_type': 'ValueError'}

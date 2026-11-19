@@ -140,4 +140,5 @@ def backtest_audit_view(report):
     return {key: report[key] for key in ('contract', 'status', 'protocol', 'evaluation_available_through',
                                         'required_source_rows', 'provided_source_rows', 'summary',
                                         'predictive_acceptance', 'production_readiness')} | {
+        'result_integrity': report.get('result_integrity', {'status': 'not_assessed'}),
         'windows': [{key: row[key] for key in window_fields if key in row} for row in report['windows']]}

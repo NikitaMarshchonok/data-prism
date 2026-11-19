@@ -167,6 +167,13 @@ evaluation workflow for the supported single-series task; approved real-client
 cases and specialist acceptance are still missing. See
 [FORECAST_BACKTEST.md](FORECAST_BACKTEST.md).
 
+The web/CLI delivery boundary now independently checks historical-window
+evidence as well: source-bound dates/facts, prefix-only simple references,
+errors, comparisons, decision-criteria flags and summary/failure counts.
+Inconsistent historical evidence rejects delivery without retries or model
+reselection. A consistent report can still contain losses, failed windows or
+insufficient history; this check is not professional or predictive acceptance.
+
 ## 4. Model and outcome lifecycle
 
 The CLI can now explicitly save a private, versioned declarative JSON snapshot
