@@ -9,6 +9,39 @@ It is available through Python, a local CLI, and an opt-in VibeDash background
 job. The browser workflow binds the task to the reviewed semantic contract;
 Python/CLI callers explicitly identify the numeric target and daily time column.
 
+## Review before training in the browser
+
+The daily forecast form first submits a bounded, no-fit input review to
+`POST /vibedash/forecast-plan`. It validates the uploaded daily history against
+its confirmed column meanings, target availability, issue date and decision
+criteria using the same admission checks as the actual forecast job. The
+response contains aggregate counts and calendar cutoffs, not source rows,
+forecasts or a saved model. The endpoint creates no analysis job or retained
+application working copy; ordinary runtime cleanup can still run on a request.
+Responses use `Cache-Control: no-store` and require the session CSRF token.
+Requests are limited to 16 MiB, 5,000 source rows and 512 columns; rows beyond
+the preview limit are rejected rather than evaluated on a truncated prefix.
+
+The first button, **Review daily forecast**, shows the available-target cutoff,
+main holdout dates, training cutoff, future forecast dates and required history.
+It stops before training. **Run reviewed forecast** starts the job only after
+that review. Editing the file, task, column meanings or forecast settings clears
+the browser review and requires confirmation again. Pending review responses
+cannot start a changed request. The job independently revalidates the submitted
+inputs; the displayed plan is not an admission token or a capacity reservation.
+Existing direct job clients retain their independent server validation.
+
+For horizon `H`, seasonal reference period `P` and reporting delay `D`, minimum
+source rows for the main evaluation are `max(30, 4P) + 4H + 3D` in retrospective
+mode, or `max(30, 4P) + 4H + 2D` with an explicit issue date. The three additional
+historical origins require another `3H + D` rows. A file may therefore pass the
+main evaluation checks while the additional historical backtest remains
+unevaluated. The browser explains that limitation before the user starts.
+For example, horizon/period 7 and delay 0 require 58 rows for the main evaluation
+and 79 for the additional three origins. Passing these input checks establishes
+neither predictive accuracy nor business usefulness; results remain unknown
+until evaluation, and the availability declaration is not independently verified.
+
 ## Task and availability assumptions
 
 The daily engine supports one series with one finite real numeric observation
@@ -225,8 +258,8 @@ post-holdout method reselection manufactures a valid result. Failed historical
 forecasts remain visible as evidence. The audit contains only aggregate scope
 counts, not offending values, dates or source rows.
 
-Earlier validation-fold predictions are not retained and are not certified by
-this check. Non-negative output alone does not establish domain validity,
+Earlier validation-fold predictions have separate evidence checks; their
+non-negativity is not certified by this count-domain check. Non-negative output alone does not establish domain validity,
 usefulness or calibrated expected demand. General numeric targets do not
 inherit non-negativity assumptions. Older retained domain metadata without the
 new contract does not establish that all three scopes were checked; stored
@@ -235,13 +268,37 @@ historical reports are not retroactively recomputed or reclassified.
 ### Delivery consistency, not acceptance
 
 Before accepting a newly calculated result, the web worker and local CLI run
-`forecast-result-integrity-v1`. The checker binds returned holdout dates and
+`forecast-result-integrity-v2`. The checker binds returned holdout dates and
 actuals to the uploaded chronological target series, independently recomputes
 method/reference MAE, RMSE and (when declared) asymmetric weighted error with
 scalar arithmetic, and checks the relative improvement, support label and
 business-policy flags. The future dates, available refit cutoff and complete
 finite point-forecast horizon must match the confirmed task and delay convention.
 It does not trust an existing `result_integrity` badge on a returned object.
+
+The v2 delivery check also verifies `forecast-validation-evidence-v1`. Every
+successful candidate retains its three daily `fold_predictions` lists alongside
+`fold_metrics`; failed candidates keep empty lists and their original slots.
+The independent selection checker reconstructs all fold dates and released
+training cutoffs, matches validation facts to the source, recomputes each
+candidate's MAE/RMSE/declared weighted error and reconciles the three-fold means.
+It independently reconstructs simple reference predictions from each released
+prefix. Method and baseline must match the stable, ordered minimum of the
+verified **declared objective**, with exactly one selected successful candidate.
+Thus a lower MAE cannot override the asymmetric preference objective. Exact
+ties retain the protocol's earlier, simple candidate; the final holdout and
+future outcomes never determine this check's ranking.
+
+The checker does not fit or replay learned estimators. Retained learned
+predictions and their source-bound scores can be verified, but fitting isolation
+still requires the existing prefix/mutation tests. Daily validation evidence
+makes raw Python/CLI reports data-bearing, as their holdout/future rows already
+are. It is excluded from the aggregate audit, which records only a nested
+`forecast-selection-integrity-v1` marker, objective and checked counts. The
+candidate suites, fitting, scores and selection algorithm are unchanged; no
+extra fitting is introduced. Older retained reports and frozen model artifacts
+remain readable, but an old raw report without validation evidence needs a new
+evaluation to pass the v2 delivery check.
 
 Material inconsistencies reject the result; the checker does not replace
 metrics, clip predictions, retry another method, change criteria or refit a
@@ -259,9 +316,43 @@ distinct and source facts/dates must match exactly. Decision predicates are
 checked on the verified reported metrics, so independent summation does not
 silently move an exact business threshold. This numerical tolerance is not an
 acceptance threshold or proof of exact real-arithmetic equality. The guard
-checks returned evidence, not fitting internals, all earlier validation scores,
+checks returned evidence, not fitting internals,
 predictor availability, leakage freedom, usefulness or professional competence.
 Those require the separate temporal tests and independent real-case evaluation.
+
+### Descriptive error direction and forecast lead
+
+New web/CLI evaluations add `error_diagnostics` after the source-bound main
+result and historical backtest checks succeed. `forecast-error-diagnostics-v1`
+defines signed error as **prediction minus actual**: positive means
+overprediction, negative means underprediction. For the final holdout, separate
+method/reference profiles report counts of under/over/exact days, mean signed
+error, MAE contributions and largest observed under/overprediction. Counts use
+unrounded values. Mean underprediction is `sum(max(actual-prediction, 0))/N`;
+overprediction uses the opposite sign and the same denominator **all N days**,
+including exact days. These two contributions add to MAE. A mean signed error
+near zero can conceal offsetting errors.
+
+When a decision policy is supplied, each contribution is multiplied by its
+declared relative weight; their sum is weighted absolute error. Missing policy
+means these fields are `null`, not an inferred monetary cost or financial gain.
+Largest errors are descriptive sample maxima, not future error bounds.
+
+`historical_by_lead` groups the three historical origins by days **after their
+issue date**, starting at lead 1 even with a nonzero reporting delay. Every lead
+records its actual observation count and method/reference profiles. Failed and
+unevaluated origins contribute no samples and are never padded with zero error.
+With no scored origins, all leads remain explicit with zero observations and
+`null` profiles. Numerically scored candidate/domain failures remain included,
+alongside their existing visible failure flags. The final holdout is not added
+to these lead summaries: the last historical horizon already overlaps it.
+
+These dependent, small historical samples do not establish a systematic future
+bias, subgroup reliability or calibrated uncertainty. The diagnostic does not
+fit, reselect, correct, clip or approve forecasts, and does not change recorded
+criteria. Its extra summaries stay in the owner-scoped report and CLI output;
+they are not added to the aggregate audit. Existing reports without diagnostics
+remain readable and do not acquire a retroactive assessment.
 
 ### Historical evaluation on the uploaded series
 

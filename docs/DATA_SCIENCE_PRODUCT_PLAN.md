@@ -156,6 +156,14 @@ cannot bypass rechecking. Inconsistent evidence is rejected, not silently
 rewritten. This guard does not certify fit isolation, real-world predictive
 value or the professional acceptance target; those remain separate work.
 
+The v2 delivery guard now also reconciles all candidates' three validation
+horizons against retained daily forecasts and source facts. It checks released
+cutoffs, simple references, independent errors, fold means, failed candidate
+slots and the validation-only ranking under the declared loss. A forged model
+identity or an MAE-based choice conflicting with asymmetric preferences is
+rejected. This adds no fitting or change to the candidate selection protocol;
+it does not independently replay learned models or prove absence of leakage.
+
 New uploaded-series web and CLI runs now also evaluate the service procedure
 at three fixed historical issue dates, not just on one final holdout. Each call
 receives only its released prefix; outer errors and simple references are scored
@@ -166,6 +174,28 @@ holdout and is not additional unseen evidence. This implements the multi-origin
 evaluation workflow for the supported single-series task; approved real-client
 cases and specialist acceptance are still missing. See
 [FORECAST_BACKTEST.md](FORECAST_BACKTEST.md).
+
+The web/CLI delivery boundary now independently checks historical-window
+evidence as well: source-bound dates/facts, prefix-only simple references,
+errors, comparisons, decision-criteria flags and summary/failure counts.
+Inconsistent historical evidence rejects delivery without retries or model
+reselection. A consistent report can still contain losses, failed windows or
+insufficient history; this check is not professional or predictive acceptance.
+
+New verified web/CLI evaluations also describe under/overprediction and errors
+by forecast lead, comparing the selected method with its reference. They expose
+actual sample counts, missing origins and asymmetric penalty contributions;
+the final holdout is not double-counted in historical lead summaries. These
+diagnostics are descriptive and do not change model selection, criteria,
+predictions or operational approval. See [FORECAST_EVALUATION.md](FORECAST_EVALUATION.md).
+
+The browser now offers a no-fit daily forecast review before job submission.
+It shows source-history requirements and calendar cutoffs, including an explicit
+warning when the main evaluation can run but the three historical origins lack
+history. Changing the request clears this review; actual jobs revalidate inputs
+independently. This improves task feasibility visibility, not forecast accuracy
+or professional acceptance. Request limits and examples are documented in
+[FORECAST_EVALUATION.md](FORECAST_EVALUATION.md).
 
 ## 4. Model and outcome lifecycle
 

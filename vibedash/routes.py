@@ -69,6 +69,11 @@ try:
     )
     from .decision_brief import build_decision_brief
     from .forecast_tasks import ForecastTaskError, forecast_task_from_form, run_confirmed_forecast, forecast_audit_view
+    from .forecast_plan import (
+        review_forecast_plan, MAX_REQUEST_BYTES as FORECAST_PLAN_MAX_BYTES,
+        MAX_COLUMNS as FORECAST_PLAN_MAX_COLUMNS,
+    )
+    from src.forecasting import MAX_ROWS as FORECAST_MAX_ROWS
     from .forecast_models import ForecastModelNotFound, ForecastModelStore, RETENTION_CONTRACT, retention_days, storage_settings
     from .forecast_outcomes import (
         ForecastActualsTooLarge, ForecastCorrectionError, ForecastOutcomeError, MAX_ACTUALS_REQUEST_BYTES,
@@ -2245,6 +2250,56 @@ if vibedash_bp:
             response.status_code = 422
         response.headers['Cache-Control'] = 'no-store'
         return response
+
+
+    @vibedash_bp.post('/forecast-plan')
+    def forecast_plan_review():
+        """Review request streams without creating jobs or retained working copies."""
+        def reply(http_status=200, **payload):
+            response = jsonify(payload)
+            response.headers['Cache-Control'] = 'no-store'
+            return response, http_status
+        if request.content_length is not None and request.content_length > FORECAST_PLAN_MAX_BYTES:
+            return reply(413, error='Forecast review accepts requests up to 16 MiB.')
+        if not _valid_decision_csrf_token(request.form.get('csrf_token')):
+            return reply(400, error='Refresh the page before reviewing a forecast.')
+        try:
+            mode, routing = resolve_analysis_task(request.form)
+        except TaskAdmissionError as error:
+            return reply(422, error=str(error), task_intake=error.assessment)
+        if mode != 'forecast' or request.form.get('demo_dataset'):
+            return reply(422, error='Upload one confirmed daily CSV for the forecast review.')
+        uploads = request.files.getlist('datafile')
+        if len(uploads) != 1 or not uploads[0].filename:
+            return reply(400, error='One CSV file is required.')
+        uploaded = uploads[0]
+        if Path(secure_filename(uploaded.filename)).suffix.lower() != '.csv':
+            return reply(400, error='VibeDash currently accepts CSV files only.')
+        for field in request.form:
+            if len(request.form.getlist(field)) != 1:
+                return reply(422, error='Provide each forecast review field once.')
+        raw = uploaded.stream.read(FORECAST_PLAN_MAX_BYTES + 1)
+        if len(raw) > FORECAST_PLAN_MAX_BYTES:
+            return reply(413, error='Forecast review accepts requests up to 16 MiB.')
+        try:
+            frame = _load_vibedash_csv(io.BytesIO(raw), nrows=FORECAST_MAX_ROWS + 1,
+                                      max_columns=FORECAST_PLAN_MAX_COLUMNS)
+        except Exception:
+            return reply(422, error='Use a readable CSV with at most 512 columns for forecast review.')
+        try:
+            readiness = DatasetReadinessEngine(frame).assess()
+            if not readiness['analysis_allowed']:
+                return reply(422, error=readiness['summary'], readiness=readiness)
+            semantics = validate_semantic_contract(frame, parse_semantic_contract_json(request.form.get('semantic_contract')))
+            task_form = request.form.copy()
+            task_form['analysis_mode'] = mode
+            plan = review_forecast_plan(frame, semantics, task_form,
+                                        preview_row_limit=current_app.config['MAX_ROWS_PREVIEW'])
+            if routing['intent_source'] == 'explicit_task_type' and plan['selection_objective'] != 'weighted_absolute_error':
+                raise ForecastTaskError('An explicit daily forecast task requires reviewed and confirmed decision criteria.')
+        except (SemanticContractError, ForecastTaskError) as error:
+            return reply(422, error=str(error), forecast_plan={'status': 'input_checks_failed', 'training_started': False})
+        return reply(**plan)
 
 
     @vibedash_bp.post('/readiness')

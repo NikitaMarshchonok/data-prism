@@ -13,6 +13,8 @@ from src.forecast_policy import validate_forecast_policy, CONTRACT as DECISION_P
 from src.forecast_domain import evaluate_count_forecast
 from src.forecast_result import validate_forecast_result
 from src.forecast_backtest import historical_forecast_backtest, backtest_audit_view
+from src.forecast_backtest_result import validate_historical_backtest
+from src.forecast_diagnostics import build_forecast_diagnostics
 
 
 CONTRACT = 'confirmed-daily-forecast-task-v1'
@@ -164,6 +166,18 @@ def run_confirmed_forecast(frame, semantics, stored_task):
         frame, expected['settings'], decision_policy=expected.get('decision_policy'),
         target_unit=expected['target_unit'], candidate_suite=report['candidate_suite'],
     )
+    try:
+        report['historical_backtest']['result_integrity'] = validate_historical_backtest(
+            report['historical_backtest'], frame, expected['settings'],
+            decision_policy=expected.get('decision_policy'), target_unit=expected['target_unit'],
+            candidate_suite=report['candidate_suite'],
+        )
+    except (ValueError, TypeError) as error:
+        raise ForecastTaskError('The historical forecast evidence is inconsistent; no result was accepted.') from error
+    try:
+        report['error_diagnostics'] = build_forecast_diagnostics(report)
+    except ValueError as error:
+        raise ForecastTaskError('Forecast error diagnostics could not be verified; no result was accepted.') from error
     return report
 
 

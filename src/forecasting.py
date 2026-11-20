@@ -104,6 +104,16 @@ def forecast_task_settings(task):
     return result
 
 
+def forecast_history_requirements(task):
+    """Minimum complete source rows; no data reading or fitting."""
+    task = validate_forecast_task(task)
+    h, delay = task.horizon, task.reporting_delay_days
+    explicit = task.forecast_origin is not None
+    minimum = max(30, 4 * task.seasonal_period) + 4 * h + (2 if explicit else 3) * delay
+    return {'main_evaluation': minimum,
+            'historical_backtest': minimum + 3 * h + delay}
+
+
 def _future_window(dates, task):
     """Validate requested dates before any fit, without consulting the clock."""
     try:
@@ -178,8 +188,7 @@ def _series(frame, task):
         raise ValueError('Available-history input contains target dates after origin minus reporting delay. Submit only the available history; no automatic clipping is applied.')
     if explicit_origin and dates[-1] < cutoff:
         raise ValueError('Available-history input is stale: it must end exactly at origin minus reporting delay. Supply the missing observations or review the origin and delay; no automatic filling is applied.')
-    minimum = (max(30, 4 * task.seasonal_period) + (VALIDATION_FOLDS + 1) * task.horizon
-               + (2 if explicit_origin else 3) * task.reporting_delay_days)
+    minimum = forecast_history_requirements(task)['main_evaluation']
     if len(frame) < minimum:
         raise ValueError(f"Insufficient history: at least {minimum} daily observations are required.")
     return dates, values[order]
@@ -304,16 +313,23 @@ def forecast_series(frame, task, *, decision_policy=None, candidate_suite=CANDID
         comparison = []
         for candidate in candidates:
             try:
-                scores = [_metrics(values[origin:origin + h],
-                                   predict_at(origin, candidate), policy)
-                          for origin in origins]
+                scores, predictions = [], []
+                for origin in origins:
+                    prediction = predict_at(origin, candidate)
+                    scores.append(_metrics(values[origin:origin + h], prediction, policy))
+                    predictions.append([
+                        {'date': _date(day), 'actual': float(actual), 'prediction': float(pred)}
+                        for day, actual, pred in zip(dates[origin:origin + h],
+                                                    values[origin:origin + h], prediction)
+                    ])
                 comparison.append({"model_name": candidate, "status": "ok",
                                    "mean_mae": float(np.mean([score["mae"] for score in scores])),
                                    "mean_objective_loss": float(np.mean([score[objective] for score in scores])),
-                                   "fold_metrics": scores, "selected": False})
+                                   "fold_metrics": scores, "fold_predictions": predictions, "selected": False})
             except (ValueError, FloatingPointError, OverflowError):
                 comparison.append({"model_name": candidate, "status": "error",
-                                   "mean_mae": None, "mean_objective_loss": None, "fold_metrics": [], "selected": False,
+                                   "mean_mae": None, "mean_objective_loss": None, "fold_metrics": [],
+                                   "fold_predictions": [], "selected": False,
                                    "reason": "Candidate could not complete all temporal folds."})
         successful = [row for row in comparison if row["status"] == "ok"]
         baselines = [row for row in successful if row["model_name"] in BASELINES]
@@ -355,6 +371,7 @@ def forecast_series(frame, task, *, decision_policy=None, candidate_suite=CANDID
             "decision_policy": policy,
             "business_evaluation": (evaluate_forecast_policy(policy, metrics, baseline_metrics) if policy else
                                     {'status': 'not_specified', 'production_readiness': 'not_established'}),
+            "validation_evidence_contract": "forecast-validation-evidence-v1",
             "model_comparison": comparison,
             "cv_folds": VALIDATION_FOLDS, "validation_folds": folds,
             "train_rows": holdout_start - delay, "test_rows": h,

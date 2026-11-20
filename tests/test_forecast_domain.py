@@ -7,6 +7,7 @@ from unittest.mock import patch
 import numpy as np
 
 from src.forecast_domain import CONTRACT, evaluate_count_forecast
+from src.forecasting import forecast_series
 from src.forecast_policy import evaluate_forecast_policy, weighted_absolute_error
 from src.semantic_contract import validate_semantic_contract
 from tests.test_forecast_tasks import FORM, confirmed, daily_frame
@@ -110,8 +111,11 @@ class ConfirmedCountForecastDomainTests(unittest.TestCase):
 
     def test_domain_failure_in_any_scope_blocks_success_but_preserves_numerical_evidence(self):
         task = forecast_task_from_form(self.frame, self.semantics, FORM | POLICY_FORM)
+        # Start with actual validation evidence for this policy. Attaching a
+        # weighted policy to an unweighted selection is now correctly refused.
+        source_report = forecast_series(self.frame, task['settings'], decision_policy=task['decision_policy'])
         for scope in ('holdout_method', 'holdout_reference', 'future'):
-            report = copy.deepcopy(self.result)
+            report = copy.deepcopy(source_report)
             # Isolate each failure on a structurally complete numerical report.
             for row in report['holdout']['predictions']: row.update(prediction=row['actual'], baseline=1000.)
             for row in report['future_forecast']: row['prediction'] = 3.
