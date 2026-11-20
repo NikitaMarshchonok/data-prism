@@ -18,6 +18,7 @@ def _ui_app():
         "vibedash.preview": "/vibedash/preview",
         "vibedash.dataset_readiness": "/vibedash/readiness",
         "vibedash.task_brief_review": "/vibedash/task-brief",
+        "vibedash.forecast_plan_review": "/vibedash/forecast-plan",
         "vibedash.create_analysis_job": "/vibedash/jobs",
         "vibedash.create_period_comparison_job": "/vibedash/comparisons/jobs",
         "vibedash.comparison_readiness": "/vibedash/comparisons/readiness",

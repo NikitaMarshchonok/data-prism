@@ -12,6 +12,7 @@ import pandas as pd
 from src.forecasting import (
     CANDIDATE_SUITE, LEGACY_CANDIDATE_SUITE, ForecastTask, forecast_series,
     forecast_task_settings, validate_forecast_input,
+    forecast_history_requirements,
 )
 from src.forecast_policy import validate_forecast_policy, evaluate_forecast_policy
 from src.forecast_domain import evaluate_count_forecast
@@ -59,7 +60,7 @@ def historical_forecast_backtest(frame, task, *, decision_policy=None, target_un
                         'history_rows': available_rows, 'status': 'not_evaluated',
                         'model_name': None, 'baseline_name': None, 'metrics': None,
                         'baseline_metrics': None, 'comparison': None})
-    required_rows = minimum + WINDOWS * h + delay + (delay if task.forecast_origin is None else 0)
+    required_rows = forecast_history_requirements(task)['historical_backtest']
     enough_history = all(row['history_rows'] >= minimum for row in windows)
     if enough_history:
         for window in windows:

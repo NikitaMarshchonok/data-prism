@@ -104,6 +104,16 @@ def forecast_task_settings(task):
     return result
 
 
+def forecast_history_requirements(task):
+    """Minimum complete source rows; no data reading or fitting."""
+    task = validate_forecast_task(task)
+    h, delay = task.horizon, task.reporting_delay_days
+    explicit = task.forecast_origin is not None
+    minimum = max(30, 4 * task.seasonal_period) + 4 * h + (2 if explicit else 3) * delay
+    return {'main_evaluation': minimum,
+            'historical_backtest': minimum + 3 * h + delay}
+
+
 def _future_window(dates, task):
     """Validate requested dates before any fit, without consulting the clock."""
     try:
@@ -178,8 +188,7 @@ def _series(frame, task):
         raise ValueError('Available-history input contains target dates after origin minus reporting delay. Submit only the available history; no automatic clipping is applied.')
     if explicit_origin and dates[-1] < cutoff:
         raise ValueError('Available-history input is stale: it must end exactly at origin minus reporting delay. Supply the missing observations or review the origin and delay; no automatic filling is applied.')
-    minimum = (max(30, 4 * task.seasonal_period) + (VALIDATION_FOLDS + 1) * task.horizon
-               + (2 if explicit_origin else 3) * task.reporting_delay_days)
+    minimum = forecast_history_requirements(task)['main_evaluation']
     if len(frame) < minimum:
         raise ValueError(f"Insufficient history: at least {minimum} daily observations are required.")
     return dates, values[order]

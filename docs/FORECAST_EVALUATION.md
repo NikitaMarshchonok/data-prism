@@ -9,6 +9,39 @@ It is available through Python, a local CLI, and an opt-in VibeDash background
 job. The browser workflow binds the task to the reviewed semantic contract;
 Python/CLI callers explicitly identify the numeric target and daily time column.
 
+## Review before training in the browser
+
+The daily forecast form first submits a bounded, no-fit input review to
+`POST /vibedash/forecast-plan`. It validates the uploaded daily history against
+its confirmed column meanings, target availability, issue date and decision
+criteria using the same admission checks as the actual forecast job. The
+response contains aggregate counts and calendar cutoffs, not source rows,
+forecasts or a saved model. The endpoint creates no analysis job or retained
+application working copy; ordinary runtime cleanup can still run on a request.
+Responses use `Cache-Control: no-store` and require the session CSRF token.
+Requests are limited to 16 MiB, 5,000 source rows and 512 columns; rows beyond
+the preview limit are rejected rather than evaluated on a truncated prefix.
+
+The first button, **Review daily forecast**, shows the available-target cutoff,
+main holdout dates, training cutoff, future forecast dates and required history.
+It stops before training. **Run reviewed forecast** starts the job only after
+that review. Editing the file, task, column meanings or forecast settings clears
+the browser review and requires confirmation again. Pending review responses
+cannot start a changed request. The job independently revalidates the submitted
+inputs; the displayed plan is not an admission token or a capacity reservation.
+Existing direct job clients retain their independent server validation.
+
+For horizon `H`, seasonal reference period `P` and reporting delay `D`, minimum
+source rows for the main evaluation are `max(30, 4P) + 4H + 3D` in retrospective
+mode, or `max(30, 4P) + 4H + 2D` with an explicit issue date. The three additional
+historical origins require another `3H + D` rows. A file may therefore pass the
+main evaluation checks while the additional historical backtest remains
+unevaluated. The browser explains that limitation before the user starts.
+For example, horizon/period 7 and delay 0 require 58 rows for the main evaluation
+and 79 for the additional three origins. Passing these input checks establishes
+neither predictive accuracy nor business usefulness; results remain unknown
+until evaluation, and the availability declaration is not independently verified.
+
 ## Task and availability assumptions
 
 The daily engine supports one series with one finite real numeric observation

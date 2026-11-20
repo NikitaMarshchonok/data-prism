@@ -249,7 +249,7 @@
                         <label for="forecast-minimum-improvement"><span>Required weighted-error reduction (%)</span><input id="forecast-minimum-improvement" name="forecast_minimum_improvement" type="number" min="0" max="99.999" step="any" value="10" required><small>Compared with the validation-selected baseline. Strict improvement is always required.</small></label>
                         <label for="forecast-maximum-mae"><span>Maximum acceptable MAE (optional)</span><input id="forecast-maximum-mae" name="forecast_maximum_mae" type="number" min="0" step="any"><small>In the target’s stored units per day. Empty means no absolute error limit was supplied.</small></label>
                         <label for="forecast-policy-confirmed"><input id="forecast-policy-confirmed" name="forecast_policy_confirmed" type="checkbox" value="yes" required><span>I set these criteria before evaluation. Meeting them on one historical holdout does not approve operational use.</span></label>
-                        <p id="forecast-guidance">Select a numeric measure target and a time column above. Use one complete observation per day, without gaps. Only past target values are used; all other columns are ignored.</p>
+                        <p id="forecast-guidance">Select a numeric measure target and a time column above. Use one complete observation per day, without gaps. Only past target values are used; all other columns are ignored. First review the data and date plan, then start evaluation. Forecast review accepts CSV requests up to 16 MiB, 5,000 rows and 512 columns.</p>
                         <label for="forecast-available"><input id="forecast-available" name="forecast_available" type="checkbox" value="yes" required><span>I reviewed the issue date, history mode and fixed reporting delay. Targets through origin minus this delay are available and final at each origin. Variable delays, later revisions and historical data vintages are not supported or independently verified.</span></label>
                         <div class="forecast-model-choice">
                             {% if forecast_model_storage_available %}
@@ -285,6 +285,13 @@
                     <p class="readiness-privacy">The confirmed question and row description are retained with the analysis for its retention window. The audit manifest contains only a task fingerprint and fixed metadata, not these texts.</p>
                 </section>
 
+                <section id="forecast-plan-review" class="field-card form-wide forecast-plan-review" aria-labelledby="forecast-plan-heading" hidden>
+                    <h3 id="forecast-plan-heading" tabindex="-1">Review the daily forecast plan</h3>
+                    <p>Input checks passed for the supported daily evaluation protocol. No model has been trained and no forecast quality has been established.</p>
+                    <dl id="forecast-plan-details"></dl>
+                    <p id="forecast-plan-coverage"></p>
+                    <p>Only past target values will be used. Your reporting delay and row meanings are declarations, not independently verified business definitions. Review the plan, then choose “Run reviewed forecast”. Changing the request requires a new review.</p>
+                </section>
                 <label class="pilot-consent form-wide">
                     <input type="checkbox" name="pilot_metrics" value="yes">
                     <span>Optional: share usage milestones for this analysis and enable a short feedback form. <a href="#pilot-privacy">What is collected?</a></span>
@@ -417,6 +424,10 @@
         const taskObservationUnit = document.getElementById('task-observation-unit');
         const taskResultDescription = document.getElementById('task-result-description');
         const taskBriefUrl = {{ url_for('vibedash.task_brief_review')|tojson }};
+        const forecastPlanUrl = {{ url_for('vibedash.forecast_plan_review')|tojson }};
+        const forecastPlanPanel = document.getElementById('forecast-plan-review');
+        const forecastPlanDetails = document.getElementById('forecast-plan-details');
+        const forecastPlanCoverage = document.getElementById('forecast-plan-coverage');
         const forecastSettings = document.getElementById('forecast-settings');
         const forecastAvailable = document.getElementById('forecast-available');
         const forecastPolicyConfirmed = document.getElementById('forecast-policy-confirmed');
@@ -448,6 +459,8 @@
         let semanticProposal = null;
         let analysisBusy = false;
         let taskRevision = 0;
+        let reviewedForecastPlan = null;
+        let forecastPlanRequest = null;
 
         document.querySelectorAll('a[href="#pilot-privacy"]').forEach((link) => {
             link.addEventListener('click', () => {
@@ -490,6 +503,7 @@
         }
 
         function resetReadiness() {
+            resetForecastPlan();
             if (readinessRequest) readinessRequest.abort();
             readinessRequest = null;
             readinessState = 'idle';
@@ -530,6 +544,7 @@
 
         function invalidateTaskConfirmation(resetForecast = false) {
             taskRevision += 1;
+            resetForecastPlan();
             if (resetForecast) {
                 forecastAvailable.checked = false;
                 forecastPolicyConfirmed.checked = false;
@@ -539,7 +554,53 @@
             semanticStatus.textContent = 'Review changed';
             semanticStatus.classList.remove('is-confirmed');
             hideSemanticError();
+            syncTaskResult();
             updateAnalysisSubmitState();
+        }
+
+        function resetForecastPlan() {
+            if (forecastPlanRequest) forecastPlanRequest.abort();
+            forecastPlanRequest = null;
+            reviewedForecastPlan = null;
+            forecastPlanPanel.hidden = true;
+            forecastPlanDetails.replaceChildren();
+            forecastPlanCoverage.textContent = '';
+        }
+
+        function forecastRequestSignature() {
+            return JSON.stringify(Array.from(new FormData(analysisForm).entries()).filter(([name]) =>
+                name.startsWith('forecast_') || ['analysis_mode', 'task_type', 'prompt',
+                    'task_observation_unit', 'task_deliverable', 'semantic_contract', 'task_brief_confirmed'].includes(name)));
+        }
+
+        function renderForecastPlan(plan) {
+            forecastPlanDetails.replaceChildren();
+            const fields = [
+                ['History supplied', `${plan.provided_rows} daily rows`],
+                ['Minimum for evaluation', `${plan.minimum_evaluation_rows} daily rows`],
+                ['History mode', plan.history_mode === 'available_history_only' ? 'Available history only' : 'Retrospective complete series'],
+                ['Forecast issue date', plan.forecast_origin],
+                ['Available targets through', plan.available_targets_through],
+                ['Historical holdout', `${plan.holdout_start} to ${plan.holdout_end}`],
+                ['Holdout training through', plan.holdout_training_through],
+                ['Future forecast period', `${plan.forecast_start} to ${plan.forecast_end}`],
+                ['Reporting delay', `${plan.reporting_delay_days} whole days`],
+                ['Validation selection', `${plan.validation_windows} earlier windows; ${plan.selection_objective === 'weighted_absolute_error' ? 'declared weighted error' : 'MAE'}`],
+            ];
+            fields.forEach(([label, value]) => {
+                const pair = document.createElement('div');
+                const term = document.createElement('dt');
+                const description = document.createElement('dd');
+                term.textContent = label;
+                description.textContent = value;
+                pair.append(term, description);
+                forecastPlanDetails.append(pair);
+            });
+            forecastPlanCoverage.textContent = plan.historical_status === 'eligible'
+                ? `History is sufficient to attempt all three historical origins (minimum ${plan.minimum_historical_rows} rows). Their results are not known yet.`
+                : `Limited historical coverage: all three historical origins require ${plan.minimum_historical_rows} rows; only ${plan.provided_rows} were supplied. The main evaluation can run, but this additional backtest will remain unevaluated.`;
+            forecastPlanPanel.hidden = false;
+            document.getElementById('forecast-plan-heading').focus();
         }
 
         function syncTaskResult() {
@@ -547,7 +608,9 @@
             if (!forecasting && forecastModelRetention) forecastModelRetention.value = '';
             forecastSettings.hidden = !forecasting;
             forecastSettings.disabled = !forecasting;
-            submitButton.firstChild.textContent = forecasting ? 'Evaluate daily forecast ' : 'Create evidence dashboard ';
+            submitButton.firstChild.textContent = forecasting
+                ? (reviewedForecastPlan ? 'Run reviewed forecast ' : 'Review daily forecast ')
+                : 'Create evidence dashboard ';
             taskType.value = forecasting ? 'daily_forecast' : 'descriptive_analysis';
             taskDeliverable.value = forecasting ? 'forecast_evaluation' : 'evidence_summary';
             taskResultDescription.textContent = forecasting
@@ -719,6 +782,7 @@
 
         semanticPanel.addEventListener('change', (event) => {
             taskRevision += 1;
+            resetForecastPlan();
             syncTaskResult();
             if (![semanticConfirmed, forecastAvailable, forecastPolicyConfirmed].includes(event.target)) {
                 forecastAvailable.checked = false;
@@ -894,6 +958,7 @@
             semanticContractValue.value = JSON.stringify(serializeSemanticContract());
             const reviewedSemantics = semanticContractValue.value;
             const revision = taskRevision;
+            const forecastSignature = forecastRequestSignature();
             const originalSubmitNodes = Array.from(submitButton.childNodes, (node) => node.cloneNode(true));
             analysisBusy = true;
             submitButton.disabled = true;
@@ -920,9 +985,46 @@
                     error.taskBrief = review.task_brief || review;
                     throw error;
                 }
+                if (analysisMode.value === 'forecast' && !(reviewedForecastPlan
+                    && reviewedForecastPlan.revision === revision
+                    && reviewedForecastPlan.file === selectedFile
+                    && reviewedForecastPlan.signature === forecastSignature)) {
+                    const controller = new AbortController();
+                    forecastPlanRequest = controller;
+                    loadingIndicator.textContent = 'Checking daily forecast inputs and planning evaluation dates…';
+                    const planResponse = await fetch(forecastPlanUrl, {
+                        method: 'POST', credentials: 'same-origin', cache: 'no-store',
+                        headers: {'Accept': 'application/json'}, body: new FormData(analysisForm),
+                        signal: controller.signal,
+                    });
+                    const plan = await readResponse(planResponse);
+                    if (forecastPlanRequest !== controller || revision !== taskRevision
+                        || selectedFile !== fileInput.files[0] || !semanticConfirmed.checked
+                        || forecastRequestSignature() !== forecastSignature) {
+                        throw new Error('The request changed during review. Confirm the updated request and review again.');
+                    }
+                    forecastPlanRequest = null;
+                    if (!planResponse.ok || plan.status !== 'eligible_for_evaluation') {
+                        showSemanticError(plan.error || 'The forecast inputs did not pass review.');
+                        throw new Error(plan.error || 'The forecast plan could not be reviewed.');
+                    }
+                    reviewedForecastPlan = {revision, file: selectedFile, signature: forecastSignature};
+                    analysisBusy = false;
+                    loadingIndicator.hidden = true;
+                    renderForecastPlan(plan);
+                    syncTaskResult();
+                    updateAnalysisSubmitState();
+                    return;
+                }
+                if (analysisMode.value === 'forecast' && forecastRequestSignature() !== forecastSignature) {
+                    throw new Error('The forecast settings changed. Confirm the updated request and review again.');
+                }
                 await queueAnalysis(analysisForm, loadingIndicator);
             } catch (error) {
                 analysisBusy = false;
+                const errorMessage = error.name === 'AbortError'
+                    ? 'Forecast settings changed during review. Confirm the updated request and review again.'
+                    : error.message;
                 if (error.readiness) renderReadiness(error.readiness);
                 if (error.semanticContract) {
                     semanticConfirmed.checked = false;
@@ -932,7 +1034,7 @@
                     showSemanticError(error.message);
                 }
                 if (error.taskBrief) showTaskQuestions(error.taskBrief);
-                loadingIndicator.textContent = error.message;
+                loadingIndicator.textContent = errorMessage;
                 loadingIndicator.classList.add('has-error');
                 updateAnalysisSubmitState();
                 submitButton.replaceChildren(
@@ -1179,6 +1281,8 @@
         window.addEventListener('pageshow', () => {
             analysisBusy = false;
             taskRevision += 1;
+            resetForecastPlan();
+            syncTaskResult();
             demoSubmit.disabled = false;
             demoSubmit.classList.remove('is-loading');
             demoSubmitLabel.textContent = 'Run the live demo';

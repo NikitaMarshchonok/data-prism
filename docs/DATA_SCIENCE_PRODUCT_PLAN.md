@@ -189,6 +189,14 @@ the final holdout is not double-counted in historical lead summaries. These
 diagnostics are descriptive and do not change model selection, criteria,
 predictions or operational approval. See [FORECAST_EVALUATION.md](FORECAST_EVALUATION.md).
 
+The browser now offers a no-fit daily forecast review before job submission.
+It shows source-history requirements and calendar cutoffs, including an explicit
+warning when the main evaluation can run but the three historical origins lack
+history. Changing the request clears this review; actual jobs revalidate inputs
+independently. This improves task feasibility visibility, not forecast accuracy
+or professional acceptance. Request limits and examples are documented in
+[FORECAST_EVALUATION.md](FORECAST_EVALUATION.md).
+
 ## 4. Model and outcome lifecycle
 
 The CLI can now explicitly save a private, versioned declarative JSON snapshot
