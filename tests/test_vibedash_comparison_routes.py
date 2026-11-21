@@ -56,7 +56,7 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
 
     def post_data(self, client, *, baseline_name='baseline data.csv', current_name='current.csv',
                   baseline_label='Before', current_label='After', baseline=None, current=None,
-                  confirmed=True, contracts=None):
+                  confirmed=True, contracts=None, focus_fields=None):
         with client.session_transaction() as browser_session:
             browser_session['vibedash_decision_csrf_token'] = 'a' * 64
         data = {
@@ -73,6 +73,7 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
                 contract = contracts[period] if contracts else infer_semantic_contract(frame, confirmed=True)
                 data[f'{period}_semantic_contract'] = json.dumps(contract)
             data['comparison_semantics_confirmed'] = 'yes'
+        data.update(focus_fields or {})
         return client.post(
             '/vibedash/comparisons/jobs',
             data=data,
@@ -100,6 +101,50 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         self.assertIn('baseline', payload['readiness'])
         self.assertIn('current', payload['readiness'])
         self.assertEqual(len(list(Path(web_app.app.config['UPLOAD_FOLDER']).glob('*.csv'))), 2)
+
+    @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=True)
+    def test_question_runs_through_worker_and_appears_in_owned_result(self, submit):
+        question = "Did the average <value> increase?"
+        before = self.csv_text()
+        after = ("value,segment\n" + "\n".join(
+            f"{i + 5},{'north' if i % 2 else 'south'}" for i in range(30)
+        ) + "\n").encode()
+        with patch.dict(os.environ, DATA_PRISM_STATE_DIR=self.tmp.name):
+            with web_app.app.test_client() as client:
+                queued = self.post_data(
+                    client, baseline=before, current=after,
+                    focus_fields={'comparison_question': question, 'comparison_metric': 'value'},
+                )
+                self.assertEqual(queued.status_code, 202, queued.json)
+                job_id = queued.json['job_id']
+                routes.analysis_job_dispatcher._run(web_app.app, job_id, routes._process_analysis_job)
+                status = client.get(queued.json['status_url']).json
+                self.assertEqual(status['status'], 'completed', status)
+                html = client.get(status['result_url']).get_data(as_text=True)
+                self.assertIn('Did the average &lt;value&gt; increase?', html)
+                self.assertNotIn(question, html)
+                self.assertIn('Average value increased.', html)
+                self.assertIn('<dt>Change in mean</dt><dd>5.0</dd>', html)
+                self.assertLess(html.index('comparison-answer-heading'), html.index('metrics-heading'))
+                manifest = client.get(status['manifest_url'])
+                self.assertNotIn('Did the average', manifest.get_data(as_text=True))
+                exported = client.get(queued.json['status_url'] + '/comparison-report.html')
+                self.assertIn('Average value increased.', exported.get_data(as_text=True))
+        submit.assert_called_once()
+
+    @patch('vibedash.routes.analysis_job_dispatcher.submit')
+    def test_incomplete_or_ineligible_question_does_not_queue(self, submit):
+        with web_app.app.test_client() as client:
+            for focus in (
+                {'comparison_question': 'What changed?'},
+                {'comparison_metric': 'value'},
+                {'comparison_question': 'What changed?', 'comparison_metric': 'segment'},
+                {'comparison_question': 'What changed?', 'comparison_metric': 'missing'},
+            ):
+                response = self.post_data(client, focus_fields=focus)
+                self.assertEqual(response.status_code, 422, response.json)
+        submit.assert_not_called()
+        self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
 
     @patch('vibedash.routes.analysis_job_dispatcher.submit', return_value=False)
     def test_dispatcher_decline_fails_comparison_job_and_cleans_inputs(self, submit):

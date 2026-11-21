@@ -123,6 +123,7 @@ class VibeDashComparisonUITests(unittest.TestCase):
         app = _ui_app()
         report = {
             "status": "review_required",
+            "focus": {"question": "How did average value change?", "metric": "value"},
             "summary": "One metric has insufficient evidence.",
             "input": {"baseline": {"rows": 2, "columns": 1}, "current": {"rows": 2, "columns": 1}},
             "schema_changes": {"new_columns": [], "missing_columns": [], "type_changes": []},
@@ -145,6 +146,7 @@ class VibeDashComparisonUITests(unittest.TestCase):
         }
         with app.test_request_context("/vibedash/jobs/id/result"):
             html = render_template("vibedash_comparison.html", report=report, manifest_url=None)
+        self.assertIn("The average of value could not be compared.", html)
         self.assertIn("insufficient_evidence", html)
         self.assertNotIn(">None<", html)
         self.assertNotIn("<br><span>None</span>", html)

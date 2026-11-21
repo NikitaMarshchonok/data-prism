@@ -40,6 +40,13 @@
     {% set metrics_block = raw_metrics_block if raw_metrics_block is mapping else {} %}
     {% set raw_metrics = metrics_block.get('metrics') %}
     {% set metrics = raw_metrics if raw_metrics is sequence and raw_metrics is not string and raw_metrics is not mapping else [] %}
+    {% set focus = comparison.get('focus') %}
+    {% set primary = namespace(metric=none) %}
+    {% if focus is mapping and focus.get('question') is string and focus.get('metric') is string %}
+        {% for row in metrics if row is mapping and row.get('column') == focus.get('metric') %}
+            {% set primary.metric = row %}
+        {% endfor %}
+    {% endif %}
     {% set raw_drift = comparison.get('distribution_drift') %}
     {% set drift = raw_drift if raw_drift is mapping else {} %}
     {% set raw_drift_signals = drift.get('signals') %}
@@ -83,6 +90,51 @@
                 <strong>{{ comparison.get('status') or 'Unavailable' }}</strong>
             </div>
         </header>
+
+        {% if primary.metric %}
+        {% set metric = primary.metric %}
+        {% set unit = metric.get('unit') %}
+        {% set delta = metric.get('absolute_change') %}
+        {% set before = metric.get('baseline') if metric.get('baseline') is mapping else {} %}
+        {% set after = metric.get('current') if metric.get('current') is mapping else {} %}
+        <section class="summary-panel comparison-answer" aria-labelledby="comparison-answer-heading">
+            <div>
+                <div class="eyebrow">Your question</div>
+                <h2 id="comparison-answer-heading">{{ focus.get('question') }}</h2>
+            </div>
+            <div>
+                {% if delta is number %}
+                <p><strong>
+                    {% if delta > 0 %}Average {{ metric.get('column') }} increased.
+                    {% elif delta < 0 %}Average {{ metric.get('column') }} decreased.
+                    {% else %}Average {{ metric.get('column') }} showed no change at the displayed precision.
+                    {% endif %}
+                </strong></p>
+                <dl class="input-facts">
+                    <div><dt>{{ baseline_display_label }} mean</dt><dd>{{ semantic_value(before.get('mean'), unit) }}</dd></div>
+                    <div><dt>{{ current_display_label }} mean</dt><dd>{{ semantic_value(after.get('mean'), unit) }}</dd></div>
+                    <div><dt>Change in mean</dt><dd>{{ semantic_value(delta, unit, true) }}</dd></div>
+                </dl>
+                <p>Based on {{ before.get('n', 0) }} numeric observations in {{ baseline_display_label }}
+                   and {{ after.get('n', 0) }} in {{ current_display_label }}.
+                   {% if metric.get('adjusted_p_value') is number %}
+                       {% if metric.get('significant') %}
+                       The difference met the statistical screening threshold under the independent-row assumption.
+                       {% else %}
+                       The difference did not meet the statistical screening threshold under the independent-row assumption.
+                       {% endif %}
+                   {% else %}
+                   Statistical evidence was insufficient to assess this difference.
+                   {% endif %}
+                </p>
+                {% else %}
+                <p><strong>The average of {{ metric.get('column') }} could not be compared.</strong></p>
+                <p>Supply usable numeric observations for this metric in both files and run the comparison again.</p>
+                {% endif %}
+                <p>This comparison describes the two files. Check seasonality, changes in the people or items represented, and measurement differences before attributing a cause.</p>
+            </div>
+        </section>
+        {% endif %}
 
         <section class="summary-panel" aria-labelledby="summary-heading">
             <div>

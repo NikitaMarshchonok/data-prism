@@ -16,7 +16,9 @@ from src.statistical_primitives import (
     welch_independent_summary,
 )
 from .readiness_engine import DatasetReadinessEngine
-from .comparison_semantics import comparison_semantics_audit, validate_comparison_semantics
+from .comparison_semantics import (
+    comparison_semantics_audit, validate_comparison_focus, validate_comparison_semantics,
+)
 
 MAX_ROWS = 100_000
 MAX_COLUMNS = 100
@@ -52,6 +54,7 @@ def build_period_comparison(
     max_metrics: int = 8,
     baseline_semantic_contract=None,
     current_semantic_contract=None,
+    focus=None,
 ) -> Dict[str, Any]:
     """Build a JSON-safe aggregate comparison without retaining rows."""
     _validate_frame(baseline_df, "baseline")
@@ -93,6 +96,7 @@ def build_period_comparison(
     confirmed = baseline_semantic_contract is not None or current_semantic_contract is not None
     baseline_profiles = current_profiles = None
     semantics = None
+    before = after = None
     if confirmed:
         before, after = validate_comparison_semantics(
             baseline_df, current_df,
@@ -101,6 +105,11 @@ def build_period_comparison(
         baseline_profiles = profiles_from_semantic_contract(baseline_df, before, prevalidated=True)
         current_profiles = profiles_from_semantic_contract(current_df, after, prevalidated=True)
         semantics = comparison_semantics_audit(before, after)
+
+    if focus is not None:
+        if not isinstance(focus, dict) or set(focus) != {"question", "metric"}:
+            raise PeriodComparisonError("The primary metric request is invalid.")
+        focus = validate_comparison_focus(focus["question"], focus["metric"], before, after)
 
     # The existing drift contract is used in memory only; timestamps are omitted
     # because they would make equivalent inputs produce different JSON.
@@ -120,10 +129,15 @@ def build_period_comparison(
     non_inferential_metrics = [
         metric for metric in eligible_metrics if not metric["_inferential_eligible"]
     ]
-    inferential_count = min(len(inferential_metrics), MAX_INFERENTIAL_CANDIDATES)
-    metrics = inferential_metrics[:inferential_count] + non_inferential_metrics[
-        : MAX_INFERENTIAL_CANDIDATES - inferential_count
-    ]
+    focus_metric = None
+    candidates = inferential_metrics + non_inferential_metrics
+    if focus is not None:
+        focus_metric = next((metric for metric in candidates if metric["column"] == focus["metric"]), None)
+        if focus_metric is None:
+            raise PeriodComparisonError("The primary metric must be numeric in both periods.")
+        # Reserve a slot before running tests and correcting for multiple comparisons.
+        candidates = [focus_metric] + [metric for metric in candidates if metric is not focus_metric]
+    metrics = candidates[:MAX_INFERENTIAL_CANDIDATES]
     truncated_count = max(0, len(eligible_metrics) - len(metrics))
     for metric in metrics:
         inferential_eligible = metric.pop("_inferential_eligible", False)
@@ -151,6 +165,8 @@ def build_period_comparison(
             metric["significant"] = False
     metrics.sort(key=lambda m: (m["adjusted_p_value"] if m["adjusted_p_value"] is not None else 1.0, -abs(m["absolute_change"] or 0.0), m["column"]))
     displayed = metrics[:max_metrics]
+    if focus_metric is not None:
+        displayed = [focus_metric] + [metric for metric in metrics if metric is not focus_metric][:max_metrics - 1]
     significant = sum(1 for m in metrics if m["significant"])
     drift_signals = _safe_drift_signals(drift.get("feature_drift", []))
     drift_status = drift.get("status", "stable")
@@ -189,6 +205,8 @@ def build_period_comparison(
             "Shared column roles and units were confirmed by the user; matching "
             "currency, row units, populations, and business definitions still depend on that review."
         )
+    if focus is not None:
+        result["focus"] = focus
     # Enforce the public JSON contract at the boundary.
     json.dumps(result, allow_nan=False)
     return result

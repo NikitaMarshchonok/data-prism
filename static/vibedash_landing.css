@@ -292,6 +292,9 @@ textarea::placeholder { color: #61736d; }
 .comparison-semantic-review { min-width: 0; margin: 0; }
 .comparison-semantic-review legend { padding: 0 8px; color: var(--text); font-weight: 600; }
 .comparison-semantic-review .semantic-table { min-width: 540px; }
+#comparison-metric-field[hidden] { display: none; }
+.comparison-question label { margin-bottom: 10px; }
+.comparison-question p { color: var(--muted); font-size: 14px; line-height: 1.5; margin: 10px 0 0; }
 .comparison-semantic-review caption { padding: 14px 11px; text-align: left; color: var(--text); font-weight: 600; }
 .semantic-table th, .semantic-table td { padding: 11px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
 .semantic-table tr:last-child th, .semantic-table tr:last-child td { border-bottom: 0; }

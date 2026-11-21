@@ -47,6 +47,24 @@ def validate_comparison_semantics(baseline_df, current_df, baseline, current):
     return before, after
 
 
+def validate_comparison_focus(question, metric, baseline, current):
+    """Bind a user's question to one confirmed shared measure."""
+    if not isinstance(question, str) or not isinstance(metric, str):
+        raise SemanticContractError("Provide a comparison question and primary metric as text.")
+    question = question.strip()
+    if not question and not metric:
+        return None
+    if not question or len(question) > 500 or not question.isprintable():
+        raise SemanticContractError("Enter a single-line comparison question of up to 500 characters.")
+    if not all(
+        any(column["name"] == metric and column["role"] == "measure"
+            for column in (contract or {}).get("columns", ()))
+        for contract in (baseline, current)
+    ):
+        raise SemanticContractError("Choose a numeric measure with matching definitions in both files.")
+    return {"question": question, "metric": metric}
+
+
 def comparison_semantics_audit(baseline, current):
     return {
         "contract": "confirmed-comparison-semantics-v1",

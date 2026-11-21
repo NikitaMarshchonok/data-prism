@@ -6,6 +6,7 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
+from src.semantic_contract import infer_semantic_contract
 from vibedash.period_comparison import PeriodComparisonError, build_period_comparison
 
 
@@ -22,6 +23,24 @@ class PeriodComparisonTests(unittest.TestCase):
         self.assertEqual(report["contract"], "period-comparison-v1")
         json.dumps(report, allow_nan=False)
         self.assertLessEqual(report["numeric_metrics"]["display_count"], 8)
+
+    def test_primary_metric_survives_the_candidate_and_display_limits(self):
+        baseline, current = self.periods()
+        baseline['earlier'] = baseline['value'] * 2
+        current['earlier'] = current['value'] * 2 + 100
+        before = infer_semantic_contract(baseline, confirmed=True)
+        after = infer_semantic_contract(current, confirmed=True)
+        with patch('vibedash.period_comparison.MAX_INFERENTIAL_CANDIDATES', 1):
+            report = build_period_comparison(
+                baseline, current, max_metrics=1,
+                baseline_semantic_contract=before, current_semantic_contract=after,
+                focus={'metric': 'value', 'question': 'How did average value change?'},
+            )
+        metrics = report['numeric_metrics']
+        self.assertEqual(metrics['candidate_count'], 1)
+        self.assertEqual(metrics['tested_count'], 1)
+        self.assertEqual(metrics['metrics'][0]['column'], 'value')
+        self.assertEqual(metrics['metrics'][0]['absolute_change'], 2)
 
     def test_identical_is_stable_and_deterministic(self):
         baseline, _ = self.periods()

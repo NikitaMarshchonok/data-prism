@@ -65,6 +65,7 @@
                 </p>
                 <div class="hero-actions">
                     <a class="button button-primary" href="#workspace">Analyze your data</a>
+                    <a class="button button-secondary" href="#period-comparison">Compare two periods</a>
                     <form id="demo-form" method="POST" action="{{ url_for('vibedash.preview') }}">
                         <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
                         <input type="hidden" name="demo_dataset" value="saas_growth">
@@ -304,10 +305,9 @@
                 </div>
             </form>
 
-            <section class="period-comparison" aria-labelledby="period-comparison-heading">
+            <section class="period-comparison" id="period-comparison" aria-labelledby="period-comparison-heading">
                 <div class="period-comparison-heading">
                     <div>
-                        <div class="eyebrow"><span></span> Separate workflow</div>
                         <h2 id="period-comparison-heading">Compare two periods.</h2>
                     </div>
                     <p>Run an independent observational comparison against two CSV snapshots. Keep the same row unit and metric definitions in both files; inputs are CSV-only and processing is temporary.</p>
@@ -316,6 +316,13 @@
                     <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
                     <input type="hidden" name="baseline_semantic_contract" id="baseline-semantic-contract">
                     <input type="hidden" name="current_semantic_contract" id="current-semantic-contract">
+                    <div class="field-card comparison-question">
+                        <label for="comparison-question"><strong>What do you want to compare?</strong></label>
+                        <input class="text-input" type="text" id="comparison-question" name="comparison_question" maxlength="500"
+                               aria-describedby="comparison-question-help"
+                               placeholder="Example: Did our average first response time increase?">
+                        <p id="comparison-question-help">Ask how an average changed across two periods. After file review, choose the column that answers your question. Leave blank for a general comparison. Your question appears in the report and its export. Use no confidential details.</p>
+                    </div>
                     <div class="period-file-grid">
                         <div class="field-card period-file-card">
                             <label for="baseline-file">
@@ -341,6 +348,13 @@
                     <fieldset class="semantic-panel comparison-semantic-review" id="comparison-semantic-review" hidden>
                         <legend>Review both period definitions</legend>
                         <p class="semantic-intro">Confirm the role and stored unit for each column. Shared columns must use the same role and scale in both files. Ratio means a decimal such as 0.05; percent means a whole value such as 5. Values are not converted automatically.</p>
+                        <div class="semantic-primary-fields" id="comparison-metric-field" hidden>
+                            <label for="comparison-metric">
+                                <span>Primary metric</span>
+                                <select name="comparison_metric" id="comparison-metric" disabled></select>
+                                <small>Choose the shared numeric column whose average answers your question.</small>
+                            </label>
+                        </div>
                         <div id="comparison-semantic-columns"></div>
                         <p class="semantic-error" id="comparison-semantic-conflicts" role="status" hidden></p>
                         <label class="semantic-confirmation" for="comparison-semantics-confirmed">
@@ -436,6 +450,9 @@
         const comparisonJobsUrl = {{ url_for('vibedash.create_period_comparison_job')|tojson }};
         const comparisonReadinessUrl = {{ url_for('vibedash.comparison_readiness')|tojson }};
         const comparisonForm = document.getElementById('period-comparison-form');
+        const comparisonQuestion = document.getElementById('comparison-question');
+        const comparisonMetricField = document.getElementById('comparison-metric-field');
+        const comparisonMetric = document.getElementById('comparison-metric');
         const baselineFileInput = document.getElementById('baseline-file');
         const currentFileInput = document.getElementById('current-file');
         const baselineFileName = document.getElementById('baseline-file-name');
@@ -1055,10 +1072,13 @@
             if (comparisonRequest) comparisonRequest.abort();
             comparisonRequest = null;
             comparisonProposal = null;
+            comparisonMetricField.hidden = true;
+            comparisonMetric.disabled = true;
+            comparisonMetric.replaceChildren();
             comparisonConfirmed.checked = false;
             comparisonReview.hidden = true;
             comparisonReview.disabled = false;
-            [baselineFileInput, currentFileInput, baselineLabelInput, currentLabelInput].forEach((element) => { element.disabled = false; });
+            [baselineFileInput, currentFileInput, baselineLabelInput, currentLabelInput, comparisonQuestion].forEach((element) => { element.disabled = false; });
             comparisonColumns.replaceChildren();
             comparisonBusy = false;
             comparisonSubmit.disabled = false;
@@ -1101,7 +1121,8 @@
                 else if (unit.value === 'none') unit.value = 'number';
             });
             const before = new Map(periodColumns('baseline').map((column) => [column.name, column]));
-            const conflicts = periodColumns('current').filter((column) => {
+            const after = periodColumns('current');
+            const conflicts = after.filter((column) => {
                 const previous = before.get(column.name);
                 return previous && (previous.role !== column.role || previous.unit !== column.unit);
             });
@@ -1111,7 +1132,19 @@
                 : '';
             comparisonConfirmed.disabled = conflicts.length > 0;
             if (conflicts.length) comparisonConfirmed.checked = false;
-            comparisonSubmit.disabled = comparisonBusy || !comparisonConfirmed.checked;
+            const focused = Boolean(comparisonQuestion.value.trim());
+            const choices = after.filter((column) => {
+                const previous = before.get(column.name);
+                return column.role === 'measure' && previous?.role === 'measure' && previous.unit === column.unit;
+            });
+            const previousMetric = focused ? comparisonMetric.value : '';
+            comparisonMetric.replaceChildren(new Option(choices.length ? 'Choose a primary metric' : 'No matching numeric measures', ''));
+            choices.forEach((column) => comparisonMetric.add(new Option(column.name, column.name)));
+            comparisonMetric.value = choices.some((column) => column.name === previousMetric) ? previousMetric : '';
+            comparisonMetric.disabled = !focused;
+            comparisonMetricField.hidden = !focused;
+            comparisonSubmit.disabled = comparisonBusy || !comparisonConfirmed.checked
+                || (focused && !comparisonMetric.value);
         }
 
         function renderComparisonSemantics(contracts) {
@@ -1160,13 +1193,30 @@
             comparisonReview.hidden = false;
             comparisonSubmitLabel.textContent = 'Compare periods';
             updateComparisonAgreement();
-            comparisonColumns.querySelector('select')?.focus();
+            if (!comparisonMetricField.hidden) comparisonMetric.focus();
+            else comparisonColumns.querySelector('select')?.focus();
         }
 
-        comparisonReview.addEventListener('change', (event) => {
-            if (event.target !== comparisonConfirmed) comparisonConfirmed.checked = false;
+        comparisonQuestion.addEventListener('input', () => {
+            if (!comparisonProposal) return;
+            comparisonConfirmed.checked = false;
             updateComparisonAgreement();
         });
+
+        comparisonReview.addEventListener('change', (event) => {
+            if (event.target !== comparisonConfirmed && event.target !== comparisonMetric) comparisonConfirmed.checked = false;
+            updateComparisonAgreement();
+        });
+
+        function comparisonReadinessMessage(readiness) {
+            const periods = {baseline: 'Earlier period', current: 'Later period'};
+            return Object.entries(readiness || {}).filter(([, report]) => !report.analysis_allowed)
+                .map(([period, report]) => {
+                    const issues = (report.checks || []).filter((check) => check.status === 'blocked');
+                    const guidance = issues.map((check) => `${check.description} ${check.recommendation}`);
+                    return `${periods[period]}: ${guidance.join(' ') || report.summary}`;
+                }).join(' ');
+        }
 
         comparisonForm.addEventListener('submit', async (event) => {
             event.preventDefault();
@@ -1211,8 +1261,7 @@
                     if (revision !== comparisonRevision) return;
                     if (!response.ok) throw new Error(proposal.error || 'The period preflight could not finish.');
                     if (!proposal.analysis_allowed) {
-                        const blocked = Object.entries(proposal.readiness).filter(([, report]) => !report.analysis_allowed);
-                        throw new Error(blocked.map(([period, report]) => `${period}: ${report.summary}`).join(' '));
+                        throw new Error(comparisonReadinessMessage(proposal.readiness) || 'Review both comparison files.');
                     }
                     comparisonBusy = false;
                     renderComparisonSemantics(proposal.semantic_contracts);
@@ -1220,6 +1269,9 @@
                     return;
                 }
                 if (!comparisonConfirmed.checked || comparisonConfirmed.disabled) throw new Error('Review and confirm both period definitions.');
+                if (comparisonQuestion.value.trim() && !comparisonMetric.value) {
+                    throw new Error('Choose a primary metric for your comparison question.');
+                }
                 for (const period of ['baseline', 'current']) {
                     document.getElementById(`${period}-semantic-contract`).value = JSON.stringify({
                         contract: comparisonProposal[period].contract, confirmed: true, columns: periodColumns(period),
@@ -1227,7 +1279,7 @@
                 }
                 const formData = new FormData(comparisonForm);
                 queued = true;
-                [baselineFileInput, currentFileInput, baselineLabelInput, currentLabelInput, comparisonReview].forEach((element) => { element.disabled = true; });
+                [baselineFileInput, currentFileInput, baselineLabelInput, currentLabelInput, comparisonQuestion, comparisonReview].forEach((element) => { element.disabled = true; });
                 const response = await fetch(comparisonJobsUrl, {
                     method: 'POST',
                     body: formData,
@@ -1237,7 +1289,8 @@
                 const job = await readResponse(response);
                 if (!response.ok) {
                     if (job.semantic_contract_error) comparisonConfirmed.checked = false;
-                    throw new Error(job.error || 'The period comparison could not be started.');
+                    const readinessMessage = comparisonReadinessMessage(job.readiness);
+                    throw new Error(readinessMessage || job.error || 'The period comparison could not be started.');
                 }
                 comparisonStatus.textContent = 'Comparison queued. Waiting for the evidence report…';
                 await waitForJob(job.status_url, comparisonStatus);
@@ -1251,7 +1304,7 @@
                 if (revision === comparisonRevision) {
                     comparisonRequest = null;
                     comparisonBusy = false;
-                    if (queued) [baselineFileInput, currentFileInput, baselineLabelInput, currentLabelInput, comparisonReview].forEach((element) => { element.disabled = false; });
+                    if (queued) [baselineFileInput, currentFileInput, baselineLabelInput, currentLabelInput, comparisonQuestion, comparisonReview].forEach((element) => { element.disabled = false; });
                     comparisonSubmitLabel.textContent = comparisonProposal ? 'Compare periods' : 'Review both files';
                     if (comparisonProposal) updateComparisonAgreement();
                     else comparisonSubmit.disabled = false;

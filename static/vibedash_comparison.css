@@ -27,6 +27,11 @@ h1 { max-width:720px; margin-bottom:16px; font-size:clamp(44px,6vw,74px); line-h
 .summary-panel { display:grid; grid-template-columns:.65fr 1fr; gap:40px; align-items:center; margin-bottom:64px; }
 .summary-panel h2,.section-heading h2,.limitations h2 { margin:0; font-size:clamp(26px,3vw,38px); letter-spacing:-.045em; }
 .summary-panel p { margin:0; color:#cbd9d4; line-height:1.65; }
+.comparison-answer { align-items:start; margin-bottom:18px; overflow-wrap:anywhere; }
+.comparison-answer h2 { font-size:clamp(22px,2.6vw,32px); line-height:1.2; }
+.comparison-answer p + p,.comparison-answer dl { margin-top:12px; }
+.comparison-answer dl + p { margin-top:12px; }
+
 .section-heading { display:grid; grid-template-columns:1fr .78fr; align-items:end; gap:38px; margin-bottom:24px; }
 .section-heading .eyebrow { margin-bottom:10px; }
 .section-heading > p { margin:0; color:var(--muted); line-height:1.55; }
@@ -95,6 +100,9 @@ dd { margin:6px 0 0; color:var(--blue); font:600 14px var(--display); overflow-w
     .comparison-header, .summary-panel, .report-section, .limitations, .decision-guidance, .comparison-footer { break-inside:avoid; }
     .summary-panel, .limitations, .input-card, .report-card, .empty-state, .drift-card, .table-wrap { background:#fff; border-color:#cbd5d1; }
     .summary-panel, .limitations { color:var(--text); }
+    .comparison-answer p { color:var(--text); }
+    .comparison-answer .input-facts div { background:#f4f7f5; }
+
     .metrics-table { min-width:0; font-size:8pt; }
     .metrics-table th, .metrics-table td { padding:7px 6px; }
     .comparison-footer { color:var(--muted); }

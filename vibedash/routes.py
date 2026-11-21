@@ -93,7 +93,7 @@ try:
         validate_stored_task_brief, task_brief_audit_view,
     )
     from .comparison_report import build_comparison_decision_guidance
-    from .comparison_semantics import semantic_conflicts, validate_comparison_semantics
+    from .comparison_semantics import semantic_conflicts, validate_comparison_focus, validate_comparison_semantics
     from .pilot_metrics import (
         build_scope_value_feedback,
         feedback_available,
@@ -740,6 +740,7 @@ if vibedash_bp:
                 current_label=current_label,
                 baseline_semantic_contract=before,
                 current_semantic_contract=after,
+                focus=payload.get('focus'),
             )
             baseline_filename = _comparison_filename(
                 baseline.get('filename'), 'baseline_filename'
@@ -2813,11 +2814,18 @@ if vibedash_bp:
                 parse_semantic_contract_json(request.form.get('current_semantic_contract')),
             )
 
+            if any(len(request.form.getlist(field)) > 1 for field in ('comparison_question', 'comparison_metric')):
+                raise SemanticContractError('Provide the comparison question and primary metric once.')
+            focus = validate_comparison_focus(
+                request.form.get('comparison_question', ''), request.form.get('comparison_metric', ''),
+                before, after,
+            )
             store = _analysis_job_store()
             job = store.create(
                 request_scope,
                 {
                     'analysis_kind': 'period_comparison',
+                    **({'focus': focus} if focus else {}),
                     'baseline': {
                         'stored_filename': stored_filenames[0],
                         'filename': filenames[0],
