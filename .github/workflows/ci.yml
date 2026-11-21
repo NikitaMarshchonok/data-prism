@@ -83,6 +83,9 @@ jobs:
           python evaluate_forecast_benchmark.py \
             --config evaluation/forecast_benchmark_v2.json \
             --output forecast-benchmark-v2-${{ matrix.python-version }}.json
+          python evaluate_forecast_benchmark.py \
+            --config evaluation/forecast_benchmark_v2_long_delay.json \
+            --output forecast-benchmark-v2-long-delay-${{ matrix.python-version }}.json
 
       - name: Preserve forecast protocol results including losses
         if: always()
@@ -92,6 +95,7 @@ jobs:
           path: |
             forecast-benchmark-v1-${{ matrix.python-version }}.json
             forecast-benchmark-v2-${{ matrix.python-version }}.json
+            forecast-benchmark-v2-long-delay-${{ matrix.python-version }}.json
           if-no-files-found: ignore
 
       - name: Run VibeDash smoke tests

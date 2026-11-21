@@ -153,6 +153,40 @@ their **own** validation-selected reference, v1 had 25 better/35 tied/12 worse
 windows and v2 had 18 better/41 tied/13 worse. The references differ; do not
 turn these counts into directly comparable accuracy or success percentages.
 
+## Fourteen-day horizon with delayed observations
+
+```bash
+python evaluate_forecast_benchmark.py \
+  --config evaluation/forecast_benchmark_v2_long_delay.json \
+  --output forecast-benchmark-v2-long-delay.json
+```
+
+This separate CI run uses the same seven generators and seeds, with two
+14-day outer windows at delays of zero and ten days. It schedules 48
+evaluations. The ten-day delay exceeds one weekly cycle, so a seasonal forecast
+has to bridge more than a week of unavailable targets. Both delays score the same
+outer dates within this run. The generators use the protocol to define the
+series length and simulate the timing of a regime change, so the seven-day and
+fourteen-day runs should be read as separate stress scenarios.
+
+The totals and each series summary report better, tied and worse counts against
+every simple reference in `vs_each_baseline`. They also count windows with
+at least one baseline loss and show how many of those losses the comparison
+against the validation-selected baseline alone would miss. Failed windows
+remain in the scheduled/failed counts and contribute no comparison outcomes.
+These diagnostics use the same held-out dates for all methods. Method and
+reference selection still use earlier validation, and CI uses the integrity
+status for its exit code.
+
+In the first local run, all 48 windows completed. The selected forecast had
+higher MAE than its validation-selected reference in 7 windows, and higher
+MAE than at least one of the four simple references in 12 windows. The 5
+additional losses appear only when the other reference forecasts are checked.
+Among the 12 windows with a loss against any reference, 7 used a ten-day delay
+and 5 used no delay. They occurred in the white-noise, regime-change and
+noisy-weekly scenarios. These counts describe this synthetic run.
+The exact-weekly reference retained zero MAE at both delays.
+
 ## What remains unproven
 
 There is no pass threshold asserting useful predictive performance in v1.

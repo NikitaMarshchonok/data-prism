@@ -192,6 +192,11 @@ class ForecastBenchmarkTests(unittest.TestCase):
         self.assertEqual(report['status'], 'completed_with_failures')
         self.assertEqual(report['totals']['failed_windows'], 2)
         self.assertEqual(report['totals']['scored_windows'], 70)
+        for outcomes in report['totals']['vs_each_baseline'].values():
+            self.assertEqual(sum(outcomes.values()), 70)
+        constant = report['series'][0]['summary']
+        self.assertEqual(constant['scheduled_windows'], 6)
+        self.assertEqual(constant['vs_each_baseline']['last_value'], {'better': 0, 'tie': 4, 'worse': 0})
         failed = report['series'][0]['windows'][0]
         self.assertEqual(failed['error']['message'], 'controlled failure')
         self.assertEqual(set(failed['baselines']), {'last_value', 'seasonal_naive'})

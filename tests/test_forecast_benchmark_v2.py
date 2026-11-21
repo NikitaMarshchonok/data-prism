@@ -53,6 +53,21 @@ class ExtendedForecastBenchmarkTests(unittest.TestCase):
                     self.assertEqual(before['baselines'][name], after['baselines'][name])
                 self.assertEqual(set(after['baselines']), set(BASELINES))
 
+    def test_tie_with_selected_reference_keeps_loss_to_other_reference_visible(self):
+        config = protocol() | {'contract': 'forecast-benchmark-v2', 'seeds': [17],
+                               'outer_windows': 1, 'reporting_delays': [0]}
+        with patch('src.forecast_benchmark.forecast_series', side_effect=extended_stub):
+            report = run_forecast_benchmark(config)
+        # The fixture always selects last_value. For an exact weekly series,
+        # seasonal_naive has zero error and last_value cannot match the cycle.
+        exact_weekly = next(row for row in report['series'] if row['scenario'] == 'weekly_exact')
+        summary = exact_weekly['summary']
+        self.assertEqual(summary['vs_validation_selected_baseline'], {'better': 0, 'tie': 1, 'worse': 0})
+        self.assertEqual(summary['vs_each_baseline']['seasonal_naive'], {'better': 0, 'tie': 0, 'worse': 1})
+        self.assertEqual(summary['worse_than_any_baseline_windows'], 1)
+        self.assertEqual(summary['worse_only_vs_other_baseline_windows'], 1)
+        self.assertEqual(report['protocol_integrity'], 'passed')
+
     def test_v2_rejects_legacy_output_instead_of_silently_downgrading(self):
         config = protocol() | {'contract': 'forecast-benchmark-v2'}
         data = generate_series('trend', 17, config)

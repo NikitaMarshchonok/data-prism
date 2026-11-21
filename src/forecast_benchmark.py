@@ -216,19 +216,36 @@ def evaluate_window(data, config, window_index, delay):
     return result
 
 
-def _summarize(windows):
+def _outcome_counts(outcomes):
+    counts = Counter(outcomes)
+    return {name: counts[name] for name in ('better', 'tie', 'worse')}
+
+
+def _summarize(windows, baselines):
     scored = [row for row in windows if row['model_metrics'] is not None]
-    counts = Counter(row['selected_baseline_comparison']['outcome'] for row in scored)
+    losses_against_any = [
+        row for row in scored
+        if any(comparison['outcome'] == 'worse' for comparison in row['comparisons'].values())
+    ]
     return {'scheduled_windows': len(windows), 'scored_windows': len(scored),
             'failed_windows': sum(row['status'] == 'error' for row in windows),
             'candidate_failures': sum(row.get('candidate_failures', 0) for row in windows),
-            'vs_validation_selected_baseline': {name: counts[name] for name in ('better', 'tie', 'worse')},
+            'vs_validation_selected_baseline': _outcome_counts(
+                row['selected_baseline_comparison']['outcome'] for row in scored),
+            'vs_each_baseline': {
+                name: _outcome_counts(row['comparisons'][name]['outcome'] for row in scored)
+                for name in baselines
+            },
+            'worse_than_any_baseline_windows': len(losses_against_any),
+            'worse_only_vs_other_baseline_windows': sum(
+                row['selected_baseline_comparison']['outcome'] != 'worse' for row in losses_against_any),
             'undefined_relative_improvement_windows': sum(
                 not row['selected_baseline_comparison']['relative_improvement_defined'] for row in scored)}
 
 
 def run_forecast_benchmark(config):
     protocol = validate_benchmark_config(config)
+    suite, candidates, baselines = _methods(protocol)
     series = []
     for scenario in protocol['scenarios']:
         seeds = [None] if scenario in DETERMINISTIC else protocol['seeds']
@@ -238,10 +255,9 @@ def run_forecast_benchmark(config):
                        for delay in protocol['reporting_delays'] for index in range(protocol['outer_windows'])]
             series.append({'scenario': scenario, 'seed': seed,
                            'data_sha256': _hash(data.to_dict(orient='list')),
-                           'windows': windows, 'summary': _summarize(windows)})
-    totals = _summarize([window for row in series for window in row['windows']])
+                           'windows': windows, 'summary': _summarize(windows, baselines)})
+    totals = _summarize([window for row in series for window in row['windows']], baselines)
     complete = totals['failed_windows'] == 0 and totals['candidate_failures'] == 0
-    suite, candidates, baselines = _methods(protocol)
     return {'contract': protocol['contract'], 'status': 'completed' if complete else 'completed_with_failures',
             'protocol_integrity': 'passed' if complete else 'failed',
             'predictive_acceptance': 'not_established', 'protocol': protocol,
@@ -260,6 +276,7 @@ def run_forecast_benchmark(config):
                 'Each origin reruns the existing inner-validation selector on facts available then; no outer score selects candidates or baselines.',
                 'Every declared reference is scored independently; the reported reference is selected by inner validation, not the best outer error.',
                 'v1 freezes the two original baselines; v2 adds historical mean/median. Neither gains on noise nor comparisons on these inspected cases prove a temporal signal or unseen performance.',
+                'Per-baseline outcomes count scored windows on the same outer dates. A loss against any baseline is a diagnostic and does not affect selection.',
                 'Later origins may use released earlier outcomes, as in an expanding-history deployment; they are not fresh unseen datasets.',
                 'Counts are descriptive, not significance, confidence intervals, business value, an overall accuracy score or a production gate.',
                 'Fixed delays are simulated; revisions, real release timestamps, external predictors, multiple entities and live monitoring are not evaluated.',
