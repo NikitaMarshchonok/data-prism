@@ -31,7 +31,7 @@ class StandaloneExportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.app = Flask(__name__, template_folder=str(ROOT / 'templates'), static_folder=str(ROOT / 'static'))
-        for endpoint in ('index', 'analysis_history', 'decision_cases', 'export'):
+        for endpoint in ('index', 'analysis_history', 'decision_cases', 'export', 'audit_report'):
             cls.app.add_url_rule('/' + endpoint, endpoint='vibedash.' + endpoint, view_func=lambda: '')
         cls.frame = pd.DataFrame({'season': [1, 2, 3, 4], 'cnt': [10, 20, 30, 40],
                                   'dteday': pd.date_range('2020-01-01', periods=4)})

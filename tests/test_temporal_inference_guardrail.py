@@ -142,7 +142,7 @@ class TemporalInferenceGuardrailTests(unittest.TestCase):
 
     def test_html_templates_and_export_show_reason_and_escape_metadata(self):
         app = Flask(__name__, template_folder=str(ROOT / "templates"), static_folder=str(ROOT / "static"))
-        for endpoint in ["analysis_history", "decision_cases", "export", "index"]:
+        for endpoint in ["analysis_history", "decision_cases", "export", "audit_report", "index"]:
             app.add_url_rule("/" + endpoint, endpoint="vibedash." + endpoint, view_func=lambda: "")
         report = StatisticalValidationEngine(_frame()).analyze()
         report["methodology_notes"].append("<script>untrusted</script>")

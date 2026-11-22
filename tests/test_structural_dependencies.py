@@ -225,7 +225,7 @@ class StructuralDependencyTests(unittest.TestCase):
         data = frame().rename(columns={"cnt": "cnt<script>untrusted</script>"})
         insights = EvidenceBasedInsightEngine(data).generate()
         app = Flask(__name__, template_folder=str(Path(__file__).resolve().parents[1] / "templates"))
-        for endpoint in ("analysis_history", "decision_cases", "export", "index"):
+        for endpoint in ("analysis_history", "decision_cases", "export", "audit_report", "index"):
             app.add_url_rule("/" + endpoint, endpoint="vibedash." + endpoint, view_func=lambda: "")
         for template in ("vibedash_evidence.html", "vibedash_preview.html"):
             for export in (False, True):
