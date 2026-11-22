@@ -25,17 +25,30 @@
         </div>
     </section>
 
+    {% macro technical(lines) -%}
+    {%- set lines = lines | select | list -%}
+    {%- if lines %}<div class="technical"><small>Technical detail</small>{% for line in lines %}<p>{{ line }}</p>{% endfor %}</div>{% endif -%}
+    {%- endmacro %}
+
     <section>
         <h2>1. Executive summary</h2>
-        {% if report.summary.headline %}<p class="lead"><strong>{{ report.summary.headline }}</strong></p>{% endif %}
-        {% if report.summary.text %}<p>{{ report.summary.text }}</p>{% endif %}
+        <p class="lead"><strong>{{ report.summary.plain_headline }}</strong></p>
+        <p>{{ report.readiness.verdict }}</p>
         {% for item in report.priorities %}
         <div class="card">
             <small>Priority {{ loop.index }}</small>
+            {% if item.plain %}
+            <h3>{{ item.plain.headline }}</h3>
+            <p>{{ item.plain.meaning }}</p>
+            <div class="action"><small>What to do</small>{{ item.plain.action }}</div>
+            <p class="muted meta-line"><span class="tag {{ item.confidence }}">{{ item.confidence_label }}</span></p>
+            {{ technical([item.title, item.finding]) }}
+            {% else %}
             <h3>{{ item.title }}</h3>
             {% if item.finding %}<p>{{ item.finding }}</p>{% endif %}
             {% if item.action %}<div class="action"><small>What to do</small>{{ item.action }}</div>{% endif %}
             <p class="muted meta-line"><span class="tag {{ item.confidence }}">{{ item.confidence_label }}</span>{% if item.risk %}{{ item.risk }}{% endif %}</p>
+            {% endif %}
         </div>
         {% else %}
         <p class="muted">No priorities met the evidence threshold for this dataset.</p>
@@ -51,10 +64,17 @@
         </div>
         {% for issue in report.readiness.issues %}
         <div class="card">
+            {% if issue.plain %}
+            <h3><span class="tag {{ issue.status }}">{{ issue.status_label }}</span>{{ issue.plain.headline }}</h3>
+            <p>{{ issue.plain.meaning }}</p>
+            <div class="action"><small>How to fix</small>{{ issue.plain.action }}</div>
+            {{ technical([issue.title ~ ": " ~ issue.description] + issue.evidence) }}
+            {% else %}
             <h3><span class="tag {{ issue.status }}">{{ issue.status_label }}</span>{{ issue.title }}</h3>
             {% if issue.description %}<p>{{ issue.description }}</p>{% endif %}
             {% if issue.evidence %}<ul>{% for line in issue.evidence %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
             {% if issue.recommendation %}<div class="action"><small>How to fix</small>{{ issue.recommendation }}</div>{% endif %}
+            {% endif %}
         </div>
         {% endfor %}
         {% if report.readiness.hidden_issue_count %}<p class="muted">{{ report.readiness.hidden_issue_count }} more issue(s) are listed in the online workspace.</p>{% endif %}
@@ -64,11 +84,19 @@
         <h2>3. Key findings</h2>
         {% for finding in report.findings %}
         <div class="card">
+            {% if finding.plain %}
+            <h3>{{ finding.plain.headline }}</h3>
+            <p>{{ finding.plain.meaning }}</p>
+            <div class="action"><small>Next step</small>{{ finding.plain.action }}</div>
+            <p class="muted meta-line"><span class="tag {{ finding.confidence }}">{{ finding.confidence_label }}</span>{% if finding.sample_size %}Based on {{ "{:,}".format(finding.sample_size) }} rows.{% endif %}</p>
+            {{ technical([finding.statement] + finding.evidence) }}
+            {% else %}
             <h3>{{ finding.title }}</h3>
             <p>{{ finding.statement }}</p>
             {% if finding.evidence %}<ul class="muted">{% for line in finding.evidence %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
             {% if finding.recommendation %}<div class="action"><small>Next step</small>{{ finding.recommendation }}</div>{% endif %}
             <p class="muted meta-line"><span class="tag {{ finding.confidence }}">{{ finding.confidence_label }}</span>{% if finding.sample_size %}Based on {{ "{:,}".format(finding.sample_size) }} rows.{% endif %}</p>
+            {% endif %}
         </div>
         {% else %}
         <p class="muted">No findings met the evidence threshold for this dataset.</p>
@@ -77,13 +105,18 @@
 
     <section>
         <h2>4. Statistical validation</h2>
-        {% if report.statistics.summary %}<p>{{ report.statistics.summary }}</p>{% endif %}
+        {% if report.statistics.plain %}
+        <p class="lead"><strong>{{ report.statistics.plain.headline }}</strong></p>
+        <p>{{ report.statistics.plain.meaning }}</p>
+        <div class="action"><small>What this means for you</small>{{ report.statistics.plain.action }}</div>
+        {{ technical([report.statistics.summary]) }}
+        {% elif report.statistics.summary %}<p>{{ report.statistics.summary }}</p>{% endif %}
         {% if report.statistics.tests %}
         <table>
-            <thead><tr><th>Hypothesis</th><th>Rows</th><th>Adjusted p</th><th>Effect size</th><th>95% CI</th></tr></thead>
+            <thead><tr><th>Pattern</th><th>Rows</th><th>Adjusted p</th><th>Effect size</th><th>95% CI</th></tr></thead>
             <tbody>
             {% for test in report.statistics.tests %}
-            <tr><td><strong>{{ test.title }}</strong><br><span class="muted">{{ test.method }}{% if test.significant %} · significant after correction{% endif %}</span></td><td>{{ test.sample_size or "n/a" }}</td><td>{{ test.adjusted_p_value }}</td><td>{{ test.effect }}</td><td>{{ test.interval }}</td></tr>
+            <tr><td><strong>{{ test.plain or test.title }}</strong><br><span class="muted">{{ test.title }} · {{ test.method }}{% if test.significant %} · significant after correction{% endif %}</span></td><td>{{ test.sample_size or "n/a" }}</td><td>{{ test.adjusted_p_value }}</td><td>{{ test.effect }}</td><td>{{ test.interval }}</td></tr>
             {% endfor %}
             </tbody>
         </table>

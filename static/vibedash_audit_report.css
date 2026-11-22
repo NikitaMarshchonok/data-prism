@@ -40,3 +40,6 @@ th { color: #5d6a65; font-size: 7.5pt; text-transform: uppercase; }
 .meta-line { margin-top: 6px; }
 .guardrail { margin-top: 10px; }
 .audit-heading { margin-top: 16px; }
+.technical { page-break-inside: avoid; break-inside: avoid; margin-top: 8px; padding-top: 6px; border-top: 1px dashed #d5ddd9; color: #6b7772; font-size: 8pt; }
+.technical small { display: block; color: #6b7772; }
+.technical p { margin: 2px 0 0; }
