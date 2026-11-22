@@ -110,6 +110,11 @@ try:
     )
     from .decision_calendar import build_decision_review_calendar
     from .decision_report import build_decision_report_context
+    from .audit_report import (
+        PDF_RENDER_SLOTS,
+        PDF_RENDER_WAIT_SECONDS,
+        build_audit_report_context,
+    )
     from .decision_outcomes import build_decision_outcome_summary
     from .pilot_receipt import (
         PilotReceiptError,
@@ -3327,6 +3332,85 @@ if vibedash_bp:
             )
             flash('Export is unavailable for this session.', 'error')
             return redirect(url_for('vibedash.index'))
+
+
+    @vibedash_bp.get('/report/<session_id>.pdf')
+    def audit_report(session_id):
+        """Download one owned analysis as a client-facing Data Audit PDF.
+
+        ``prepared_for`` and ``prepared_by`` are optional cover labels; they
+        are bounded and escaped, and no source rows enter the document.
+        ``?format=html`` returns the same document as HTML for preview.
+        """
+        session_data = _load_owned_session_data(session_id)
+        if not session_data:
+            return jsonify({'error': 'Analysis not found.'}), 404
+        try:
+            report = build_audit_report_context(
+                session_data,
+                prepared_for=request.args.get('prepared_for', ''),
+                prepared_by=request.args.get('prepared_by', ''),
+            )
+        except ValueError:
+            return jsonify({'error': 'This analysis cannot be exported as a report.'}), 409
+
+        css_path = Path(current_app.static_folder or '') / 'vibedash_audit_report.css'
+        try:
+            report_css = css_path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            current_app.logger.exception(
+                'Audit report stylesheet could not be read',
+                extra={'event': 'vibedash_audit_report_css_failed'},
+            )
+            return jsonify({'error': 'The report could not be generated.'}), 500
+        report_css = re.sub(r'</style', '<\\/style', report_css, flags=re.IGNORECASE)
+        html = render_template('vibedash_audit_report.html', report=report, report_css=report_css)
+
+        if request.args.get('format') == 'html':
+            response = make_response(html)
+            response.headers['Content-Type'] = 'text/html; charset=utf-8'
+        else:
+            if not PDF_RENDER_SLOTS.acquire(timeout=PDF_RENDER_WAIT_SECONDS):
+                current_app.logger.warning(
+                    'Audit report PDF rendering is at capacity',
+                    extra={'event': 'vibedash_audit_report_busy'},
+                )
+                busy = jsonify({'error': 'Report generation is busy. Try again in a few seconds.'})
+                busy.status_code = 503
+                busy.headers['Retry-After'] = '5'
+                return busy
+            try:
+                from weasyprint import HTML
+
+                def _deny_fetch(url, *args, **kwargs):
+                    raise ValueError('Audit reports never load external resources.')
+
+                # The document is self-contained; refusing every fetch keeps
+                # WeasyPrint away from the network and the local filesystem.
+                pdf_bytes = HTML(string=html, url_fetcher=_deny_fetch).write_pdf()
+            except Exception:
+                current_app.logger.exception(
+                    'Audit report PDF rendering failed',
+                    extra={'event': 'vibedash_audit_report_pdf_failed'},
+                )
+                return jsonify({'error': 'The report could not be generated.'}), 500
+            finally:
+                PDF_RENDER_SLOTS.release()
+            response = make_response(pdf_bytes)
+            response.headers['Content-Type'] = 'application/pdf'
+            response.headers['Content-Disposition'] = (
+                f'attachment; filename="data-audit-report-{session_id[:8]}.pdf"'
+            )
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; "
+            "style-src-attr 'none'; img-src data:; font-src 'none'; base-uri 'none'; "
+            "form-action 'none'; object-src 'none'; frame-ancestors 'none';"
+        )
+        return response
 
 
     @vibedash_bp.route('/api/ollama-status')

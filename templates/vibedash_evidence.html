@@ -48,7 +48,8 @@
             {% if not export_mode %}
             <div class="header-actions">
                 {% if manifest_url %}<a class="button button-secondary" href="{{ manifest_url }}">Audit manifest <span aria-hidden="true">↓</span></a>{% endif %}
-                <a class="button button-primary" href="{{ url_for('vibedash.export', session_id=session_id) }}">Export HTML <span aria-hidden="true">↓</span></a>
+                <a class="button button-primary" href="{{ url_for('vibedash.audit_report', session_id=session_id) }}">PDF report <span aria-hidden="true">↓</span></a>
+                <a class="button button-secondary" href="{{ url_for('vibedash.export', session_id=session_id) }}">Export HTML <span aria-hidden="true">↓</span></a>
                 <a class="button button-secondary" href="{{ url_for('vibedash.index') }}"><span aria-hidden="true">←</span> New analysis</a>
             </div>
             {% endif %}
