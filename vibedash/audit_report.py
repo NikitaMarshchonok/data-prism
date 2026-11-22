@@ -15,6 +15,8 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
+from .plain_language import explain_check, explain_insight, explain_priority, explain_statistics, explain_test
+
 
 REPORT_CONTRACT = "data-audit-report-v1"
 MAX_LABEL_LENGTH = 120
@@ -49,6 +51,9 @@ _CONFIDENCE_LABELS = {
 _SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
 _CONFIDENCE_ORDER = {"high": 0, "medium": 1, "moderate": 1, "low": 2, "exploratory": 3}
 _EXCLUDED_FINDING_CATEGORIES = frozenset({"coverage"})
+# Data quality has its own section built from readiness checks; repeating the
+# quality insight under findings would show the same numbers twice.
+_EXCLUDED_FINDING_IDS = frozenset({"data-quality"})
 _MONTH_NAMES = (
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
@@ -143,6 +148,7 @@ def _readiness_section(readiness: Mapping[str, Any]) -> dict[str, Any]:
             continue
         issues.append(
             {
+                "plain": explain_check(check),
                 "status": check_status,
                 "status_label": _CHECK_STATUS_LABELS[check_status],
                 "title": clean_text(check.get("title"), maximum=MAX_LABEL_LENGTH),
@@ -167,13 +173,14 @@ def _readiness_section(readiness: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _priorities_section(brief: Mapping[str, Any]) -> list[dict[str, Any]]:
+def _priorities_section(brief: Mapping[str, Any], dashboard: Mapping[str, Any]) -> list[dict[str, Any]]:
     priorities = []
     for item in _sequence(brief.get("priorities"))[:MAX_PRIORITIES]:
         item = _mapping(item)
         confidence_key, confidence_label = _confidence(item.get("confidence"))
         priorities.append(
             {
+                "plain": explain_priority(item, dashboard),
                 "title": clean_text(item.get("title"), maximum=MAX_LABEL_LENGTH * 2),
                 "finding": clean_text(item.get("finding")),
                 "action": clean_text(item.get("action")),
@@ -190,7 +197,7 @@ def _findings_section(insights: Any) -> list[dict[str, Any]]:
     for index, item in enumerate(_sequence(insights)):
         item = _mapping(item)
         category = clean_text(item.get("category"), maximum=40).lower()
-        if category in _EXCLUDED_FINDING_CATEGORIES:
+        if category in _EXCLUDED_FINDING_CATEGORIES or item.get("insight_id") in _EXCLUDED_FINDING_IDS:
             continue
         statement = clean_text(item.get("statement"))
         if not statement:
@@ -203,6 +210,7 @@ def _findings_section(insights: Any) -> list[dict[str, Any]]:
                 _CONFIDENCE_ORDER.get(confidence_key, 4),
                 index,
                 {
+                    "plain": explain_insight(item),
                     "title": clean_text(item.get("title"), maximum=MAX_LABEL_LENGTH),
                     "category": category or "finding",
                     "statement": statement,
@@ -229,6 +237,7 @@ def _statistics_section(validation: Mapping[str, Any]) -> dict[str, Any]:
         lower, upper = interval.get("lower"), interval.get("upper")
         tests.append(
             {
+                "plain": explain_test(test),
                 "title": clean_text(test.get("title"), maximum=MAX_LABEL_LENGTH * 2),
                 "method": clean_text(test.get("method"), maximum=MAX_LABEL_LENGTH),
                 "sample_size": _int_or_none(test.get("sample_size")),
@@ -250,6 +259,7 @@ def _statistics_section(validation: Mapping[str, Any]) -> dict[str, Any]:
         )
     status = clean_text(validation.get("status"), maximum=40) or "unavailable"
     return {
+        "plain": explain_statistics(validation),
         "status": status,
         "withheld": status != "ok",
         "summary": clean_text(validation.get("summary")),
@@ -260,6 +270,15 @@ def _statistics_section(validation: Mapping[str, Any]) -> dict[str, Any]:
         "tests": tests[:MAX_TESTS],
         "methodology_notes": _text_list(validation.get("methodology_notes"), MAX_NOTES),
     }
+
+
+def _plain_headline(brief: Mapping[str, Any]) -> str:
+    count = min(len(_sequence(brief.get("priorities"))), MAX_PRIORITIES)
+    if count == 0:
+        return "Nothing in this data needs urgent attention."
+    if count == 1:
+        return "One thing in this data deserves your attention."
+    return f"{('Two', 'Three')[count - 2]} things in this data deserve your attention."
 
 
 def build_audit_report_context(
@@ -299,11 +318,12 @@ def build_audit_report_context(
             "question": clean_text(session_data.get("prompt"), maximum=600),
         },
         "summary": {
+            "plain_headline": _plain_headline(brief),
             "headline": clean_text(brief.get("headline"), maximum=300),
             "text": clean_text(brief.get("summary")),
             "guardrail": clean_text(brief.get("guardrail")),
         },
-        "priorities": _priorities_section(brief),
+        "priorities": _priorities_section(brief, dashboard),
         "readiness": _readiness_section(readiness),
         "findings": _findings_section(dashboard.get("insights")),
         "statistics": _statistics_section(_mapping(dashboard.get("statistical_validation"))),
