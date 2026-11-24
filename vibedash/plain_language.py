@@ -367,12 +367,24 @@ def explain_test(test: Mapping[str, Any]) -> Optional[str]:
     return None
 
 
-def explain_statistics(validation: Mapping[str, Any]) -> Optional[Explanation]:
-    """Explain why statistics were run or withheld, or ``None`` if unknown."""
+def explain_statistics(validation: Mapping[str, Any], *, temporal_checked: bool = False) -> Optional[Explanation]:
+    """Explain why statistics were run or withheld, or ``None`` if unknown.
+
+    ``temporal_checked`` states that time-aware trend tests did run, so the
+    reader is pointed to them instead of being told to find such a method.
+    """
     if not isinstance(validation, Mapping):
         return None
     status = validation.get("status")
     if status == "inference_withheld" and validation.get("reason") == "temporal_design_unverified":
+        if temporal_checked:
+            return _explanation(
+                "Links between columns were not tested, because the data runs over time.",
+                "Values on neighbouring days or weeks depend on each other, and standard tests of links between columns "
+                "then report far more “discoveries” than are real. Trends over time were checked with methods built "
+                "for this situation; see “Trends over time”.",
+                "If you need proven drivers, compare independent groups such as customers or stores, or run a controlled test.",
+            )
         return _explanation(
             "We did not test for cause-and-effect because the data runs over time.",
             "Values on neighbouring days or months depend on each other, and standard significance tests then report "
@@ -391,6 +403,152 @@ def explain_statistics(validation: Mapping[str, Any]) -> Optional[Explanation]:
             "Use the confirmed patterns to choose what to investigate or test next, not as final answers.",
         )
     return None
+
+
+# --------------------------------------------------------------------------
+# Trends over time
+# --------------------------------------------------------------------------
+
+_GRAIN_WORDS = {"day": ("day", "days"), "week": ("week", "weeks"), "month": ("month", "months")}
+_SHORT_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _signed_percent(rate: Any) -> Optional[str]:
+    number = _number(rate)
+    if number is None:
+        return None
+    magnitude = _percent(abs(number))
+    if magnitude is None:
+        return None
+    if magnitude == "0.0%":
+        return magnitude
+    return f"{'+' if number > 0 else '−'}{magnitude}"
+
+
+def _date_parts(value: Any) -> Optional[tuple[int, int, int]]:
+    try:
+        year, month, day = (int(part) for part in str(value).split("-"))
+    except (TypeError, ValueError):
+        return None
+    if not 1 <= month <= 12 or not 1 <= day <= 31:
+        return None
+    return year, month, day
+
+
+def _day_label(parts: tuple[int, int, int]) -> str:
+    return f"{parts[2]} {_SHORT_MONTHS[parts[1] - 1]} {parts[0]}"
+
+
+def _period_range(grain: str, first: Any, last: Any) -> Optional[str]:
+    start, end = _date_parts(first), _date_parts(last)
+    if start is None or end is None:
+        return None
+    if grain == "month":
+        return f"{_SHORT_MONTHS[start[1] - 1]} {start[0]} to {_SHORT_MONTHS[end[1] - 1]} {end[0]}"
+    if grain == "week":
+        return f"the week of {_day_label(start)} to the week of {_day_label(end)}"
+    return f"{_day_label(start)} to {_day_label(end)}"
+
+
+def explain_temporal_series(item: Mapping[str, Any]) -> Optional[Explanation]:
+    """Explain one measure's trend result, or ``None`` if a needed value is missing."""
+    if not isinstance(item, Mapping):
+        return None
+    column = _name(item.get("column"))
+    grain = item.get("grain")
+    periods = _count(item.get("period_count"))
+    trend = item.get("trend") if isinstance(item.get("trend"), Mapping) else {}
+    direction = trend.get("direction")
+    if not column or grain not in _GRAIN_WORDS or periods is None or direction not in {"increasing", "decreasing", "no_trend"}:
+        return None
+    singular, plural = _GRAIN_WORDS[grain]
+    span = _period_range(grain, item.get("first_period"), item.get("last_period"))
+    scope = f"{periods} complete {plural}" + (f", from {span}" if span else "")
+    change = item.get("change_over_period") if isinstance(item.get("change_over_period"), Mapping) else {}
+    relative = _signed_percent(change.get("relative_change"))
+    interval = change.get("relative_change_ci")
+    low = high = None
+    if isinstance(interval, Sequence) and not isinstance(interval, str) and len(interval) == 2:
+        low, high = _signed_percent(interval[0]), _signed_percent(interval[1])
+
+    likely_range = f"{low} to {high}" if low and high else None
+    if direction == "no_trend":
+        change_value = _number(change.get("relative_change"))
+        if relative and change_value is not None and abs(change_value) >= 0.05:
+            moved = (
+                f" The values moved by about {relative}, but the swings from {singular} to {singular} are large, "
+                "so this could still be chance"
+                + (f" (the likely range runs from {likely_range})." if likely_range else ".")
+            )
+        elif relative:
+            moved = f" Overall the level stayed roughly flat (about {relative})."
+        else:
+            moved = ""
+        return _explanation(
+            f"No reliable trend in {column}.",
+            f"Over {scope}, the changes in {column} are consistent with normal ups and downs.{moved}",
+            f"Treat a single good or bad {singular} as noise unless the change continues for several more {plural}.",
+        )
+
+    rising = direction == "increasing"
+    verb = "risen" if rising else "fallen"
+    magnitude = relative[1:] if relative and relative[0] in "+−" else relative
+    headline = (
+        f"{column} has {verb} by about {magnitude} over the analyzed period."
+        if magnitude
+        else f"{column} has {verb} consistently over the analyzed period."
+    )
+    range_note = (
+        f" Allowing for normal ups and downs, the change was most likely between {low} and {high}."
+        if likely_range
+        else ""
+    )
+    return _explanation(
+        headline,
+        f"Measured {singular} by {singular} over {scope}.{range_note} "
+        "The test allows for neighbouring periods resembling each other, so this is unlikely to be random fluctuation. "
+        "It describes the past and is not a forecast.",
+        f"Break {column} down by product, channel or region to see where the change comes from, "
+        "then decide whether it is a change to encourage or to fix.",
+    )
+
+
+def explain_temporal(analysis: Mapping[str, Any]) -> Optional[Explanation]:
+    """Summarize the time-aware analysis, or ``None`` when it does not apply."""
+    if not isinstance(analysis, Mapping):
+        return None
+    status = analysis.get("status")
+    if status == "insufficient_data":
+        return _explanation(
+            "There is not enough history yet to judge trends.",
+            "A trend needs at least 12 complete days, weeks or months with data. Shorter or patchy histories "
+            "cannot separate a real trend from normal ups and downs.",
+            "Upload a longer period, or come back when more history has accumulated.",
+        )
+    if status != "ok":
+        return None
+    series = analysis.get("series") if isinstance(analysis.get("series"), Sequence) else ()
+    checked = len(series)
+    reliable = sum(
+        1 for item in series if isinstance(item, Mapping) and isinstance(item.get("trend"), Mapping)
+        and item["trend"].get("significant") is True
+    )
+    if checked == 0:
+        return None
+    measures = "1 measure" if checked == 1 else f"{checked} measures"
+    if reliable == 0:
+        result = "none shows a reliable trend"
+    elif reliable == 1:
+        result = "1 shows a reliable trend"
+    else:
+        result = f"{reliable} show a reliable trend"
+    headline = f"We checked {measures} over time; {result}."
+    return _explanation(
+        headline,
+        "Neighbouring days and weeks tend to resemble each other, which makes ordinary methods see trends that are "
+        "not there. These checks allow for that and for testing several measures at once.",
+        "Focus on the measures with a reliable trend; for the rest, recent ups and downs are most likely noise.",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -428,6 +586,20 @@ def _signal_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) 
     return None
 
 
+def _trend_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Explanation]:
+    temporal = dashboard.get("temporal_analysis")
+    series = temporal.get("series") if isinstance(temporal, Mapping) else None
+    columns = priority.get("columns")
+    if not isinstance(columns, Sequence) or isinstance(columns, str) or len(columns) != 1:
+        return None
+    for item in series if isinstance(series, Sequence) else ():
+        if isinstance(item, Mapping) and item.get("column") == columns[0]:
+            trend = item.get("trend")
+            if isinstance(trend, Mapping) and trend.get("significant") is True:
+                return explain_temporal_series(item)
+    return None
+
+
 def _readiness_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Explanation]:
     readiness = dashboard.get("readiness")
     checks = readiness.get("checks") if isinstance(readiness, Mapping) else None
@@ -457,8 +629,14 @@ def _insight_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any])
 #: Decision-brief categories with a dedicated explanation.  ``evidence-*``
 #: categories reuse the matching insight explanation.
 KNOWN_PRIORITY_CATEGORIES = frozenset(
-    {"assumption-review", "validated-signal", "anomaly-review", "data-readiness"}
+    {"assumption-review", "validated-signal", "validated-trend", "anomaly-review", "data-readiness"}
 )
+
+
+def temporal_checked(dashboard: Mapping[str, Any]) -> bool:
+    """True when time-aware trend tests ran on at least one measure."""
+    temporal = dashboard.get("temporal_analysis") if isinstance(dashboard, Mapping) else None
+    return isinstance(temporal, Mapping) and temporal.get("status") == "ok" and bool(temporal.get("series"))
 
 
 def explain_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Explanation]:
@@ -468,9 +646,11 @@ def explain_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) 
     category = priority.get("category")
     if category == "assumption-review":
         validation = dashboard.get("statistical_validation")
-        return explain_statistics(validation) if isinstance(validation, Mapping) else None
+        return explain_statistics(validation, temporal_checked=temporal_checked(dashboard)) if isinstance(validation, Mapping) else None
     if category == "validated-signal":
         return _signal_priority(priority, dashboard)
+    if category == "validated-trend":
+        return _trend_priority(priority, dashboard)
     if category == "anomaly-review":
         return _anomaly_priority(dashboard)
     if category == "data-readiness":

@@ -138,7 +138,12 @@ class TemporalInferenceGuardrailTests(unittest.TestCase):
         self.assertEqual(dashboard["kpis"][0]["value"], "6,600.00")
         self.assertEqual(dashboard["df_shape"], data.shape)
         self.assertEqual(dashboard["statistical_validation"]["inference_status"], "withheld")
-        self.assertEqual(dashboard["decision_brief"]["priorities"][0]["category"], "assumption-review")
+        categories = [item["category"] for item in dashboard["decision_brief"]["priorities"]]
+        # The trend test is built for serially dependent data, so it may lead;
+        # the IID caveat must still be shown and no IID signal promoted.
+        self.assertEqual(categories[:2], ["validated-trend", "assumption-review"])
+        self.assertNotIn("validated-signal", categories)
+        self.assertEqual(dashboard["temporal_analysis"]["status"], "ok")
 
     def test_html_templates_and_export_show_reason_and_escape_metadata(self):
         app = Flask(__name__, template_folder=str(ROOT / "templates"), static_folder=str(ROOT / "static"))

@@ -28,6 +28,7 @@ import pandas as pd
 from scipy import stats
 
 from src.column_semantics import columns_for_role, profile_dataframe_columns
+from src.semantic_contract import ALLOWED_UNITS, infer_column_unit
 from src.statistical_primitives import benjamini_hochberg
 
 
@@ -310,8 +311,27 @@ class TemporalAnalysisEngine:
         excluded = set(self.analysis_context.get("excluded_columns") or [])
         requested = set(self.analysis_context.get("time_columns") or [])
         columns = [column for column in columns if str(column) not in excluded]
-        columns.sort(key=lambda column: str(column) not in requested)
+        # A time axis confirmed in the semantic contract wins, then a column
+        # the question mentions, then the profiler's order.
+        columns.sort(
+            key=lambda column: (
+                (self.column_profiles.get(column) or {}).get("is_time") is not True,
+                str(column) not in requested,
+            )
+        )
         return columns[0] if columns else None
+
+    def _unit(self, column: Any) -> str:
+        """Explicit units, then the confirmed contract, then the same inference the contract proposes."""
+        explicit = self.units.get(str(column))
+        if explicit in ALLOWED_UNITS and explicit != "none":
+            return explicit
+        profile = self.column_profiles.get(column) or {}
+        confirmed = profile.get("unit")
+        if confirmed in ALLOWED_UNITS and confirmed != "none":
+            return confirmed
+        inferred = infer_column_unit(self.df, column, profile)
+        return inferred if inferred != "none" else "number"
 
     def _measures(self) -> list[Any]:
         columns = columns_for_role(self.df, "measure", profiles=self.column_profiles, require_variation=True)
@@ -350,7 +370,7 @@ class TemporalAnalysisEngine:
         series_results: list[dict[str, Any]] = []
         skipped: list[dict[str, str]] = []
         for column in measures:
-            unit = self.units.get(str(column), "number")
+            unit = self._unit(column)
             try:
                 prepared = prepare_series(
                     self.df[time_column], self.df[column], column=str(column), unit=unit
@@ -406,6 +426,22 @@ class TemporalAnalysisEngine:
         level = trend["median_level"]
         per_year = trend["slope_per_period"] * PERIODS_PER_YEAR[prepared.grain]
         lower, upper = trend["slope_ci"]
+        span = trend["n"] - 1
+        fitted_start = trend["intercept"]
+        fitted_end = fitted_start + trend["slope_per_period"] * span
+        # A percentage change is meaningful only for a positive level; signed
+        # measures such as profit can cross zero, so they get no percentage.
+        relative = fitted_start > 0 and fitted_end > 0
+        change_over_period = {
+            "periods": int(trend["n"]),
+            "fitted_start": float(fitted_start),
+            "fitted_end": float(fitted_end),
+            "absolute_change": float(trend["slope_per_period"] * span),
+            "relative_change": float(trend["slope_per_period"] * span / fitted_start) if relative else None,
+            "relative_change_ci": (
+                [float(lower * span / fitted_start), float(upper * span / fitted_start)] if relative else None
+            ),
+        }
         return {
             "column": prepared.column,
             "unit": unit,
@@ -418,6 +454,7 @@ class TemporalAnalysisEngine:
             "excluded_edge_periods": prepared.excluded_edge_periods,
             "empty_periods": prepared.empty_periods[:20],
             "empty_period_count": len(prepared.empty_periods),
+            "change_over_period": change_over_period,
             "trend": {
                 **dict(trend),
                 "relative_slope_per_period": _relative(trend["slope_per_period"], level),
