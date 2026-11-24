@@ -159,7 +159,7 @@ class AnalysisFocusTests(unittest.TestCase):
         self.assertEqual(brief["priorities"], [])
         self.assertEqual(brief["status"], "insufficient_evidence")
 
-    def test_temporal_guardrail_stays_first_and_kpis_are_unchanged(self):
+    def test_focused_trend_leads_guardrail_follows_and_kpis_are_unchanged(self):
         data = _frame(dated=True)
         contract = infer_semantic_contract(data, confirmed=True)
         spec = VizSpec(title="Task", metrics=[Metric(title="cnt", expr="sum(cnt)", fmt="number")])
@@ -170,8 +170,13 @@ class AnalysisFocusTests(unittest.TestCase):
         self.assertEqual(result["kpis"], general["kpis"])
         self.assertEqual(result["analysis_context"]["focus_columns"], ["cnt"])
         self.assertEqual(result["statistical_validation"]["inference_status"], "withheld")
-        self.assertEqual(result["decision_brief"]["priorities"][0]["category"], "assumption-review")
-        self.assertTrue(any(item["category"] == "evidence-trend" for item in result["decision_brief"]["priorities"]))
+        priorities = result["decision_brief"]["priorities"]
+        # The focused measure's trend is now tested with an autocorrelation-robust
+        # method, which replaces the descriptive early-vs-late comparison.
+        self.assertEqual(priorities[0]["category"], "validated-trend")
+        self.assertEqual(priorities[0]["columns"], ["cnt"])
+        self.assertEqual(priorities[1]["category"], "assumption-review")
+        self.assertFalse(any(item["category"] == "evidence-trend" for item in priorities))
 
 
 if __name__ == "__main__":

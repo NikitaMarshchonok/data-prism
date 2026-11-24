@@ -29,6 +29,7 @@ from .chart_theme import (
 from .spec import VizSpec, Metric, Chart, Filter
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
+from .temporal_engine import TemporalAnalysisEngine
 from .anomaly_segmentation_engine import AnomalySegmentationEngine
 from .readiness_engine import DatasetReadinessEngine
 from .decision_brief import build_decision_brief
@@ -186,6 +187,7 @@ def generate_dashboard_data(
             "ai_summary": "No data to analyze.",
             "insights": [],
             "statistical_validation": StatisticalValidationEngine(empty_df).analyze(),
+            "temporal_analysis": TemporalAnalysisEngine(empty_df).analyze(),
             "pattern_analysis": AnomalySegmentationEngine(empty_df).analyze(),
             "readiness": readiness,
             "df_shape": (0, 0) if df is None else df.shape,
@@ -252,6 +254,12 @@ def generate_dashboard_data(
         analysis_context=analysis_context,
         structural_dependencies=structural_dependencies,
     ).analyze()
+    temporal_analysis = TemporalAnalysisEngine(
+        filtered_df,
+        column_profiles=column_profiles,
+        analysis_context=analysis_context,
+    ).analyze()
+    insights = _without_superseded_trends(insights, temporal_analysis)
     pattern_analysis = AnomalySegmentationEngine(
         filtered_df,
         column_profiles=column_profiles,
@@ -265,6 +273,7 @@ def generate_dashboard_data(
         "ai_summary": ai_summary,
         "insights": insights,
         "statistical_validation": statistical_validation,
+        "temporal_analysis": temporal_analysis,
         "pattern_analysis": pattern_analysis,
         "readiness": readiness,
         "df_shape": filtered_df.shape,
@@ -273,6 +282,29 @@ def generate_dashboard_data(
     }
     result["decision_brief"] = build_decision_brief(result, readiness)
     return result
+
+
+def _without_superseded_trends(
+    insights: List[Dict[str, Any]],
+    temporal_analysis: Mapping[str, Any],
+) -> List[Dict[str, Any]]:
+    """Drop the descriptive early-vs-late change when a validated trend test covers the same measure.
+
+    The descriptive insight compares raw rows from the first and last fifth of
+    the timeline without aggregation or a significance test, so it can
+    contradict the autocorrelation-robust result for the same column.
+    """
+    if temporal_analysis.get("status") != "ok":
+        return insights
+    analyzed = {item.get("column") for item in temporal_analysis.get("series") or []}
+    return [
+        insight
+        for insight in insights
+        if not (
+            insight.get("insight_id") == "strongest-trend"
+            and (insight.get("metrics") or {}).get("value_column") in analyzed
+        )
+    ]
 
 
 def _apply_filters(df: pd.DataFrame, filters: List[Filter]) -> pd.DataFrame:

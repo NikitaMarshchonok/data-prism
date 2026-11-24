@@ -69,6 +69,15 @@ def _inferred_unit(
     return "number"
 
 
+def infer_column_unit(
+    dataframe: pd.DataFrame,
+    column: Any,
+    profile: Mapping[str, Any],
+) -> str:
+    """Return the unit a reviewer would be proposed for one profiled column."""
+    return _inferred_unit(dataframe, column, profile)
+
+
 def infer_semantic_contract(
     dataframe: pd.DataFrame,
     *,

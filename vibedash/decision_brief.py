@@ -36,6 +36,11 @@ def build_decision_brief(
             "confidence": "exploratory",
             "source": "statistical_validation",
         })
+    trend_priority = _validated_trend_priority(dashboard_data.get("temporal_analysis") or {}, context)
+    if trend_priority is not None:
+        # Unlike IID tests on dated rows, the trend test is built for serial
+        # dependence, so it ranks ahead of the sampling-design caveat.
+        priorities.insert(0, trend_priority)
     significant = [
         test
         for test in statistics.get("tests") or []
@@ -170,8 +175,10 @@ def build_decision_brief(
     if focused:
         # Global safety warnings remain visible. Task findings precede the
         # dataset-wide anomaly ranking, which has no task-specific fit.
+        # A validated trend has already passed the task-relevance filter.
         priorities.sort(key=lambda item: (
-            0 if item["category"] in {"assumption-review", "data-readiness", "evidence-limitation", "evidence-structural-dependency"}
+            -1 if item["category"] == "validated-trend"
+            else 0 if item["category"] in {"assumption-review", "data-readiness", "evidence-limitation", "evidence-structural-dependency"}
             else 2 if item["category"] == "anomaly-review" else 1
         ))
     priorities = priorities[:max_priorities]
@@ -201,6 +208,56 @@ def build_decision_brief(
         "guardrail": (
             "Confirm business definitions, source-system accuracy, and decision costs with a domain owner."
         ),
+    }
+
+
+def _validated_trend_priority(temporal: Mapping[str, Any], context: Mapping[str, Any]) -> Dict[str, Any] | None:
+    """Return the largest reliable trend among relevant measures, if any."""
+    if temporal.get("status") != "ok":
+        return None
+    candidates = []
+    for item in temporal.get("series") or []:
+        if not isinstance(item, Mapping):
+            continue
+        trend = item.get("trend") or {}
+        if trend.get("significant") is not True or not is_relevant({"columns": [item.get("column")]}, context):
+            continue
+        change = (item.get("change_over_period") or {}).get("relative_change")
+        magnitude = abs(float(change)) if isinstance(change, (int, float)) else 0.0
+        candidates.append((-magnitude, _sortable_number(trend.get("adjusted_p_value")), item))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda entry: entry[:2])
+    item = candidates[0][2]
+    trend = item["trend"]
+    change = item.get("change_over_period") or {}
+    direction = "increasing" if trend.get("direction") == "increasing" else "decreasing"
+    relative = change.get("relative_change")
+    interval = change.get("relative_change_ci") or [None, None]
+    grain = str(item.get("grain") or "period")
+    periods = int(item.get("period_count") or 0)
+    magnitude = (
+        f" by {float(relative):+.1%} (95% CI {float(interval[0]):+.1%} to {float(interval[1]):+.1%})"
+        if isinstance(relative, (int, float)) and None not in interval
+        else ""
+    )
+    return {
+        "category": "validated-trend",
+        "title": f"{item.get('column')} shows a reliable {direction} trend",
+        "finding": (
+            f"{item.get('column')} changed{magnitude} over {periods} complete {grain}s "
+            f"({item.get('first_period')} to {item.get('last_period')})."
+        ),
+        "evidence": [
+            f"FDR-adjusted p-value: {_probability(trend.get('adjusted_p_value'))}",
+            f"Theil-Sen slope per {grain}: {_number(trend.get('slope_per_period'))}",
+            f"Autocorrelation variance inflation: {_number(trend.get('variance_inflation'))}",
+        ],
+        "columns": [str(item.get("column"))],
+        "risk": "A historical trend describes the analyzed period. It is not a forecast and does not identify its cause.",
+        "action": "Identify what changed over this period (pricing, marketing, product, data collection) before planning on the trend continuing.",
+        "confidence": "high" if periods >= 24 else "medium",
+        "source": "temporal_analysis",
     }
 
 

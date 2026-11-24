@@ -15,7 +15,16 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from .plain_language import explain_check, explain_insight, explain_priority, explain_statistics, explain_test
+from .plain_language import (
+    explain_check,
+    explain_insight,
+    explain_priority,
+    explain_statistics,
+    explain_temporal,
+    explain_temporal_series,
+    explain_test,
+    temporal_checked,
+)
 
 
 REPORT_CONTRACT = "data-audit-report-v1"
@@ -27,6 +36,7 @@ MAX_FINDINGS = 6
 MAX_TESTS = 8
 MAX_EVIDENCE_ITEMS = 4
 MAX_NOTES = 8
+MAX_TREND_SERIES = 5
 
 _READINESS_VERDICTS = {
     "ready": ("good", "Your data is ready for analysis."),
@@ -227,7 +237,66 @@ def _findings_section(insights: Any) -> list[dict[str, Any]]:
     return [entry[3] for entry in candidates[:MAX_FINDINGS]]
 
 
-def _statistics_section(validation: Mapping[str, Any]) -> dict[str, Any]:
+_DIRECTION_LABELS = {"increasing": "Rising", "decreasing": "Falling", "no_trend": "No reliable trend"}
+_GRAIN_LABELS = {"day": "Daily", "week": "Weekly", "month": "Monthly"}
+
+
+def _signed_rate(value: Any) -> str:
+    return f"{value:+.1%}" if _finite(value) else "n/a"
+
+
+def _temporal_section(temporal: Mapping[str, Any]) -> dict[str, Any]:
+    status = clean_text(temporal.get("status"), maximum=40) or "unavailable"
+    series = []
+    for item in _sequence(temporal.get("series")):
+        item = _mapping(item)
+        trend = _mapping(item.get("trend"))
+        change = _mapping(item.get("change_over_period"))
+        interval = _sequence(change.get("relative_change_ci"))
+        direction = clean_text(trend.get("direction"), maximum=20)
+        grain = clean_text(item.get("grain"), maximum=10)
+        series.append(
+            {
+                "plain": explain_temporal_series(item),
+                "column": clean_text(item.get("column"), maximum=MAX_LABEL_LENGTH),
+                "direction": direction,
+                "direction_label": _DIRECTION_LABELS.get(direction, "Not assessed"),
+                "significant": trend.get("significant") is True,
+                "grain_label": _GRAIN_LABELS.get(grain, "n/a"),
+                "aggregation": clean_text(item.get("aggregation"), maximum=10),
+                "calendar_adjusted": item.get("calendar_adjusted") is True,
+                "period_count": _int_or_none(item.get("period_count")),
+                "first_period": clean_text(item.get("first_period"), maximum=10),
+                "last_period": clean_text(item.get("last_period"), maximum=10),
+                "change": _signed_rate(change.get("relative_change")),
+                "interval": (
+                    f"[{_signed_rate(interval[0])}, {_signed_rate(interval[1])}]"
+                    if len(interval) == 2 and _finite(interval[0]) and _finite(interval[1])
+                    else "n/a"
+                ),
+                "adjusted_p_value": _format_p_value(trend.get("adjusted_p_value")),
+                "variance_inflation": (
+                    f"{trend['variance_inflation']:.2f}" if _finite(trend.get("variance_inflation")) else "n/a"
+                ),
+                "excluded_edge_periods": _text_list(item.get("excluded_edge_periods"), 2),
+            }
+        )
+    # Reliable trends first, then the rest in engine order.
+    series.sort(key=lambda entry: not entry["significant"])
+    return {
+        "shown": status in {"ok", "insufficient_data"},
+        "status": status,
+        "plain": explain_temporal(temporal),
+        "summary": clean_text(temporal.get("summary")),
+        "time_column": clean_text(temporal.get("time_column"), maximum=MAX_LABEL_LENGTH),
+        "correction": clean_text(temporal.get("correction"), maximum=MAX_LABEL_LENGTH),
+        "series": series[:MAX_TREND_SERIES],
+        "skipped_count": len(_sequence(temporal.get("skipped"))),
+        "methodology_notes": _text_list(temporal.get("methodology_notes"), MAX_NOTES),
+    }
+
+
+def _statistics_section(validation: Mapping[str, Any], *, temporal_ran: bool = False) -> dict[str, Any]:
     tests = []
     for test in _sequence(validation.get("tests")):
         test = _mapping(test)
@@ -259,7 +328,7 @@ def _statistics_section(validation: Mapping[str, Any]) -> dict[str, Any]:
         )
     status = clean_text(validation.get("status"), maximum=40) or "unavailable"
     return {
-        "plain": explain_statistics(validation),
+        "plain": explain_statistics(validation, temporal_checked=temporal_ran),
         "status": status,
         "withheld": status != "ok",
         "summary": clean_text(validation.get("summary")),
@@ -326,7 +395,10 @@ def build_audit_report_context(
         "priorities": _priorities_section(brief, dashboard),
         "readiness": _readiness_section(readiness),
         "findings": _findings_section(dashboard.get("insights")),
-        "statistics": _statistics_section(_mapping(dashboard.get("statistical_validation"))),
+        "temporal": _temporal_section(_mapping(dashboard.get("temporal_analysis"))),
+        "statistics": _statistics_section(
+            _mapping(dashboard.get("statistical_validation")), temporal_ran=temporal_checked(dashboard)
+        ),
         "audit": {
             "analysis_contract": clean_text(manifest.get("analysis_contract"), maximum=80),
             "engine_version": clean_text(manifest.get("engine_version"), maximum=128),

@@ -103,8 +103,37 @@
         {% endfor %}
     </section>
 
+    {% if report.temporal.shown %}
     <section>
-        <h2>4. Statistical validation</h2>
+        <h2>4. Trends over time</h2>
+        {% if report.temporal.plain %}
+        <p class="lead"><strong>{{ report.temporal.plain.headline }}</strong></p>
+        <p>{{ report.temporal.plain.meaning }}</p>
+        <div class="action"><small>What this means for you</small>{{ report.temporal.plain.action }}</div>
+        {{ technical([report.temporal.summary]) }}
+        {% elif report.temporal.summary %}<p>{{ report.temporal.summary }}</p>{% endif %}
+        {% for item in report.temporal.series %}
+        <div class="card">
+            <small>{{ item.direction_label }}</small>
+            {% if item.plain %}
+            <h3>{{ item.plain.headline }}</h3>
+            <p>{{ item.plain.meaning }}</p>
+            <div class="action"><small>Next step</small>{{ item.plain.action }}</div>
+            {% else %}
+            <h3>{{ item.column }}</h3>
+            {% endif %}
+            {{ technical([
+                item.grain_label ~ " " ~ item.aggregation ~ " of " ~ item.column ~ (" (per-day rate)" if item.calendar_adjusted else "") ~ ", " ~ (item.period_count or "n/a") ~ " periods from " ~ item.first_period ~ " to " ~ item.last_period ~ ".",
+                "Change over the period: " ~ item.change ~ ", 95% CI " ~ item.interval ~ "; adjusted p " ~ (item.adjusted_p_value | replace("<", "< ") if item.adjusted_p_value.startswith("<") else "= " ~ item.adjusted_p_value) ~ "; autocorrelation variance inflation " ~ item.variance_inflation ~ ".",
+                ("Partial periods excluded: " ~ (item.excluded_edge_periods | join(", ")) ~ ".") if item.excluded_edge_periods else ""
+            ]) }}
+        </div>
+        {% endfor %}
+    </section>
+    {% endif %}
+
+    <section>
+        <h2>{{ 5 if report.temporal.shown else 4 }}. Statistical validation</h2>
         {% if report.statistics.plain %}
         <p class="lead"><strong>{{ report.statistics.plain.headline }}</strong></p>
         <p>{{ report.statistics.plain.meaning }}</p>
@@ -128,6 +157,7 @@
         <p>Every number in this report was computed by deterministic statistical code, and the same file always produces the same findings. No rows of the dataset were sent to a language model.</p>
         {% if report.statistics.correction %}<p>Multiple-comparison correction: {{ report.statistics.correction }}{% if report.statistics.alpha is not none %} at {{ (report.statistics.alpha * 100) | round(1) }}%{% endif %}. Hypotheses evaluated: {{ report.statistics.candidate_test_count }}.</p>{% endif %}
         {% if report.statistics.methodology_notes %}<ul>{% for note in report.statistics.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
+        {% if report.temporal.methodology_notes %}<p>Trends over time ({{ report.temporal.correction or "no correction stated" }} across measures):</p><ul>{% for note in report.temporal.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
         {% if report.summary.guardrail %}<p class="guardrail">{{ report.summary.guardrail }}</p>{% endif %}
         <h3 class="audit-heading">Audit trail</h3>
         <p class="audit-line">Report: {{ report.contract }} · Generated: {{ report.generated_at }}{% if report.audit.analysis_contract %} · Analysis: {{ report.audit.analysis_contract }}{% endif %}{% if report.audit.engine_version %} · Engine: {{ report.audit.engine_version }}{% endif %}{% if report.audit.analyzed_rows is not none %} · Rows analyzed: {{ report.audit.analyzed_rows }}{% if report.audit.truncated %} (truncated){% endif %}{% endif %}{% if report.audit.content_sha256 %}<br>Dataset SHA-256: {{ report.audit.content_sha256 }}{% endif %}</p>

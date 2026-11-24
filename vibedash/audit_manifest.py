@@ -83,6 +83,10 @@ def build_audit_manifest(
         total_candidates = None
     readiness = dashboard_data.get("readiness") or {}
     decision_brief = dashboard_data.get("decision_brief") or {}
+    temporal_analysis = dashboard_data.get("temporal_analysis") or {}
+    temporal_series = [
+        item for item in temporal_analysis.get("series") or [] if isinstance(item, Mapping)
+    ]
 
     normalized_spec = dict(viz_spec)
     return {
@@ -137,6 +141,14 @@ def build_audit_manifest(
                     if isinstance(test, Mapping)
                 )
             ),
+            "temporal_analysis": {
+                "contract": temporal_analysis.get("contract"),
+                "status": temporal_analysis.get("status"),
+                "series_count": len(temporal_series),
+                "reliable_trend_count": sum(
+                    (item.get("trend") or {}).get("significant") is True for item in temporal_series
+                ),
+            },
             "anomaly_candidate_total_count": total_candidates,
             "anomaly_candidate_displayed_count": displayed_candidates,
             "readiness": {
