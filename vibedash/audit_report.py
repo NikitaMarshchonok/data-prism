@@ -21,6 +21,7 @@ from .plain_language import (
     explain_priority,
     explain_statistics,
     explain_temporal,
+    explain_temporal_patterns,
     explain_temporal_series,
     explain_test,
     temporal_checked,
@@ -245,6 +246,35 @@ def _signed_rate(value: Any) -> str:
     return f"{value:+.1%}" if _finite(value) else "n/a"
 
 
+def _pattern_details(item: Mapping[str, Any]) -> list[str]:
+    """One technical line per pattern check that ran, significant or not."""
+    lines = []
+    seasonality = _mapping(item.get("seasonality"))
+    if seasonality:
+        lines.append(
+            f"{'Weekly' if seasonality.get('cycle') == 'weekday' else 'Yearly'} pattern: "
+            f"peak-to-trough {_signed_rate(seasonality.get('amplitude'))} over "
+            f"{_int_or_none(seasonality.get('cycles_used')) or 'n/a'} cycles; adjusted p "
+            f"{_format_p_value(seasonality.get('adjusted_p_value'))}"
+            f"{'; reliable' if seasonality.get('significant') is True else ''}."
+        )
+    shift = _mapping(item.get("level_shift"))
+    if shift:
+        lines.append(
+            f"Largest level shift: {_signed_rate(shift.get('relative_shift'))} at "
+            f"{clean_text(shift.get('change_period'), maximum=10)}; adjusted p "
+            f"{_format_p_value(shift.get('adjusted_p_value'))}{'; reliable' if shift.get('significant') is True else ''}."
+        )
+    last = _mapping(item.get("latest_period"))
+    if last:
+        lines.append(
+            f"Latest period {clean_text(last.get('period'), maximum=10)}: "
+            f"{_signed_rate(last.get('relative_deviation'))} versus baseline; adjusted p "
+            f"{_format_p_value(last.get('adjusted_p_value'))}{'; unusual' if last.get('significant') is True else ''}."
+        )
+    return lines
+
+
 def _temporal_section(temporal: Mapping[str, Any]) -> dict[str, Any]:
     status = clean_text(temporal.get("status"), maximum=40) or "unavailable"
     series = []
@@ -279,10 +309,12 @@ def _temporal_section(temporal: Mapping[str, Any]) -> dict[str, Any]:
                     f"{trend['variance_inflation']:.2f}" if _finite(trend.get("variance_inflation")) else "n/a"
                 ),
                 "excluded_edge_periods": _text_list(item.get("excluded_edge_periods"), 2),
+                "patterns": explain_temporal_patterns(item),
+                "pattern_details": _pattern_details(item),
             }
         )
-    # Reliable trends first, then the rest in engine order.
-    series.sort(key=lambda entry: not entry["significant"])
+    # Measures with a reliable trend or pattern first, then the rest in engine order.
+    series.sort(key=lambda entry: not (entry["significant"] or entry["patterns"]))
     return {
         "shown": status in {"ok", "insufficient_data"},
         "status": status,

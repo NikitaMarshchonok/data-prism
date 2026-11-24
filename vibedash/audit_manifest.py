@@ -148,6 +148,15 @@ def build_audit_manifest(
                 "reliable_trend_count": sum(
                     (item.get("trend") or {}).get("significant") is True for item in temporal_series
                 ),
+                "seasonal_pattern_count": sum(
+                    (item.get("seasonality") or {}).get("significant") is True for item in temporal_series
+                ),
+                "level_shift_count": sum(
+                    (item.get("level_shift") or {}).get("significant") is True for item in temporal_series
+                ),
+                "last_period_alert_count": sum(
+                    (item.get("latest_period") or {}).get("significant") is True for item in temporal_series
+                ),
             },
             "anomaly_candidate_total_count": total_candidates,
             "anomaly_candidate_displayed_count": displayed_candidates,

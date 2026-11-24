@@ -8,6 +8,8 @@ from src.structural_dependencies import additive_pair_dependency
 
 
 DECISION_BRIEF_CONTRACT = "decision-brief-v1"
+MAX_TEMPORAL_PRIORITIES = 2
+TEMPORAL_CATEGORIES = frozenset({"last-period-alert", "validated-trend", "level-shift"})
 
 
 def build_decision_brief(
@@ -36,11 +38,21 @@ def build_decision_brief(
             "confidence": "exploratory",
             "source": "statistical_validation",
         })
-    trend_priority = _validated_trend_priority(dashboard_data.get("temporal_analysis") or {}, context)
-    if trend_priority is not None:
-        # Unlike IID tests on dated rows, the trend test is built for serial
-        # dependence, so it ranks ahead of the sampling-design caveat.
-        priorities.insert(0, trend_priority)
+    temporal = dashboard_data.get("temporal_analysis") or {}
+    # Unlike IID tests on dated rows, the time-series checks are built for
+    # serial dependence, so they rank ahead of the sampling-design caveat.
+    # An unusual latest period is the most time-sensitive, then the trend,
+    # then an abrupt shift.  At most two keep room for other evidence types.
+    temporal_priorities = [
+        priority
+        for priority in (
+            _last_period_priority(temporal, context),
+            _validated_trend_priority(temporal, context),
+            _level_shift_priority(temporal, context),
+        )
+        if priority is not None
+    ][:MAX_TEMPORAL_PRIORITIES]
+    priorities[0:0] = temporal_priorities
     significant = [
         test
         for test in statistics.get("tests") or []
@@ -175,9 +187,9 @@ def build_decision_brief(
     if focused:
         # Global safety warnings remain visible. Task findings precede the
         # dataset-wide anomaly ranking, which has no task-specific fit.
-        # A validated trend has already passed the task-relevance filter.
+        # Time-series findings have already passed the task-relevance filter.
         priorities.sort(key=lambda item: (
-            -1 if item["category"] == "validated-trend"
+            -1 if item["category"] in TEMPORAL_CATEGORIES
             else 0 if item["category"] in {"assumption-review", "data-readiness", "evidence-limitation", "evidence-structural-dependency"}
             else 2 if item["category"] == "anomaly-review" else 1
         ))
@@ -208,6 +220,76 @@ def build_decision_brief(
         "guardrail": (
             "Confirm business definitions, source-system accuracy, and decision costs with a domain owner."
         ),
+    }
+
+
+def _relevant_series(temporal: Mapping[str, Any], context: Mapping[str, Any], key: str) -> List[Mapping[str, Any]]:
+    if temporal.get("status") != "ok":
+        return []
+    return [
+        item
+        for item in temporal.get("series") or []
+        if isinstance(item, Mapping)
+        and isinstance(item.get(key), Mapping)
+        and item[key].get("significant") is True
+        and is_relevant({"columns": [item.get("column")]}, context)
+    ]
+
+
+def _last_period_priority(temporal: Mapping[str, Any], context: Mapping[str, Any]) -> Dict[str, Any] | None:
+    candidates = _relevant_series(temporal, context, "latest_period")
+    if not candidates:
+        return None
+    item = min(candidates, key=lambda entry: _sortable_number(entry["latest_period"].get("adjusted_p_value")))
+    check = item["latest_period"]
+    grain = str(item.get("grain") or "period")
+    deviation = check.get("relative_deviation")
+    size = f" ({float(deviation):+.1%} versus the recent baseline)" if isinstance(deviation, (int, float)) else ""
+    return {
+        "category": "last-period-alert",
+        "title": f"The latest {grain} of {item.get('column')} is unusual",
+        "finding": (
+            f"{item.get('column')} for the {grain} starting {check.get('period')} was {_number(check.get('observed'))} "
+            f"against an expected {_number(check.get('expected'))}{size}."
+        ),
+        "evidence": [
+            f"FDR-adjusted p-value: {_probability(check.get('adjusted_p_value'))}",
+            f"Robust z-score: {_number(check.get('robust_z'))}",
+            f"Baseline history: {int(check.get('history_periods') or 0)} periods",
+        ],
+        "columns": [str(item.get("column"))],
+        "risk": "The latest period may be incomplete or affected by a data delay.",
+        "action": "Confirm the latest figures in the source system before acting, then identify the cause.",
+        "confidence": "medium",
+        "source": "temporal_analysis",
+    }
+
+
+def _level_shift_priority(temporal: Mapping[str, Any], context: Mapping[str, Any]) -> Dict[str, Any] | None:
+    candidates = _relevant_series(temporal, context, "level_shift")
+    if not candidates:
+        return None
+    item = max(candidates, key=lambda entry: abs(float(entry["level_shift"].get("relative_shift") or 0.0)))
+    shift = item["level_shift"]
+    relative = shift.get("relative_shift")
+    size = f" by {float(relative):+.1%}" if isinstance(relative, (int, float)) else ""
+    return {
+        "category": "level-shift",
+        "title": f"{item.get('column')} shifted abruptly around {shift.get('change_period')}",
+        "finding": (
+            f"Allowing for the trend, {item.get('column')} changed level{size} at the {item.get('grain')} starting "
+            f"{shift.get('change_period')} (median {_number(shift.get('median_before'))} before, "
+            f"{_number(shift.get('median_after'))} after)."
+        ),
+        "evidence": [
+            f"FDR-adjusted p-value: {_probability(shift.get('adjusted_p_value'))}",
+            f"Periods before / after: {int(shift.get('periods_before') or 0)} / {int(shift.get('periods_after') or 0)}",
+        ],
+        "columns": [str(item.get("column"))],
+        "risk": "The shift may reflect a change in data collection rather than in the business.",
+        "action": "Identify what changed around this date (pricing, clients, tracking) before comparing periods across it.",
+        "confidence": "medium",
+        "source": "temporal_analysis",
     }
 
 

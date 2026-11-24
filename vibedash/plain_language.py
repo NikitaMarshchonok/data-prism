@@ -513,6 +513,110 @@ def explain_temporal_series(item: Mapping[str, Any]) -> Optional[Explanation]:
     )
 
 
+def _period_label(grain: Any, value: Any) -> Optional[str]:
+    parts = _date_parts(value)
+    if parts is None or grain not in _GRAIN_WORDS:
+        return None
+    if grain == "month":
+        return f"{_SHORT_MONTHS[parts[1] - 1]} {parts[0]}"
+    if grain == "week":
+        return f"the week of {_day_label(parts)}"
+    return _day_label(parts)
+
+
+def _significant(result: Any) -> bool:
+    return isinstance(result, Mapping) and result.get("significant") is True
+
+
+def explain_seasonality(item: Mapping[str, Any]) -> Optional[Explanation]:
+    """Explain a reliable weekly or yearly rhythm, or ``None``."""
+    result = item.get("seasonality") if isinstance(item, Mapping) else None
+    column = _name(item.get("column")) if isinstance(item, Mapping) else None
+    if not column or not _significant(result):
+        return None
+    peak, trough = result.get("peak"), result.get("trough")
+    if not isinstance(peak, Mapping) or not isinstance(trough, Mapping):
+        return None
+    high, low = _signed_percent(peak.get("relative")), _signed_percent(trough.get("relative"))
+    cycles = _count(result.get("cycles_used"))
+    if not high or not low or cycles is None or not peak.get("label") or not trough.get("label"):
+        return None
+    if result.get("cycle") == "weekday":
+        return _explanation(
+            f"{column} follows a weekly rhythm: highest on {peak['label']}s, lowest on {trough['label']}s.",
+            f"A typical {peak['label']} runs about {high} against the weekly average and a {trough['label']} about "
+            f"{low} (measured over {cycles} full weeks, after removing the overall trend).",
+            "Compare each day with the same weekday of earlier weeks, not with the day before, and plan staff, "
+            "stock and promotions around this rhythm.",
+        )
+    if result.get("cycle") == "month":
+        caveat = " Two years is the minimum for this check, so confirm it with next year's data." if cycles < 3 else ""
+        return _explanation(
+            f"{column} follows a yearly rhythm: highest in {peak['label']}, lowest in {trough['label']}.",
+            f"A typical {peak['label']} runs about {high} against the yearly average and {trough['label']} about "
+            f"{low} (measured over {cycles} years, after removing the overall trend).{caveat}",
+            "Compare each month with the same month of the previous year, and plan budgets and stock for the "
+            "seasonal peak and dip.",
+        )
+    return None
+
+
+def explain_level_shift(item: Mapping[str, Any]) -> Optional[Explanation]:
+    """Explain a reliable abrupt change in level, or ``None``."""
+    result = item.get("level_shift") if isinstance(item, Mapping) else None
+    column = _name(item.get("column")) if isinstance(item, Mapping) else None
+    if not column or not _significant(result):
+        return None
+    when = _period_label(item.get("grain"), result.get("change_period"))
+    shift = _number(result.get("relative_shift"))
+    if when is None or shift is None:
+        return None
+    direction = "up" if shift > 0 else "down"
+    return _explanation(
+        f"{column} shifted {direction} by about {_percent(abs(shift))} around {when}.",
+        "Allowing for the overall trend, the level changed abruptly at that point instead of gradually. Abrupt "
+        "shifts usually have a specific cause, such as a price change, a lost or won client, a new competitor, "
+        "or a change in how the data is recorded.",
+        "Find out what changed around that date. If it was a data or tracking change, compare only the periods after it.",
+    )
+
+
+def explain_last_period(item: Mapping[str, Any]) -> Optional[Explanation]:
+    """Explain an unusual latest period, or ``None`` when it is normal or unknown."""
+    result = item.get("latest_period") if isinstance(item, Mapping) else None
+    column = _name(item.get("column")) if isinstance(item, Mapping) else None
+    grain = item.get("grain") if isinstance(item, Mapping) else None
+    if not column or grain not in _GRAIN_WORDS or not _significant(result):
+        return None
+    singular, plural = _GRAIN_WORDS[grain]
+    when = _period_label(grain, result.get("period"))
+    score = _number(result.get("robust_z"))
+    if when is None or score is None:
+        return None
+    above = score > 0
+    deviation = _number(result.get("relative_deviation"))
+    size = f"about {_percent(abs(deviation))} {'above' if above else 'below'}" if deviation is not None else (
+        "well above" if above else "well below"
+    )
+    cause = (
+        "a duplicate import or a one-off large order can cause a sudden spike"
+        if above
+        else "late or missing records are the most common cause of a sudden drop"
+    )
+    return _explanation(
+        f"The latest {singular} of {column} ({when}) was {size} what recent {plural} suggested.",
+        f"A gap this large is rare for this measure, which normally moves much less from one {singular} to the next. "
+        f"Before reacting, check that the {singular} is complete: {cause}.",
+        "Confirm the numbers in the source system, then look for the cause (campaign, outage, holiday, large order).",
+    )
+
+
+def explain_temporal_patterns(item: Mapping[str, Any]) -> list[Explanation]:
+    """Explanations for every reliable pattern found in one measure, most urgent first."""
+    explanations = (explain_last_period(item), explain_level_shift(item), explain_seasonality(item))
+    return [explanation for explanation in explanations if explanation]
+
+
 def explain_temporal(analysis: Mapping[str, Any]) -> Optional[Explanation]:
     """Summarize the time-aware analysis, or ``None`` when it does not apply."""
     if not isinstance(analysis, Mapping):
@@ -546,7 +650,8 @@ def explain_temporal(analysis: Mapping[str, Any]) -> Optional[Explanation]:
     return _explanation(
         headline,
         "Neighbouring days and weeks tend to resemble each other, which makes ordinary methods see trends that are "
-        "not there. These checks allow for that and for testing several measures at once.",
+        "not there. These checks allow for that and for testing several measures at once. Each measure was also "
+        "checked for a weekly or yearly rhythm, a sudden shift in level, and an unusual latest period.",
         "Focus on the measures with a reliable trend; for the rest, recent ups and downs are most likely noise.",
     )
 
@@ -586,7 +691,7 @@ def _signal_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) 
     return None
 
 
-def _trend_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Explanation]:
+def _temporal_item(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
     temporal = dashboard.get("temporal_analysis")
     series = temporal.get("series") if isinstance(temporal, Mapping) else None
     columns = priority.get("columns")
@@ -594,10 +699,15 @@ def _trend_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -
         return None
     for item in series if isinstance(series, Sequence) else ():
         if isinstance(item, Mapping) and item.get("column") == columns[0]:
-            trend = item.get("trend")
-            if isinstance(trend, Mapping) and trend.get("significant") is True:
-                return explain_temporal_series(item)
+            return item
     return None
+
+
+def _trend_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Explanation]:
+    item = _temporal_item(priority, dashboard)
+    if item is None or not _significant(item.get("trend")):
+        return None
+    return explain_temporal_series(item)
 
 
 def _readiness_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Explanation]:
@@ -629,7 +739,15 @@ def _insight_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any])
 #: Decision-brief categories with a dedicated explanation.  ``evidence-*``
 #: categories reuse the matching insight explanation.
 KNOWN_PRIORITY_CATEGORIES = frozenset(
-    {"assumption-review", "validated-signal", "validated-trend", "anomaly-review", "data-readiness"}
+    {
+        "assumption-review",
+        "validated-signal",
+        "validated-trend",
+        "level-shift",
+        "last-period-alert",
+        "anomaly-review",
+        "data-readiness",
+    }
 )
 
 
@@ -651,6 +769,12 @@ def explain_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) 
         return _signal_priority(priority, dashboard)
     if category == "validated-trend":
         return _trend_priority(priority, dashboard)
+    if category == "level-shift":
+        item = _temporal_item(priority, dashboard)
+        return explain_level_shift(item) if item is not None else None
+    if category == "last-period-alert":
+        item = _temporal_item(priority, dashboard)
+        return explain_last_period(item) if item is not None else None
     if category == "anomaly-review":
         return _anomaly_priority(dashboard)
     if category == "data-readiness":

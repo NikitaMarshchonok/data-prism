@@ -25,6 +25,7 @@ section { margin-bottom: 26px; }
 .card p { margin-bottom: 6px; }
 .action { margin-top: 8px; padding: 8px 10px; background: #f2f6f4; }
 .action small { display: block; }
+.pattern { margin-top: 10px; padding-left: 10px; border-left: 3px solid #b7c9c1; }
 .tag { display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: 10px; background: #eef1f0; color: #3c4844; font-size: 8pt; font-weight: 700; }
 .tag.blocked { background: #faecec; color: #8e2c2c; }
 .tag.warning { background: #fbf5e8; color: #7d5810; }

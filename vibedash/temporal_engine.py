@@ -12,6 +12,9 @@ methods that remain valid under serial dependence:
 2. Trend: Theil–Sen slope with a Mann–Kendall test whose variance is inflated
    for autocorrelation (Hamed & Rao, 1998).  The slope confidence interval is
    derived from the same corrected variance.
+3. Patterns (``temporal_patterns.py``): weekly or yearly rhythm, abrupt level
+   shifts and an unusual latest period, each corrected for false discoveries
+   across measures.
 
 Everything is deterministic and bounded; no rows leave the process.
 """
@@ -30,6 +33,14 @@ from scipy import stats
 from src.column_semantics import columns_for_role, profile_dataframe_columns
 from src.semantic_contract import ALLOWED_UNITS, infer_column_unit
 from src.statistical_primitives import benjamini_hochberg
+
+from .temporal_patterns import (
+    MIN_LEVEL_SHIFT,
+    MIN_SEASONAL_AMPLITUDE,
+    last_period_check,
+    level_shift_test,
+    seasonality_test,
+)
 
 
 TEMPORAL_CONTRACT = "temporal-analysis-v1"
@@ -98,8 +109,14 @@ def prepare_series(
     *,
     column: str,
     unit: str,
+    grain: Optional[str] = None,
 ) -> PreparedSeries:
-    """Aggregate raw rows to the finest regular grain the data supports."""
+    """Aggregate raw rows to the finest regular grain the data supports.
+
+    ``grain`` forces one grain (no fallback), for checks that need it.
+    """
+    if grain is not None and grain not in GRAINS:
+        raise ValueError(f"Unknown grain: {grain}")
     times = pd.to_datetime(timestamps, errors="coerce")
     if getattr(times.dt, "tz", None) is not None:
         times = times.dt.tz_convert("UTC").dt.tz_localize(None)
@@ -115,7 +132,8 @@ def prepare_series(
     span_days = float((last_day - first_day).days) + 1.0
 
     last_reason = ("too_short", "The series is too short for temporal analysis.")
-    for grain in GRAINS[GRAINS.index(_initial_grain(span_days)):]:
+    candidates = (grain,) if grain is not None else GRAINS[GRAINS.index(_initial_grain(span_days)):]
+    for grain in candidates:
         periods = frame["time"].dt.to_period(_PANDAS_FREQUENCY[grain])
         grouped = frame["value"].groupby(periods)
         aggregated = grouped.sum() if aggregation == "sum" else grouped.mean()
@@ -382,7 +400,9 @@ class TemporalAnalysisEngine:
             except ValueError as error:
                 skipped.append({"column": str(column), "reason": "invalid", "message": str(error)})
                 continue
-            series_results.append(self._series_result(prepared, unit, trend))
+            result = self._series_result(prepared, unit, trend)
+            result.update(self._pattern_checks(time_column, column, unit, prepared))
+            series_results.append(result)
 
         if not series_results:
             return self._status(
@@ -403,6 +423,10 @@ class TemporalAnalysisEngine:
                 ("increasing" if trend["slope_per_period"] > 0 else "decreasing") if significant else "no_trend"
             )
 
+        self._adjust_family(series_results, "seasonality", MIN_SEASONAL_AMPLITUDE, "amplitude")
+        self._adjust_family(series_results, "level_shift", MIN_LEVEL_SHIFT, "relative_shift")
+        self._adjust_family(series_results, "latest_period", None, None)
+
         detected = sum(1 for item in series_results if item["trend"]["significant"])
         return self._status(
             "ok",
@@ -419,8 +443,59 @@ class TemporalAnalysisEngine:
                 "Trend significance uses Mann-Kendall with the Hamed-Rao variance correction for autocorrelation.",
                 "The slope is the Theil-Sen estimator; its interval uses the same corrected variance.",
                 "A trend describes the analyzed period and is not a forecast.",
+                "Weekly patterns are tested on daily values and yearly patterns on monthly values, after removing "
+                "the trend, with a within-cycle permutation test; a pattern must also move the level by at least "
+                f"{MIN_SEASONAL_AMPLITUDE:.0%} between its highest and lowest point.",
+                "Level shifts use a CUSUM statistic with an AR(1) bootstrap null and must hold under both linear and "
+                f"exponential trends and change the level by at least {MIN_LEVEL_SHIFT:.0%}.",
+                "The latest complete period is compared with the average of the previous four, relative to how "
+                "large such gaps normally are for the same measure.",
+                "Each check is corrected for false discoveries across measures separately.",
             ],
         )
+
+    def _pattern_checks(
+        self, time_column: Any, column: Any, unit: str, prepared: PreparedSeries
+    ) -> dict[str, Optional[dict[str, Any]]]:
+        values, starts = prepared.values, prepared.period_starts
+        seasonality = None
+        if prepared.grain == "month":
+            seasonality = seasonality_test(values, starts, cycle="month")
+        else:
+            # A weekly pattern lives in daily values even when the trend is
+            # read at weekly grain, so the daily grid is built separately.
+            daily = prepared
+            if prepared.grain != "day":
+                try:
+                    daily = prepare_series(
+                        self.df[time_column], self.df[column], column=str(column), unit=unit, grain="day"
+                    )
+                except TemporalSeriesError:
+                    daily = None
+            if daily is not None:
+                seasonality = seasonality_test(daily.values, daily.period_starts, cycle="weekday")
+        return {
+            "seasonality": seasonality,
+            "level_shift": level_shift_test(values, starts),
+            "latest_period": last_period_check(values, starts),
+        }
+
+    def _adjust_family(
+        self,
+        series_results: list[dict[str, Any]],
+        key: str,
+        minimum: Optional[float],
+        effect_key: Optional[str],
+    ) -> None:
+        tested = [item[key] for item in series_results if item.get(key)]
+        if not tested:
+            return
+        adjusted = benjamini_hochberg([result["p_value"] for result in tested])
+        for result, p_adjusted in zip(tested, adjusted):
+            result["adjusted_p_value"] = float(p_adjusted)
+            effect = result.get(effect_key) if effect_key else None
+            large_enough = minimum is None or (effect is not None and abs(effect) >= minimum)
+            result["significant"] = bool(p_adjusted <= self.alpha and large_enough)
 
     def _series_result(self, prepared: PreparedSeries, unit: str, trend: Mapping[str, Any]) -> dict[str, Any]:
         level = trend["median_level"]

@@ -18,7 +18,16 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import stats
 
+import pandas as pd
+
 from .temporal_engine import DEFAULT_ALPHA, mann_kendall_trend
+from .temporal_patterns import (
+    MIN_LEVEL_SHIFT,
+    MIN_SEASONAL_AMPLITUDE,
+    last_period_check,
+    level_shift_test,
+    seasonality_test,
+)
 
 
 SERIES_LENGTH = 60
@@ -108,7 +117,130 @@ def evaluate_trend_detector(seeds: int = 1000, *, alpha: float = DEFAULT_ALPHA, 
     return report
 
 
+# --------------------------------------------------------------------------
+# Seasonality, level shifts and last-period alerts
+# --------------------------------------------------------------------------
+
+_DAILY_STARTS = list(pd.date_range("2024-01-01", periods=70, freq="D"))  # 10 calendar weeks
+_MONTHLY_STARTS = list(pd.date_range("2022-01-01", periods=36, freq="MS"))
+_WEEKLY_STARTS = list(pd.date_range("2023-01-02", periods=104, freq="W-MON"))
+_LAST_STARTS = list(pd.date_range("2024-01-01", periods=52, freq="W-MON"))
+_WEEKDAY_EFFECT = np.array([0.0, 0.03, 0.05, 0.06, 0.08, -0.10, -0.12])  # 20% peak to trough
+_MONTH_EFFECT = 0.08 * np.sin(2 * np.pi * np.arange(12) / 12)  # 16% peak to trough
+
+
+@dataclass(frozen=True)
+class PatternScenario:
+    name: str
+    check: str
+    has_effect: bool
+    threshold: float
+    generate: Callable[[np.random.Generator], np.ndarray]
+    starts: list
+    description: str
+
+
+def _season_detects(values: np.ndarray, starts: list, cycle: str, alpha: float) -> bool:
+    result = seasonality_test(values, starts, cycle=cycle)
+    return bool(result and result["p_value"] <= alpha and result["amplitude"] >= MIN_SEASONAL_AMPLITUDE)
+
+
+def _shift_detects(values: np.ndarray, starts: list, alpha: float) -> bool:
+    result = level_shift_test(values, starts)
+    return bool(
+        result
+        and result["p_value"] <= alpha
+        and result["relative_shift"] is not None
+        and abs(result["relative_shift"]) >= MIN_LEVEL_SHIFT
+    )
+
+
+def _last_detects(values: np.ndarray, starts: list, alpha: float) -> bool:
+    result = last_period_check(values, starts)
+    return bool(result and result["p_value"] <= alpha)
+
+
+def _days(n: int) -> np.ndarray:
+    return np.arange(n)
+
+
+PATTERN_SCENARIOS = (
+    PatternScenario("weekday_white_noise", "weekday", False, 0.07,
+                    lambda rng: LEVEL + rng.normal(0.0, NOISE_SD, 70), _DAILY_STARTS,
+                    "Daily independent noise, no weekly pattern: false alarm rate."),
+    PatternScenario("weekday_ar1_trend", "weekday", False, 0.07,
+                    lambda rng: LEVEL + 0.5 * _days(70) + _ar1_noise(rng, 70, 0.6, NOISE_SD), _DAILY_STARTS,
+                    "Daily AR(1) noise with a trend, no weekly pattern: false alarm rate."),
+    PatternScenario("weekday_pattern", "weekday", True, 0.90,
+                    lambda rng: LEVEL * (1 + _WEEKDAY_EFFECT[_days(70) % 7]) + _ar1_noise(rng, 70, 0.6, NOISE_SD),
+                    _DAILY_STARTS, "20% weekday pattern in AR(1) noise over 10 weeks: detection rate."),
+    PatternScenario("month_ar1_trend", "month", False, 0.10,
+                    lambda rng: LEVEL + 1.0 * _days(36) + _ar1_noise(rng, 36, 0.6, NOISE_SD), _MONTHLY_STARTS,
+                    "Monthly AR(1) noise with a trend, no yearly pattern: false alarm rate."),
+    PatternScenario("month_pattern", "month", True, 0.75,
+                    lambda rng: LEVEL * (1 + _MONTH_EFFECT[_days(36) % 12]) + _ar1_noise(rng, 36, 0.6, NOISE_SD / 2),
+                    _MONTHLY_STARTS, "16% yearly pattern in AR(1) noise over 3 years: detection rate."),
+    PatternScenario("shift_ar1_noise", "level_shift", False, 0.07,
+                    lambda rng: LEVEL + _ar1_noise(rng, 104, 0.6, NOISE_SD), _WEEKLY_STARTS,
+                    "Weekly AR(1) noise, no shift: false alarm rate."),
+    PatternScenario("shift_exponential_growth", "level_shift", False, 0.07,
+                    lambda rng: LEVEL * 1.02 ** _days(104) * (1 + rng.normal(0.0, 0.1, 104)), _WEEKLY_STARTS,
+                    "2%/week compound growth, no shift: curved growth must not look like a jump."),
+    PatternScenario("shift_linear_trend", "level_shift", False, 0.07,
+                    lambda rng: LEVEL + 1.0 * _days(104) + _ar1_noise(rng, 104, 0.6, NOISE_SD), _WEEKLY_STARTS,
+                    "Linear trend in AR(1) noise, no shift: false alarm rate."),
+    PatternScenario("shift_step", "level_shift", True, 0.80,
+                    lambda rng: LEVEL + 20.0 * (_days(104) >= 52) + rng.normal(0.0, NOISE_SD, 104), _WEEKLY_STARTS,
+                    "+20% step in independent noise: detection rate."),
+    PatternScenario("shift_drop_in_trend", "level_shift", True, 0.80,
+                    lambda rng: LEVEL + 0.5 * _days(104) - 30.0 * (_days(104) >= 73) + _ar1_noise(rng, 104, 0.4, NOISE_SD),
+                    _WEEKLY_STARTS, "-30 drop on top of a rising trend in AR(1) noise: detection rate."),
+    PatternScenario("last_ar1_noise", "latest_period", False, 0.07,
+                    lambda rng: LEVEL + _ar1_noise(rng, 52, 0.6, NOISE_SD), _LAST_STARTS,
+                    "AR(1) noise, normal last week: false alert rate."),
+    PatternScenario("last_heavy_tails", "latest_period", False, 0.10,
+                    lambda rng: LEVEL + 3.0 * rng.standard_t(3, 52), _LAST_STARTS,
+                    "Heavy-tailed (t3) noise, normal last week: false alert rate."),
+    PatternScenario("last_drop", "latest_period", True, 0.75,
+                    lambda rng: np.r_[LEVEL + rng.normal(0.0, NOISE_SD, 51), 0.6 * LEVEL + rng.normal(0.0, NOISE_SD)],
+                    _LAST_STARTS, "Last week 40% below normal: detection rate."),
+)
+
+
+def evaluate_pattern_detectors(seeds: int = 300, *, alpha: float = DEFAULT_ALPHA, base_seed: int = 20261124) -> dict:
+    """Return per-scenario rates for the seasonality, level-shift and last-period checks."""
+    if seeds < 1:
+        raise ValueError("seeds must be positive")
+    report = {"seeds": seeds, "alpha": alpha, "scenarios": []}
+    for offset, scenario in enumerate(PATTERN_SCENARIOS):
+        rng = np.random.default_rng(base_seed + offset)
+        hits = 0
+        for _ in range(seeds):
+            values = scenario.generate(rng)
+            if scenario.check in ("weekday", "month"):
+                hits += _season_detects(values, scenario.starts, scenario.check, alpha)
+            elif scenario.check == "level_shift":
+                hits += _shift_detects(values, scenario.starts, alpha)
+            else:
+                hits += _last_detects(values, scenario.starts, alpha)
+        rate = hits / seeds
+        passed = rate >= scenario.threshold if scenario.has_effect else rate <= scenario.threshold
+        report["scenarios"].append(
+            {
+                "name": scenario.name,
+                "check": scenario.check,
+                "description": scenario.description,
+                "metric": "detection_rate" if scenario.has_effect else "false_alarm_rate",
+                "threshold": scenario.threshold,
+                "rate": rate,
+                "passed": bool(passed),
+            }
+        )
+    report["passed"] = all(item["passed"] for item in report["scenarios"])
+    return report
+
+
 if __name__ == "__main__":  # pragma: no cover - manual reporting helper
     import json
 
-    print(json.dumps(evaluate_trend_detector(), indent=2))
+    print(json.dumps({"trend": evaluate_trend_detector(), "patterns": evaluate_pattern_detectors(1000)}, indent=2))
