@@ -122,11 +122,17 @@
             {% else %}
             <h3>{{ item.column }}</h3>
             {% endif %}
+            {% for pattern in item.patterns %}
+            <div class="pattern">
+                <p><strong>{{ pattern.headline }}</strong> {{ pattern.meaning }}</p>
+                <div class="action"><small>Next step</small>{{ pattern.action }}</div>
+            </div>
+            {% endfor %}
             {{ technical([
                 item.grain_label ~ " " ~ item.aggregation ~ " of " ~ item.column ~ (" (per-day rate)" if item.calendar_adjusted else "") ~ ", " ~ (item.period_count or "n/a") ~ " periods from " ~ item.first_period ~ " to " ~ item.last_period ~ ".",
                 "Change over the period: " ~ item.change ~ ", 95% CI " ~ item.interval ~ "; adjusted p " ~ (item.adjusted_p_value | replace("<", "< ") if item.adjusted_p_value.startswith("<") else "= " ~ item.adjusted_p_value) ~ "; autocorrelation variance inflation " ~ item.variance_inflation ~ ".",
                 ("Partial periods excluded: " ~ (item.excluded_edge_periods | join(", ")) ~ ".") if item.excluded_edge_periods else ""
-            ]) }}
+            ] + item.pattern_details) }}
         </div>
         {% endfor %}
     </section>

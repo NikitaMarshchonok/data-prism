@@ -385,6 +385,14 @@
                         <div><small>FDR-adjusted trend p</small><strong>{{ "%.4g"|format(trend.adjusted_p_value) }}</strong></div>
                     </div>
                     <p class="test-meta">{{ item.aggregation }} per {{ item.grain }}{% if item.calendar_adjusted %} (per-day rate){% endif %} · {{ item.period_count }} periods · {{ item.first_period }} to {{ item.last_period }} · variance inflation {{ "%.2f"|format(trend.variance_inflation) }}{% if item.excluded_edge_periods %} · partial periods excluded: {{ item.excluded_edge_periods|join(", ") }}{% endif %}</p>
+                    {% set season = item.seasonality %}{% set shift = item.level_shift %}{% set last = item.latest_period %}
+                    {% if season or shift or last %}
+                    <ul class="evidence-list">
+                        {% if season %}<li>{% if season.significant %}<strong>{{ 'Weekly' if season.cycle == 'weekday' else 'Yearly' }} pattern:</strong> highest {{ season.peak.label }} ({{ "%+.1f%%"|format(season.peak.relative * 100) }}), lowest {{ season.trough.label }} ({{ "%+.1f%%"|format(season.trough.relative * 100) }}){% else %}No reliable {{ 'weekly' if season.cycle == 'weekday' else 'yearly' }} pattern{% endif %} · adjusted p={{ "%.3g"|format(season.adjusted_p_value) }} · {{ season.cycles_used }} cycles</li>{% endif %}
+                        {% if shift %}<li>{% if shift.significant %}<strong>Level shift</strong> at {{ shift.change_period }}{% if shift.relative_shift is not none %}: {{ "%+.1f%%"|format(shift.relative_shift * 100) }}{% endif %}{% else %}No reliable level shift{% endif %} · adjusted p={{ "%.3g"|format(shift.adjusted_p_value) }}</li>{% endif %}
+                        {% if last %}<li>{% if last.significant %}<strong>Unusual latest {{ item.grain }}</strong> ({{ last.period }}){% else %}Latest {{ item.grain }} ({{ last.period }}) within normal range{% endif %}{% if last.relative_deviation is not none %}: {{ "%+.1f%%"|format(last.relative_deviation * 100) }} versus baseline{% endif %} · adjusted p={{ "%.3g"|format(last.adjusted_p_value) }}</li>{% endif %}
+                    </ul>
+                    {% endif %}
                 </article>
                 {% endfor %}
             </div>
