@@ -149,6 +149,7 @@ def _shift_detects(values: np.ndarray, starts: list, alpha: float) -> bool:
     result = level_shift_test(values, starts)
     return bool(
         result
+        and not result["at_edge"]
         and result["p_value"] <= alpha
         and result["relative_shift"] is not None
         and abs(result["relative_shift"]) >= MIN_LEVEL_SHIFT
@@ -240,7 +241,98 @@ def evaluate_pattern_detectors(seeds: int = 300, *, alpha: float = DEFAULT_ALPHA
     return report
 
 
+# --------------------------------------------------------------------------
+# Why a KPI changed
+# --------------------------------------------------------------------------
+
+_DRIVER_DATES = pd.date_range("2024-01-01", "2024-12-29", freq="D")  # 52 complete weeks
+_DRIVER_TEMPORAL = {
+    "status": "ok",
+    "time_column": "Date",
+    "series": [
+        {"column": "Revenue", "unit": "currency", "grain": "week", "first_period": "2024-01-01", "last_period": "2024-12-23"},
+        {"column": "Conversion", "unit": "ratio", "grain": "week", "first_period": "2024-01-01", "last_period": "2024-12-23"},
+    ],
+}
+_REGIONS = {"Europe": 300.0, "US": 500.0, "Asia": 200.0}
+
+
+def _driver_frame(rng: np.random.Generator, *, europe_drop: float = 0.0, starter_surge: bool = False) -> pd.DataFrame:
+    """Daily rows per region and plan, AR(1) demand noise, optional late changes."""
+    days = len(_DRIVER_DATES)
+    late = _DRIVER_DATES >= pd.Timestamp("2024-12-02")
+    frames = []
+    for region, base in _REGIONS.items():
+        demand = base * (1 + _ar1_noise(rng, days, 0.5, 0.1))
+        if region == "Europe":
+            demand = demand * np.where(late, 1 - europe_drop, 1.0)
+        starter_rows = rng.random(days) < np.where(late & starter_surge, 0.9, 0.3)
+        frames.append(pd.DataFrame({
+            "Date": _DRIVER_DATES, "Region": region, "Plan": "Pro", "Revenue": demand,
+            "Conversion": 0.06 + rng.normal(0, 0.004, days),
+        }))
+        frames.append(pd.DataFrame({
+            "Date": _DRIVER_DATES[starter_rows], "Region": region, "Plan": "Starter",
+            "Revenue": 0.2 * demand[starter_rows], "Conversion": 0.02 + rng.normal(0, 0.004, int(starter_rows.sum())),
+        }))
+    return pd.concat(frames, ignore_index=True)
+
+
+def evaluate_driver_analysis(seeds: int = 200, *, alpha: float = DEFAULT_ALPHA, base_seed: int = 20261125) -> dict:
+    """Ground truth for the driver analysis: false alarms, detection and attribution."""
+    from .driver_analysis import DriverAnalysisEngine
+
+    if seeds < 1:
+        raise ValueError("seeds must be positive")
+    scenarios = (
+        ("no_change", {}, "No change: share of measures flagged as changing more than usual.", "false_alarm", 0.07),
+        ("europe_drop", {"europe_drop": 0.5}, "Europe (30% of revenue) halves: revenue flagged and Europe named.", "attribution", 0.80),
+        ("mix_shift", {"starter_surge": True}, "More low-converting Starter rows: conversion flagged as a mix shift.", "attribution", 0.80),
+    )
+    report = {"seeds": seeds, "alpha": alpha, "scenarios": []}
+    for offset, (name, kwargs, description, metric, threshold) in enumerate(scenarios):
+        rng = np.random.default_rng(base_seed + offset)
+        hits = trials = 0
+        for _ in range(seeds):
+            frame = _driver_frame(rng, **kwargs)
+            result = DriverAnalysisEngine(frame, _DRIVER_TEMPORAL, alpha=alpha).analyze()
+            measures = {item["column"]: item for item in result["measures"]}
+            if metric == "false_alarm":
+                trials += len(measures)
+                hits += sum(item["material"] for item in measures.values())
+                continue
+            trials += 1
+            if name == "europe_drop":
+                revenue = measures.get("Revenue") or {}
+                top = (revenue.get("dimensions") or [{}])[0]
+                hits += bool(
+                    revenue.get("material")
+                    and top.get("dimension") == "Region"
+                    and (top.get("driver") or {}).get("segment") == "Europe"
+                )
+            else:
+                conversion = measures.get("Conversion") or {}
+                top = (conversion.get("dimensions") or [{}])[0]
+                hits += bool(
+                    conversion.get("material")
+                    and top.get("dimension") == "Plan"
+                    and top.get("mix_story")
+                    and (top.get("mix_driver") or {}).get("segment") == "Starter"
+                )
+        rate = hits / trials if trials else 0.0
+        passed = rate <= threshold if metric == "false_alarm" else rate >= threshold
+        report["scenarios"].append(
+            {"name": name, "description": description, "metric": metric, "threshold": threshold, "rate": rate, "passed": bool(passed)}
+        )
+    report["passed"] = all(item["passed"] for item in report["scenarios"])
+    return report
+
+
 if __name__ == "__main__":  # pragma: no cover - manual reporting helper
     import json
 
-    print(json.dumps({"trend": evaluate_trend_detector(), "patterns": evaluate_pattern_detectors(1000)}, indent=2))
+    print(json.dumps({
+        "trend": evaluate_trend_detector(),
+        "patterns": evaluate_pattern_detectors(1000),
+        "drivers": evaluate_driver_analysis(500),
+    }, indent=2))

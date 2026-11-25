@@ -138,8 +138,34 @@
     </section>
     {% endif %}
 
+    {% set next_section = 4 + (1 if report.temporal.shown else 0) %}
+    {% if report.drivers.shown %}
     <section>
-        <h2>{{ 5 if report.temporal.shown else 4 }}. Statistical validation</h2>
+        <h2>{{ next_section }}. What changed recently, and where</h2>
+        {% if report.drivers.plain %}
+        <p class="lead"><strong>{{ report.drivers.plain.headline }}</strong></p>
+        <p>{{ report.drivers.plain.meaning }}</p>
+        {{ technical([report.drivers.summary]) }}
+        {% endif %}
+        {% for item in report.drivers.measures %}
+        <div class="card">
+            <small>{{ "Changed more than usual" if item.material else "Within the usual range" }}</small>
+            {% if item.plain %}
+            <h3>{{ item.plain.headline }}</h3>
+            <p>{{ item.plain.meaning }}</p>
+            <div class="action"><small>Next step</small>{{ item.plain.action }}</div>
+            {% else %}
+            <h3>{{ item.column }}</h3>
+            {% endif %}
+            {{ technical(item.details) }}
+        </div>
+        {% endfor %}
+    </section>
+    {% set next_section = next_section + 1 %}
+    {% endif %}
+
+    <section>
+        <h2>{{ next_section }}. Statistical validation</h2>
         {% if report.statistics.plain %}
         <p class="lead"><strong>{{ report.statistics.plain.headline }}</strong></p>
         <p>{{ report.statistics.plain.meaning }}</p>
@@ -163,6 +189,7 @@
         <p>Every number in this report was computed by deterministic statistical code, and the same file always produces the same findings. No rows of the dataset were sent to a language model.</p>
         {% if report.statistics.correction %}<p>Multiple-comparison correction: {{ report.statistics.correction }}{% if report.statistics.alpha is not none %} at {{ (report.statistics.alpha * 100) | round(1) }}%{% endif %}. Hypotheses evaluated: {{ report.statistics.candidate_test_count }}.</p>{% endif %}
         {% if report.statistics.methodology_notes %}<ul>{% for note in report.statistics.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
+        {% if report.drivers.methodology_notes %}<p>What changed recently:</p><ul>{% for note in report.drivers.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
         {% if report.temporal.methodology_notes %}<p>Trends over time ({{ report.temporal.correction or "no correction stated" }} across measures):</p><ul>{% for note in report.temporal.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
         {% if report.summary.guardrail %}<p class="guardrail">{{ report.summary.guardrail }}</p>{% endif %}
         <h3 class="audit-heading">Audit trail</h3>

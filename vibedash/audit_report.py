@@ -17,6 +17,8 @@ from typing import Any
 
 from .plain_language import (
     explain_check,
+    explain_driver,
+    explain_drivers,
     explain_insight,
     explain_priority,
     explain_statistics,
@@ -328,6 +330,62 @@ def _temporal_section(temporal: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _driver_section(drivers: Mapping[str, Any]) -> dict[str, Any]:
+    measures = []
+    for measure in _sequence(drivers.get("measures")):
+        measure = _mapping(measure)
+        unit = measure.get("unit")
+        unusual = _mapping(measure.get("unusual"))
+        details = [
+            f"{clean_text(measure.get('kind'), maximum=10).capitalize()} of {clean_text(measure.get('column'), maximum=MAX_LABEL_LENGTH)}: "
+            f"{' to '.join(_text_list(measure.get('current_window'), 2))} vs {' to '.join(_text_list(measure.get('base_window'), 2))}"
+            f"{' (per day)' if measure.get('per_day') else ''}; "
+            f"{_number_text(measure.get('before'))} → {_number_text(measure.get('after'))}"
+            f" ({_signed_rate(measure.get('relative_change'))}).",
+            (
+                f"Compared with {unusual.get('history_comparisons')} earlier comparisons: robust z "
+                f"{_number_text(unusual.get('robust_z'))}, adjusted p {_format_p_value(unusual.get('adjusted_p_value'))}."
+                if unusual else "Too little history to judge whether the change is unusual."
+            ),
+        ]
+        for dimension in _sequence(measure.get("dimensions"))[:2]:
+            dimension = _mapping(dimension)
+            parts = [
+                f"{clean_text(row.get('segment'), maximum=40)} {_number_text(row.get('contribution'), signed=True)}"
+                for row in (_mapping(item) for item in _sequence(dimension.get("segments")))
+            ]
+            mix = (
+                f"; mix {_number_text(dimension.get('mix_effect'), signed=True)}, rate {_number_text(dimension.get('rate_effect'), signed=True)}"
+                if "mix_effect" in dimension else ""
+            )
+            details.append(f"By {clean_text(dimension.get('dimension'), maximum=60)}: {', '.join(parts)}{mix}.")
+        measures.append(
+            {
+                "plain": explain_driver(measure),
+                "column": clean_text(measure.get("column"), maximum=MAX_LABEL_LENGTH),
+                "material": measure.get("material") is True,
+                "details": details,
+                "unit": clean_text(unit, maximum=20),
+            }
+        )
+    measures.sort(key=lambda entry: not entry["material"])
+    return {
+        "shown": clean_text(drivers.get("status"), maximum=40) == "ok" and bool(measures),
+        "plain": explain_drivers(drivers),
+        "summary": clean_text(drivers.get("summary")),
+        "measures": measures,
+        "methodology_notes": _text_list(drivers.get("methodology_notes"), MAX_NOTES),
+    }
+
+
+def _number_text(value: Any, *, signed: bool = False) -> str:
+    if not _finite(value):
+        return "n/a"
+    magnitude = abs(value)
+    text = f"{value:,.0f}" if magnitude >= 1000 else f"{value:,.2f}" if magnitude >= 1 else f"{value:.4g}"
+    return f"+{text}" if signed and value > 0 else text
+
+
 def _statistics_section(validation: Mapping[str, Any], *, temporal_ran: bool = False) -> dict[str, Any]:
     tests = []
     for test in _sequence(validation.get("tests")):
@@ -428,6 +486,7 @@ def build_audit_report_context(
         "readiness": _readiness_section(readiness),
         "findings": _findings_section(dashboard.get("insights")),
         "temporal": _temporal_section(_mapping(dashboard.get("temporal_analysis"))),
+        "drivers": _driver_section(_mapping(dashboard.get("driver_analysis"))),
         "statistics": _statistics_section(
             _mapping(dashboard.get("statistical_validation")), temporal_ran=temporal_checked(dashboard)
         ),

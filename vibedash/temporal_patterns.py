@@ -241,6 +241,10 @@ def level_shift_test(values: Sequence[float], period_starts: Sequence[pd.Timesta
         "absolute_shift": float(shift_linear),
         "median_before": float(np.median(before)),
         "median_after": float(np.median(after)),
+        # Candidate dates exclude the first and last tenth of the series; a
+        # maximum on that boundary means the real change may lie beyond it
+        # (typically a change in the last few periods), so its date is unknown.
+        "at_edge": bool(location <= max(4, n // 10) or location >= n - max(4, n // 10)),
         "min_shift": MIN_LEVEL_SHIFT,
     }
 
@@ -248,6 +252,25 @@ def level_shift_test(values: Sequence[float], period_starts: Sequence[pd.Timesta
 # --------------------------------------------------------------------------
 # Last period
 # --------------------------------------------------------------------------
+
+def robust_unusualness(history: Sequence[float], latest: float) -> Optional[tuple[float, float, float]]:
+    """Robust z-score of ``latest`` against ``history`` and its two-sided p-value.
+
+    Returns ``(z, p_value, centre)`` or ``None`` when the history has no spread.
+    The median and MAD resist past outliers; the Student t reference keeps the
+    false-alert rate near nominal for heavy-tailed business data.
+    """
+    values = np.asarray(history, dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) < 3 or not math.isfinite(latest):
+        return None
+    centre = float(np.median(values))
+    scale = 1.4826 * float(np.median(np.abs(values - centre)))
+    if not math.isfinite(scale) or scale <= 0:
+        return None
+    score = (latest - centre) / scale
+    return float(score), float(2.0 * stats.t.sf(abs(score), LAST_PERIOD_REFERENCE_DF)), centre
+
 
 def last_period_check(values: Sequence[float], period_starts: Sequence[pd.Timestamp]) -> Optional[dict[str, Any]]:
     """Compare the latest complete period with the metric's normal movement."""
@@ -265,12 +288,10 @@ def last_period_check(values: Sequence[float], period_starts: Sequence[pd.Timest
     baseline = np.convolve(y, kernel, mode="valid")[:-1]
     errors = y[window:] - baseline
     history, latest = errors[:-1], float(errors[-1])
-    centre = float(np.median(history))
-    scale = 1.4826 * float(np.median(np.abs(history - centre)))
-    if not math.isfinite(scale) or scale <= 0:
+    unusual = robust_unusualness(history, latest)
+    if unusual is None:
         return None
-    score = (latest - centre) / scale
-    p_value = float(2.0 * stats.t.sf(abs(score), LAST_PERIOD_REFERENCE_DF))
+    score, p_value, centre = unusual
     expected = float(baseline[-1] + centre)
     observed = float(y[-1])
     return {

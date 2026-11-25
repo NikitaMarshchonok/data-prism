@@ -30,6 +30,7 @@ from .spec import VizSpec, Metric, Chart, Filter
 from .insight_engine import EvidenceBasedInsightEngine
 from .statistical_engine import StatisticalValidationEngine
 from .temporal_engine import TemporalAnalysisEngine
+from .driver_analysis import DriverAnalysisEngine
 from .anomaly_segmentation_engine import AnomalySegmentationEngine
 from .readiness_engine import DatasetReadinessEngine
 from .decision_brief import build_decision_brief
@@ -188,6 +189,7 @@ def generate_dashboard_data(
             "insights": [],
             "statistical_validation": StatisticalValidationEngine(empty_df).analyze(),
             "temporal_analysis": TemporalAnalysisEngine(empty_df).analyze(),
+            "driver_analysis": DriverAnalysisEngine(empty_df, {}).analyze(),
             "pattern_analysis": AnomalySegmentationEngine(empty_df).analyze(),
             "readiness": readiness,
             "df_shape": (0, 0) if df is None else df.shape,
@@ -260,6 +262,12 @@ def generate_dashboard_data(
         analysis_context=analysis_context,
     ).analyze()
     insights = _without_superseded_trends(insights, temporal_analysis)
+    driver_analysis = DriverAnalysisEngine(
+        filtered_df,
+        temporal_analysis,
+        column_profiles=column_profiles,
+        analysis_context=analysis_context,
+    ).analyze()
     pattern_analysis = AnomalySegmentationEngine(
         filtered_df,
         column_profiles=column_profiles,
@@ -274,6 +282,7 @@ def generate_dashboard_data(
         "insights": insights,
         "statistical_validation": statistical_validation,
         "temporal_analysis": temporal_analysis,
+        "driver_analysis": driver_analysis,
         "pattern_analysis": pattern_analysis,
         "readiness": readiness,
         "df_shape": filtered_df.shape,

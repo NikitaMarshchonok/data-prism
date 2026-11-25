@@ -405,9 +405,34 @@
         </section>
         {% endif %}
 
+        {% set drivers = dashboard_data.driver_analysis %}
+        {% if drivers and drivers.status == 'ok' and drivers.measures %}
+        <section class="dashboard-section" aria-labelledby="drivers-heading">
+            <div class="section-heading"><div><span>07</span><h2 id="drivers-heading">What changed recently</h2></div><p>{{ drivers.summary }}</p></div>
+            <div class="method-note">Exact decomposition of the latest change across categories: segment changes for totals, mix and rate effects for averages. Unusualness is judged against the same comparison over the history.</div>
+            <div class="validation-list">
+                {% for measure in drivers.measures %}
+                <article class="validation-card {% if measure.material %}is-significant{% endif %}">
+                    <div class="card-heading"><h3>{{ measure.column }}</h3><span>{% if measure.material %}Changed more than usual{% elif measure.unusual %}Usual range{% else %}Not enough history{% endif %}</span></div>
+                    <div class="stat-grid">
+                        <div><small>{{ measure.window }}</small><strong>{{ "%.4g"|format(measure.before) }} → {{ "%.4g"|format(measure.after) }}</strong></div>
+                        <div><small>Change</small><strong>{% if measure.relative_change is not none %}{{ "%+.1f%%"|format(measure.relative_change * 100) }}{% else %}{{ "%+.4g"|format(measure.change) }}{% endif %}</strong></div>
+                        <div><small>Adjusted p (vs history)</small><strong>{% if measure.unusual %}{{ "%.3g"|format(measure.unusual.adjusted_p_value) }}{% else %}n/a{% endif %}</strong></div>
+                    </div>
+                    {% for dimension in measure.dimensions[:2] %}
+                    <p class="test-meta"><strong>{{ dimension.dimension }}</strong>{% if dimension.mix_story %} · mostly a mix shift{% elif dimension.driver %} · driver: {{ dimension.driver.segment }}{% endif %}:
+                        {% for row in dimension.segments %}{{ row.segment }} {{ "%+.4g"|format(row.contribution) }}{% if row.share_of_change is not none %} ({{ "%.0f%%"|format(row.share_of_change * 100) }} of change){% endif %}{% if not loop.last %}; {% endif %}{% endfor %}
+                        {% if dimension.mix_effect is defined %} · mix {{ "%+.4g"|format(dimension.mix_effect) }}, rate {{ "%+.4g"|format(dimension.rate_effect) }}{% endif %}</p>
+                    {% endfor %}
+                </article>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
         {% if dashboard_data.statistical_validation and dashboard_data.statistical_validation.inference_status == 'withheld' %}
         <section class="dashboard-section" aria-labelledby="statistics-heading">
-            <div class="section-heading"><div><span>07</span><h2 id="statistics-heading">Statistical inference withheld</h2></div></div>
+            <div class="section-heading"><div><span>08</span><h2 id="statistics-heading">Statistical inference withheld</h2></div></div>
             <div class="readiness-issue issue-warning" role="note">
                 <h3>Sampling-design review required</h3>
                 <p>{{ dashboard_data.statistical_validation.summary }}</p>
@@ -416,7 +441,7 @@
         </section>
         {% elif dashboard_data.statistical_validation and dashboard_data.statistical_validation.tests %}
         <section class="dashboard-section" aria-labelledby="statistics-heading">
-            <div class="section-heading"><div><span>07</span><h2 id="statistics-heading">Statistical validation</h2></div><p>{{ dashboard_data.statistical_validation.summary }}</p></div>
+            <div class="section-heading"><div><span>08</span><h2 id="statistics-heading">Statistical validation</h2></div><p>{{ dashboard_data.statistical_validation.summary }}</p></div>
             <div class="method-note">{{ dashboard_data.statistical_validation.correction }} · confidence intervals and effect sizes are reported with p-values. These tests assume independent observations; the sampling design has not been verified automatically.</div>
             <div class="validation-list">
                 {% for test in dashboard_data.statistical_validation.tests %}
@@ -438,7 +463,7 @@
 
         {% if dashboard_data.pattern_analysis and dashboard_data.pattern_analysis.status == 'ok' %}
         <section class="dashboard-section" aria-labelledby="patterns-heading">
-            <div class="section-heading"><div><span>08</span><h2 id="patterns-heading">Anomalies and segments</h2></div><p>{{ dashboard_data.pattern_analysis.anomaly_detection.summary }}</p></div>
+            <div class="section-heading"><div><span>09</span><h2 id="patterns-heading">Anomalies and segments</h2></div><p>{{ dashboard_data.pattern_analysis.anomaly_detection.summary }}</p></div>
             {% if dashboard_data.pattern_analysis.anomaly_detection.top_anomalies %}
             <div class="table-card"><div class="table-scroll"><table>
                 <thead><tr><th>Row</th><th>Anomaly score</th><th>Leading reason</th></tr></thead>
@@ -462,28 +487,28 @@
 
         {% if dashboard_data.charts %}
         <section class="dashboard-section" aria-labelledby="charts-heading">
-            <div class="section-heading"><div><span>09</span><h2 id="charts-heading">Visual diagnostics</h2></div><p>Charts support exploration; the evidence panels carry the conclusions.</p></div>
+            <div class="section-heading"><div><span>10</span><h2 id="charts-heading">Visual diagnostics</h2></div><p>Charts support exploration; the evidence panels carry the conclusions.</p></div>
             <div class="chart-grid">{% for chart in dashboard_data.charts %}<article class="chart-card chart-card--{{ chart.type }}"><header class="chart-card-heading"><div><span>{{ chart.kind }}</span><h3>{{ chart.title }}</h3></div><small>Hover to inspect</small></header><div class="chart-container">{{ chart.html | safe }}</div></article>{% endfor %}</div>
         </section>
         {% endif %}
 
         {% if dashboard_data.tables %}
         <section class="dashboard-section" aria-labelledby="tables-heading">
-            <div class="section-heading"><div><span>10</span><h2 id="tables-heading">Data audit</h2></div><p>Source preview and descriptive statistics for manual verification.</p></div>
+            <div class="section-heading"><div><span>11</span><h2 id="tables-heading">Data audit</h2></div><p>Source preview and descriptive statistics for manual verification.</p></div>
             <div class="data-table-stack">{% for table in dashboard_data.tables %}<article class="table-card"><h3>{{ table.title }}</h3><div class="table-scroll"><table><thead><tr>{% for header in table.headers %}<th>{{ header }}</th>{% endfor %}</tr></thead><tbody>{% for row in table.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div></article>{% endfor %}</div>
         </section>
         {% endif %}
 
         {% if dashboard_data.ai_summary %}
         <section class="dashboard-section" aria-labelledby="summary-heading">
-            <div class="section-heading"><div><span>11</span><h2 id="summary-heading">Analysis summary</h2></div><p>Generated from the dashboard specification and calculated dataset coverage.</p></div>
+            <div class="section-heading"><div><span>12</span><h2 id="summary-heading">Analysis summary</h2></div><p>Generated from the dashboard specification and calculated dataset coverage.</p></div>
             <div class="summary-card">{{ dashboard_data.ai_summary }}</div>
         </section>
         {% endif %}
 
         {% if audit_manifest %}
         <section class="dashboard-section" aria-labelledby="audit-heading">
-            <div class="section-heading"><div><span>12</span><h2 id="audit-heading">Reproducibility record</h2></div><p>Versioned metadata and fingerprints; no source row values are included.</p></div>
+            <div class="section-heading"><div><span>13</span><h2 id="audit-heading">Reproducibility record</h2></div><p>Versioned metadata and fingerprints; no source row values are included.</p></div>
             <div class="audit-grid">
                 <article><small>Analysis contract</small><strong>{{ audit_manifest.analysis_contract }}</strong></article>
                 <article><small>Engine version</small><strong>{{ audit_manifest.engine_version }}</strong></article>
