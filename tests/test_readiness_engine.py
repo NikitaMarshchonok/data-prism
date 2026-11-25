@@ -1,5 +1,6 @@
 import json
 import unittest
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -102,6 +103,22 @@ class DatasetReadinessEngineTests(unittest.TestCase):
 
         self.assertEqual(high_cardinality["status"], "passed")
 
+
+    def test_complex_values_are_checked_without_a_lossy_float_cast(self):
+        frame = pd.DataFrame(
+            {
+                "value": [complex(i, i) for i in range(20)],
+                "signal": [complex(0, np.inf)] + [complex(i, 0) for i in range(19)],
+                "amount": [np.inf] + [float(i) for i in range(19)],
+            }
+        )
+        # Another thread inside a library catch_warnings block can leave
+        # ComplexWarning set to "error" process-wide; the check must not cast.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", np.exceptions.ComplexWarning)
+            check = DatasetReadinessEngine(frame)._finite_numeric_check()
+        self.assertEqual(check.status, "warning")
+        self.assertEqual(check.metrics["infinite_value_count"], 2)
 
 if __name__ == "__main__":
     unittest.main()
