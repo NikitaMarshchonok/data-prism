@@ -9,7 +9,7 @@ from src.structural_dependencies import additive_pair_dependency
 
 DECISION_BRIEF_CONTRACT = "decision-brief-v1"
 MAX_TEMPORAL_PRIORITIES = 2
-TEMPORAL_CATEGORIES = frozenset({"last-period-alert", "validated-trend", "level-shift"})
+TEMPORAL_CATEGORIES = frozenset({"last-period-alert", "change-driver", "validated-trend", "level-shift"})
 
 
 def build_decision_brief(
@@ -41,12 +41,14 @@ def build_decision_brief(
     temporal = dashboard_data.get("temporal_analysis") or {}
     # Unlike IID tests on dated rows, the time-series checks are built for
     # serial dependence, so they rank ahead of the sampling-design caveat.
-    # An unusual latest period is the most time-sensitive, then the trend,
-    # then an abrupt shift.  At most two keep room for other evidence types.
+    # An unusual latest period is the most time-sensitive, then an unusual
+    # recent change with its main driver, the trend, and an abrupt shift.
+    # At most two keep room for other evidence types.
     temporal_priorities = [
         priority
         for priority in (
             _last_period_priority(temporal, context),
+            _change_driver_priority(dashboard_data.get("driver_analysis") or {}, context),
             _validated_trend_priority(temporal, context),
             _level_shift_priority(temporal, context),
         )
@@ -262,6 +264,47 @@ def _last_period_priority(temporal: Mapping[str, Any], context: Mapping[str, Any
         "action": "Confirm the latest figures in the source system before acting, then identify the cause.",
         "confidence": "medium",
         "source": "temporal_analysis",
+    }
+
+
+def _change_driver_priority(drivers: Mapping[str, Any], context: Mapping[str, Any]) -> Dict[str, Any] | None:
+    """The recent change that is larger than usual, with the segment it came from."""
+    if drivers.get("status") != "ok":
+        return None
+    candidates = [
+        measure
+        for measure in drivers.get("measures") or []
+        if isinstance(measure, Mapping)
+        and isinstance(measure.get("unusual"), Mapping)
+        and measure["unusual"].get("significant") is True
+        and is_relevant({"columns": [measure.get("column")]}, context)
+    ]
+    if not candidates:
+        return None
+    measure = min(candidates, key=lambda entry: _sortable_number(entry["unusual"].get("adjusted_p_value")))
+    relative = measure.get("relative_change")
+    size = f"{float(relative):+.1%}" if isinstance(relative, (int, float)) else _number(measure.get("change"))
+    top = (measure.get("dimensions") or [None])[0] or {}
+    driver = top.get("mix_driver") if top.get("mix_story") else top.get("driver")
+    source = (
+        f"; mix shift in {top.get('dimension')} ({driver.get('segment')})" if top.get("mix_story") and driver
+        else f"; main driver {top.get('dimension')} = {driver.get('segment')}" if driver
+        else "; spread across segments" if top else ""
+    )
+    return {
+        "category": "change-driver",
+        "title": f"{measure.get('column')} changed more than usual recently",
+        "finding": f"{measure.get('column')}: {size} ({measure.get('window')}){source}.",
+        "evidence": [
+            f"FDR-adjusted p-value: {_probability(measure['unusual'].get('adjusted_p_value'))}",
+            f"Comparable past comparisons: {int(measure['unusual'].get('history_comparisons') or 0)}",
+            f"Windows: {' to '.join(measure.get('current_window') or [])} vs {' to '.join(measure.get('base_window') or [])}",
+        ],
+        "columns": [str(measure.get("column"))],
+        "risk": "A decomposition shows where a change happened, not what caused it.",
+        "action": "Investigate the named segment first, then confirm the cause with the people who run it.",
+        "confidence": "medium",
+        "source": "driver_analysis",
     }
 
 

@@ -356,7 +356,15 @@ class DatasetReadinessEngine:
 
     def _finite_numeric_check(self) -> ReadinessCheck:
         numeric = self.df.select_dtypes(include=[np.number])
-        infinite_count = int(np.isinf(numeric.to_numpy(dtype=float)).sum()) if not numeric.empty else 0
+        # Complex columns are checked in their own dtype: casting them to float
+        # would drop the imaginary part, and the ComplexWarning that cast emits
+        # becomes an exception whenever another thread holds a library
+        # catch_warnings block (the warnings filter is process-global).
+        real = numeric.select_dtypes(exclude=[np.complexfloating])
+        complex_values = numeric.select_dtypes(include=[np.complexfloating])
+        infinite_count = int(np.isinf(real.to_numpy(dtype=float)).sum()) if not real.empty else 0
+        if not complex_values.empty:
+            infinite_count += int(np.isinf(complex_values.to_numpy()).sum())
         if infinite_count:
             return ReadinessCheck(
                 "finite-numeric-values",

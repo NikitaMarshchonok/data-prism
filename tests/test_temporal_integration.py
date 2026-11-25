@@ -239,7 +239,9 @@ class ReportAndPageTests(unittest.TestCase):
         self.assertTrue(section["series"][0]["significant"])
         self.assertTrue(all(item["plain"] for item in section["series"]))
         self.assertIn("4. Trends over time", html)
-        self.assertIn("5. Statistical validation", html)
+        self.assertTrue(report["drivers"]["shown"])
+        self.assertIn("5. What changed recently, and where", html)
+        self.assertIn("6. Statistical validation", html)
         self.assertIn("adjusted p &lt; 0.0001", html)
 
     def test_report_without_dates_keeps_previous_layout(self):

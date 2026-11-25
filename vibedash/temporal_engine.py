@@ -425,6 +425,12 @@ class TemporalAnalysisEngine:
 
         self._adjust_family(series_results, "seasonality", MIN_SEASONAL_AMPLITUDE, "amplitude")
         self._adjust_family(series_results, "level_shift", MIN_LEVEL_SHIFT, "relative_shift")
+        for item in series_results:
+            shift = item.get("level_shift")
+            if shift and shift.get("at_edge"):
+                # Recent changes are covered by the latest-period and driver
+                # checks; a shift whose date cannot be located is not reported.
+                shift["significant"] = False
         self._adjust_family(series_results, "latest_period", None, None)
 
         detected = sum(1 for item in series_results if item["trend"]["significant"])

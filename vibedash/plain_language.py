@@ -657,6 +657,178 @@ def explain_temporal(analysis: Mapping[str, Any]) -> Optional[Explanation]:
 
 
 # --------------------------------------------------------------------------
+# Why a KPI changed
+# --------------------------------------------------------------------------
+
+_WINDOW_SHORT = {
+    "day": "last 7 days vs the 7 before",
+    "week": "last 4 weeks vs the 4 before",
+    "month": "last month vs the same month a year earlier",
+}
+
+
+def _format_value(value: Any, unit: Any) -> Optional[str]:
+    number = _number(value)
+    if number is None:
+        return None
+    if unit == "ratio":
+        return f"{number * 100:.1f}%"
+    if unit == "percent":
+        return f"{number:.1f}%"
+    magnitude = abs(number)
+    if magnitude >= 1000:
+        return f"{number:,.0f}"
+    if magnitude >= 10:
+        return f"{number:,.1f}"
+    return f"{number:.3g}"
+
+
+def _format_change(value: Any, unit: Any) -> Optional[str]:
+    number = _number(value)
+    if number is None:
+        return None
+    if unit == "ratio":
+        return f"{'+' if number >= 0 else '−'}{abs(number) * 100:.1f} points"
+    if unit == "percent":
+        return f"{'+' if number >= 0 else '−'}{abs(number):.1f} points"
+    formatted = _format_value(abs(number), unit)
+    return f"{'+' if number >= 0 else '−'}{formatted}" if formatted else None
+
+
+def _unusual_sentence(measure: Mapping[str, Any]) -> str:
+    unusual = measure.get("unusual")
+    if not isinstance(unusual, Mapping):
+        return "There is not enough history yet to say whether a swing of this size is unusual."
+    if unusual.get("significant") is True:
+        return "This is larger than the usual swing between comparable periods."
+    return "Swings of this size are normal for this measure, so it may reverse on its own."
+
+
+def explain_driver(measure: Mapping[str, Any]) -> Optional[Explanation]:
+    """Explain the latest change of one measure and where it came from, or ``None``."""
+    if not isinstance(measure, Mapping):
+        return None
+    column = _name(measure.get("column"))
+    window = _WINDOW_SHORT.get(measure.get("grain"))
+    unit = measure.get("unit")
+    if not column or not window:
+        return None
+    relative = _number(measure.get("relative_change"))
+    change = _number(measure.get("change"))
+    if change is None:
+        return None
+    before, after = _format_value(measure.get("before"), unit), _format_value(measure.get("after"), unit)
+    points = unit in {"ratio", "percent"}
+    level = ""
+    if before and after:
+        level = f", from an average of {before} to {after}" if measure.get("kind") == "average" else f", from {before} to {after}"
+    dimensions = [entry for entry in measure.get("dimensions") or [] if isinstance(entry, Mapping)]
+    top = dimensions[0] if dimensions else None
+
+    sized = relative is not None and abs(relative) >= 0.05 or (
+        relative is None and top is not None and (top.get("driver") or top.get("mix_story"))
+    )
+    if not sized:
+        shown = _signed_percent(relative) if relative is not None else _format_change(change, unit)
+        headline = f"{column} was roughly flat ({shown}, {window})."
+        offsetting = next(
+            (entry for entry in dimensions if len(entry.get("offsetting") or []) >= 2
+             and entry["offsetting"][0]["contribution"] * entry["offsetting"][1]["contribution"] < 0),
+            None,
+        )
+        if offsetting is None:
+            return _explanation(headline, "No segment moved enough to matter.", "Nothing to act on for this measure.")
+        dimension = _name(offsetting.get("dimension"))
+        first, second = offsetting["offsetting"][0], offsetting["offsetting"][1]
+        first_name, second_name = _name(first.get("segment")), _name(second.get("segment"))
+        first_change, second_change = _format_change(first.get("contribution"), unit), _format_change(second.get("contribution"), unit)
+        if not all((dimension, first_name, second_name, first_change, second_change)):
+            return _explanation(headline, "No segment moved enough to matter.", "Nothing to act on for this measure.")
+        return _explanation(
+            headline,
+            f"The flat total hides opposite moves in {dimension}: {first_name} changed by {first_change} and "
+            f"{second_name} by {second_change}, which cancel out.",
+            f"Look at {first_name} ({dimension}) on its own; the overall total hides what happened there.",
+        )
+
+    verb = "rose" if change > 0 else "fell"
+    if points and before and after:
+        # Rates move in percentage points; "fell by 22%" of a 5% rate confuses.
+        headline = f"{column} {verb} from an average of {before} to {after} ({window})."
+    else:
+        size = _percent(abs(relative)) if relative is not None else _format_change(change, unit)
+        headline = f"{column} {verb} by {size}{level} ({window})."
+    unusual = _unusual_sentence(measure)
+    if top is None:
+        return _explanation(headline, unusual, "Check whether prices, volumes or the data feed changed in this period.")
+    dimension = _name(top.get("dimension"))
+    if top.get("mix_story") and isinstance(top.get("mix_driver"), Mapping):
+        segment = top["mix_driver"]
+        name = _name(segment.get("segment"))
+        share_before, share_after = _percent(segment.get("share_before")), _percent(segment.get("share_after"))
+        level_word = "below" if (_number(segment.get("before")) or 0) < (_number(measure.get("before")) or 0) else "above"
+        if dimension and name and share_before and share_after:
+            return _explanation(
+                headline,
+                f"This is mostly a mix effect: rows where {dimension} is {name}, which sit {level_word} the average, "
+                f"went from {share_before} to {share_after} of the total. Within each {dimension}, {column} itself changed "
+                f"much less. {unusual}",
+                f"Track {column} per {dimension} as well as overall; the overall average can move even when no "
+                "segment changed.",
+            )
+    driver = top.get("driver")
+    if isinstance(driver, Mapping):
+        name = _name(driver.get("segment"))
+        share = _number(driver.get("share_of_change"))
+        base = _percent(driver.get("base_share"))
+        if dimension and name and share is not None and base:
+            portion = "more than the whole change" if share > 1 else f"{_percent(share)} of the change"
+            word = "drop" if change < 0 else "increase"
+            own = _signed_percent(driver.get("relative_change")) if driver.get("relative_change") is not None else None
+            if measure.get("kind") == "average":
+                moved = _format_value(driver.get("before"), unit), _format_value(driver.get("after"), unit)
+                own_text = f" ({column} there went from {moved[0]} to {moved[1]})" if all(moved) else ""
+            else:
+                own_text = f" (it changed by {own} on its own)" if own else ""
+            return _explanation(
+                headline,
+                f"Most of the {word} comes from {name} ({dimension}): {portion}, although it makes up only {base} "
+                f"of the total{own_text}. {unusual}",
+                f"Start with {name} ({dimension}): what changed there in this period (prices, staff, campaigns, stock, "
+                "data feed)?",
+            )
+    if dimension:
+        return _explanation(
+            headline,
+            f"The change is spread across {dimension} roughly in proportion to size; no single segment stands out. {unusual}",
+            "Look for a business-wide cause, such as pricing, the season or the market, rather than one segment.",
+        )
+    return _explanation(headline, unusual, "Check whether prices, volumes or the data feed changed in this period.")
+
+
+def explain_drivers(analysis: Mapping[str, Any]) -> Optional[Explanation]:
+    """Summarize the driver analysis, or ``None`` when it does not apply."""
+    if not isinstance(analysis, Mapping) or analysis.get("status") != "ok":
+        return None
+    measures = [item for item in analysis.get("measures") or [] if isinstance(item, Mapping)]
+    if not measures:
+        return None
+    flagged = sum(1 for item in measures if item.get("material") is True)
+    count = "1 key measure" if len(measures) == 1 else f"{len(measures)} key measures"
+    result = (
+        "none changed more than usual" if flagged == 0
+        else "1 changed more than usual" if flagged == 1
+        else f"{flagged} changed more than usual"
+    )
+    return _explanation(
+        f"We compared the latest period with a comparable earlier one for {count}; {result}.",
+        "Each change is split exactly across the categories in your data, so you can see which segment it came "
+        "from. This shows where a change happened, not why.",
+        "Start any investigation with the segment named for each measure.",
+    )
+
+
+# --------------------------------------------------------------------------
 # Decision-brief priorities
 # --------------------------------------------------------------------------
 
@@ -745,6 +917,7 @@ KNOWN_PRIORITY_CATEGORIES = frozenset(
         "validated-trend",
         "level-shift",
         "last-period-alert",
+        "change-driver",
         "anomaly-review",
         "data-readiness",
     }
@@ -772,6 +945,13 @@ def explain_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) 
     if category == "level-shift":
         item = _temporal_item(priority, dashboard)
         return explain_level_shift(item) if item is not None else None
+    if category == "change-driver":
+        drivers = dashboard.get("driver_analysis")
+        columns = priority.get("columns")
+        for measure in (drivers.get("measures") or []) if isinstance(drivers, Mapping) else ():
+            if isinstance(measure, Mapping) and isinstance(columns, Sequence) and [measure.get("column")] == list(columns):
+                return explain_driver(measure)
+        return None
     if category == "last-period-alert":
         item = _temporal_item(priority, dashboard)
         return explain_last_period(item) if item is not None else None

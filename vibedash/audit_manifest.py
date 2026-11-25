@@ -84,6 +84,7 @@ def build_audit_manifest(
     readiness = dashboard_data.get("readiness") or {}
     decision_brief = dashboard_data.get("decision_brief") or {}
     temporal_analysis = dashboard_data.get("temporal_analysis") or {}
+    driver_analysis = dashboard_data.get("driver_analysis") or {}
     temporal_series = [
         item for item in temporal_analysis.get("series") or [] if isinstance(item, Mapping)
     ]
@@ -156,6 +157,15 @@ def build_audit_manifest(
                 ),
                 "last_period_alert_count": sum(
                     (item.get("latest_period") or {}).get("significant") is True for item in temporal_series
+                ),
+            },
+            "driver_analysis": {
+                "contract": driver_analysis.get("contract"),
+                "status": driver_analysis.get("status"),
+                "measure_count": len(driver_analysis.get("measures") or []),
+                "material_change_count": sum(
+                    isinstance(item, Mapping) and item.get("material") is True
+                    for item in driver_analysis.get("measures") or []
                 ),
             },
             "anomaly_candidate_total_count": total_candidates,
