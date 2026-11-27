@@ -9,6 +9,7 @@ from src.structural_dependencies import additive_pair_dependency
 
 DECISION_BRIEF_CONTRACT = "decision-brief-v1"
 MAX_TEMPORAL_PRIORITIES = 2
+_MAGNITUDE_RANK = {"large": 0, "medium": 1, "small": 2, "negligible": 3}
 TEMPORAL_CATEGORIES = frozenset({"last-period-alert", "change-driver", "validated-trend", "level-shift"})
 
 
@@ -63,7 +64,16 @@ def build_decision_brief(
         and not test.get("structural_dependency")
         and not additive_pair_dependency(test.get("columns") or [], dashboard_data.get("structural_dependencies") or [])
     ]
-    significant.sort(key=lambda test: _sortable_number(test.get("adjusted_p_value")))
+    # A negligible effect can be "significant" in a large file; it is not a
+    # business priority. Larger practical effects lead.
+    significant = [
+        test for test in significant
+        if (test.get("effect_size") or {}).get("magnitude") != "negligible"
+    ]
+    significant.sort(key=lambda test: (
+        _MAGNITUDE_RANK.get((test.get("effect_size") or {}).get("magnitude"), len(_MAGNITUDE_RANK)),
+        _sortable_number(test.get("adjusted_p_value")),
+    ))
     selected_signal_columns = finding_columns(significant[0]) if significant else set()
     if significant:
         test = significant[0]
