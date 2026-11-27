@@ -19,6 +19,8 @@ MAX_FEATURES = 12
 MAX_SEGMENTS = 6
 ANOMALY_CONTAMINATION = 0.03
 GAP_REFERENCE_REPEATS = 5
+GAP_MAX_ROWS = 2000
+GAP_CLIP_PERCENT = 1.0
 STABILITY_SUBSAMPLE_SHARE = 0.80
 STABILITY_SEEDS = (43, 44, 45, 46, 47)
 
@@ -64,8 +66,10 @@ class AnomalySegmentationEngine:
                 "Isolation Forest ranks a fixed review budget of multivariate candidates; flags are not an estimate of anomaly prevalence or proof of bad data or fraud.",
                 "Median imputation and robust scaling are fitted on the analyzed dataset.",
                 "The gap statistic must support more than one cluster before K-means segments are reported.",
+                "Gap-statistic reference data is drawn uniformly over the principal axes of the data, with each axis clipped to its 1st-99th percentile range, so correlated measures or a few extreme rows alone do not count as segments.",
+                f"Above {GAP_MAX_ROWS:,} rows the gap statistic runs on a fixed random sample of {GAP_MAX_ROWS:,} rows; K-means segments are still fitted on all rows.",
                 "Segmentation stability is measured by refitting K-means on deterministic 80% subsamples and comparing full-data assignments.",
-                "K-means segmentation excludes review candidates while fitting centroids, then assigns every row.",
+                "The gap statistic uses every row; K-means excludes review candidates while fitting centroids, then assigns every row.",
                 "Segments are exploratory and require domain validation before operational use.",
             ],
         }
@@ -328,7 +332,10 @@ class AnomalySegmentationEngine:
                 "segments": [],
             }
 
-        gap_selected_k, gap_scores = self._gap_statistic(fit_scaled, max_k)
+        # Clusterability is judged on every row with clipped extremes (see
+        # _gap_statistic); trimming review candidates distorts the test.
+        gap_selected_k, gap_scores = self._gap_statistic(scaled, max_k)
+        gap_rows = int(min(len(scaled), GAP_MAX_ROWS))
         if gap_selected_k == 1:
             return {
                 "status": "insufficient_evidence",
@@ -342,6 +349,7 @@ class AnomalySegmentationEngine:
                 "excluded_anomaly_rows": int((~fit_mask).sum()),
                 "candidate_scores": candidates,
                 "gap_scores": gap_scores,
+                "gap_rows": gap_rows,
                 "segments": [],
                 "summary": (
                     "The gap statistic selected one cluster, so the data does not "
@@ -369,6 +377,7 @@ class AnomalySegmentationEngine:
                 "excluded_anomaly_rows": int((~fit_mask).sum()),
                 "candidate_scores": candidates,
                 "gap_scores": gap_scores,
+                "gap_rows": gap_rows,
                 "segments": [],
                 "summary": (
                     "The gap statistic supported multiple clusters, but no partition "
@@ -401,6 +410,7 @@ class AnomalySegmentationEngine:
             "excluded_anomaly_rows": int((~fit_mask).sum()),
             "candidate_scores": candidates,
             "gap_scores": gap_scores,
+            "gap_rows": gap_rows,
             "segments": segments,
             "summary": (
                 f"The best exploratory solution contains {selected_k} segments with "
@@ -419,12 +429,39 @@ class AnomalySegmentationEngine:
         The one-standard-error rule may select ``k=1``. In that case the
         engine must not manufacture a multi-segment result merely because
         K-means can partition any finite dataset.
+
+        Reference data is uniform over a box aligned with the principal axes
+        (Tibshirani, Walther and Hastie 2001, method b). A box aligned with the
+        original columns is far wider than correlated data, so correlation
+        between measures alone would look like cluster structure. Inertia is
+        rotation invariant, so the test runs in principal coordinates.
+
+        Each principal coordinate is clipped to its 1st-99th percentile range.
+        Without clipping a few extreme rows stretch the reference box and hide
+        real clusters; removing review candidates instead cuts the tails of a
+        single cloud and makes it look clustered.
+
+        Large inputs use a fixed random sample: the question is whether
+        clusters exist, and every reference refit costs a full K-means run.
         """
-        lower = np.min(values, axis=0)
-        spans = np.maximum(np.max(values, axis=0) - lower, 1e-12)
+        if len(values) > GAP_MAX_ROWS:
+            positions = np.random.default_rng(RANDOM_STATE).choice(
+                len(values), size=GAP_MAX_ROWS, replace=False
+            )
+            values = values[np.sort(positions)]
+        centred = values - np.mean(values, axis=0)
+        _, _, axes = np.linalg.svd(centred, full_matrices=False)
+        principal = centred @ axes.T
+        principal = np.clip(
+            principal,
+            np.percentile(principal, GAP_CLIP_PERCENT, axis=0),
+            np.percentile(principal, 100.0 - GAP_CLIP_PERCENT, axis=0),
+        )
+        lower = np.min(principal, axis=0)
+        spans = np.maximum(np.max(principal, axis=0) - lower, 1e-12)
         rng = np.random.default_rng(RANDOM_STATE)
         references = [
-            lower + rng.random(values.shape) * spans
+            lower + rng.random(principal.shape) * spans
             for _ in range(GAP_REFERENCE_REPEATS)
         ]
         diagnostics = []
@@ -435,7 +472,7 @@ class AnomalySegmentationEngine:
                 n_clusters=cluster_count,
                 random_state=RANDOM_STATE,
                 n_init=10,
-            ).fit(values)
+            ).fit(principal)
             reference_logs = []
             for reference_index, reference in enumerate(references):
                 reference_model = KMeans(
