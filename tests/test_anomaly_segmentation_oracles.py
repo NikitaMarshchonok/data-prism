@@ -31,7 +31,60 @@ def _independent_noise() -> pd.DataFrame:
     )
 
 
+def _correlated_business_measures(rows: int = 600) -> pd.DataFrame:
+    """One shared size factor drives revenue, orders and visits; no groups."""
+    rng = np.random.default_rng(0)
+    size = rng.lognormal(0, 0.5, rows)
+    return pd.DataFrame(
+        {
+            "revenue": 100 * size * rng.lognormal(0, 0.2, rows),
+            "orders": 10 * size * rng.lognormal(0, 0.2, rows),
+            "visits": 300 * size * rng.lognormal(0, 0.3, rows),
+            "margin": rng.normal(30, 5, rows),
+        }
+    )
+
+
+def _three_clusters(rows: int, outliers: int = 0) -> pd.DataFrame:
+    rng = np.random.default_rng(7)
+    centers = np.array([[-4.0, -4.0, 0.0], [0.0, 4.0, 2.0], [4.0, -2.0, -3.0]])
+    points = centers[rng.integers(0, 3, rows)] + rng.normal(0, 0.8, (rows, 3))
+    if outliers:
+        positions = rng.choice(rows, outliers, replace=False)
+        points[positions] += rng.normal(0, 1, (outliers, 1)) * 30.0
+    return pd.DataFrame(points, columns=["feature_a", "feature_b", "feature_c"])
+
+
 class AnomalySegmentationOracleTests(unittest.TestCase):
+    def test_correlated_measures_without_groups_are_not_segments(self):
+        segmentation = AnomalySegmentationEngine(
+            _correlated_business_measures()
+        ).analyze()["segmentation"]
+
+        self.assertEqual(segmentation["status"], "insufficient_evidence")
+        self.assertEqual(segmentation["gap_selected_k"], 1)
+        self.assertEqual(segmentation["segments"], [])
+
+    def test_a_few_extreme_rows_do_not_hide_real_segments(self):
+        segmentation = AnomalySegmentationEngine(
+            _three_clusters(600, outliers=6)
+        ).analyze()["segmentation"]
+
+        self.assertEqual(segmentation["status"], "ok")
+        self.assertEqual(segmentation["gap_selected_k"], 3)
+        self.assertEqual(segmentation["selected_k"], 3)
+
+    def test_large_inputs_run_the_gap_check_on_a_fixed_sample(self):
+        frame = _three_clusters(3000)
+        first = AnomalySegmentationEngine(frame).analyze()["segmentation"]
+        second = AnomalySegmentationEngine(frame).analyze()["segmentation"]
+
+        self.assertEqual(first["gap_rows"], 2000)
+        self.assertEqual(first["gap_selected_k"], 3)
+        self.assertEqual(first["selected_k"], 3)
+        self.assertEqual(sum(item["size"] for item in first["segments"]), 3000)
+        self.assertEqual(first["gap_scores"], second["gap_scores"])
+
     def test_gap_statistic_rejects_multisegment_noise(self):
         engine = AnomalySegmentationEngine(_independent_noise())
 
