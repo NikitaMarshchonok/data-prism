@@ -171,7 +171,125 @@ def evaluate_group_comparisons(seeds: int = 300, *, alpha: float = DEFAULT_ALPHA
     return report
 
 
+# --------------------------------------------------------------------------
+# Segments compared over time
+# --------------------------------------------------------------------------
+
+PLANS = ("Starter", "Growth", "Enterprise")
+_SEGMENT_TEMPORAL = {"time_column": "Date"}
+
+
+def _dated_segments(
+    rng: np.random.Generator,
+    *,
+    phi: float = 0.5,
+    segment_sd: float = 4.0,
+    enterprise_shift: float = 0.0,
+    rate: bool = False,
+    enterprise_rate_shift: float = 0.0,
+    days: int = 364,
+    rows_per_day: int = 3,
+) -> pd.DataFrame:
+    """Daily rows for three plans sharing trend, weekly season and shocks.
+
+    Each plan also wanders on its own with AR(1) weekly offsets: the time
+    dependence that makes ordinary tests on the raw rows over-confident.
+    """
+    weeks = np.arange(days) // 7
+    week_count = int(weeks.max()) + 1
+    common = (
+        5.0 * np.sin(2 * np.pi * np.arange(days) / 7)
+        + np.linspace(0.0, 20.0, days)
+        + rng.normal(0.0, 5.0, week_count)[weeks]
+    )
+    offsets = np.empty((len(PLANS), week_count))
+    offsets[:, 0] = rng.normal(0.0, segment_sd, len(PLANS))
+    for week in range(1, week_count):
+        offsets[:, week] = phi * offsets[:, week - 1] + rng.normal(0.0, segment_sd * np.sqrt(1 - phi**2), len(PLANS))
+    day_index = np.repeat(np.arange(days), rows_per_day)
+    plan_index = rng.integers(0, len(PLANS), len(day_index))
+    level = 100.0 + common[day_index] + offsets[plan_index, weeks[day_index]]
+    frame = pd.DataFrame({
+        "Date": pd.date_range("2025-01-06", periods=days, freq="D")[day_index],
+        "Plan": np.array(PLANS)[plan_index],
+    })
+    if rate:
+        probability = 0.30 + (level - 110.0) / 200.0 + (plan_index == 2) * enterprise_rate_shift
+        frame["Renewed"] = np.where(rng.random(len(day_index)) < np.clip(probability, 0.01, 0.99), "Yes", "No")
+    else:
+        frame["Revenue"] = level + rng.normal(0.0, 10.0, len(day_index)) + (plan_index == 2) * enterprise_shift
+    return frame
+
+
+SEGMENT_SCENARIOS = (
+    ("dated_null_independent", "false_alarm", 0.07, {"phi": 0.0},
+     "Equal plans; each plan's weekly wobble is independent from week to week."),
+    ("dated_null_persistent", "false_alarm", 0.08, {"phi": 0.5},
+     "Equal plans; each plan's weekly wobble carries over half of itself to the next week."),
+    ("dated_null_very_persistent", "known_limit", 0.20, {"phi": 0.8},
+     "Known limit: plans wander for months (AR 0.8 per week) in one year of data; such runs look like gaps."),
+    ("dated_shift", "detection", 0.70, {"enterprise_shift": 5.0},
+     "Enterprise revenue is 5% higher throughout; detected and named highest.", "Enterprise"),
+    ("dated_rates_null", "false_alarm", 0.07, {"rate": True},
+     "Equal renewal rates per plan that move together with the season."),
+    ("dated_rates_shift", "detection", 0.60, {"rate": True, "enterprise_rate_shift": 0.12},
+     "Enterprise renews 12 points more often (about 7 Enterprise rows a week for a year); detected and named "
+     "highest.", "Enterprise"),
+)
+
+
+def evaluate_segments_over_time(seeds: int = 300, *, alpha: float = DEFAULT_ALPHA, base_seed: int = 20261128) -> dict:
+    """False alarms and detection of time-aware segment comparisons.
+
+    ``naive_rate`` is the share flagged by Welch's ANOVA or chi-square on the
+    raw rows, ignoring time: what an ordinary scan would have reported.
+    """
+    from src.group_statistics import rate_difference_test, welch_anova
+    from .segment_time_engine import SegmentTimeEngine
+
+    if seeds < 1:
+        raise ValueError("seeds must be positive")
+    report = {"seeds": seeds, "alpha": alpha, "scenarios": []}
+    for offset, scenario in enumerate(SEGMENT_SCENARIOS):
+        name, metric, threshold, kwargs, description = scenario[:5]
+        expected = scenario[5] if len(scenario) > 5 else None
+        rng = np.random.default_rng(base_seed + offset)
+        hits = naive = 0
+        for _ in range(seeds):
+            frame = _dated_segments(rng, **kwargs)
+            result = SegmentTimeEngine(frame, _SEGMENT_TEMPORAL, alpha=alpha).analyze()
+            test = (result.get("tests") or [None])[0]
+            if test is not None and test.get("significant"):
+                hits += expected is None or test.get("highest_segment") == expected
+            if kwargs.get("rate"):
+                table = frame.groupby("Plan")["Renewed"].agg(lambda values: int((values == "Yes").sum()))
+                sizes = frame["Plan"].value_counts().reindex(table.index)
+                naive_test = rate_difference_test(table.to_list(), sizes.to_list())
+                naive += bool(naive_test and naive_test.p_value <= alpha)
+            else:
+                anova = welch_anova([frame.loc[frame["Plan"] == plan, "Revenue"].to_numpy() for plan in PLANS])
+                naive += bool(anova and anova.p_value <= alpha)
+        rate = hits / seeds
+        allowance = 2.0 * float(np.sqrt(threshold * (1.0 - threshold) / seeds))
+        passed = rate <= threshold + allowance if metric in {"false_alarm", "known_limit"} else rate >= threshold - allowance
+        report["scenarios"].append({
+            "name": name,
+            "description": description,
+            "metric": metric,
+            "threshold": threshold,
+            "rate": rate,
+            "naive_rate": naive / seeds,
+            "allowance": round(allowance, 4),
+            "passed": bool(passed),
+        })
+    report["passed"] = all(item["passed"] for item in report["scenarios"])
+    return report
+
+
 if __name__ == "__main__":  # pragma: no cover - manual reporting helper
     import json
 
-    print(json.dumps(evaluate_group_comparisons(1000), indent=2))
+    print(json.dumps({
+        "segments": evaluate_group_comparisons(1000),
+        "segments_over_time": evaluate_segments_over_time(1000),
+    }, indent=2))

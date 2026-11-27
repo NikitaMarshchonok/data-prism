@@ -56,6 +56,11 @@ def build_decision_brief(
         if priority is not None
     ][:MAX_TEMPORAL_PRIORITIES]
     priorities[0:0] = temporal_priorities
+    segment_priority = _segment_gap_priority(dashboard_data.get("segment_analysis") or {}, context)
+    if segment_priority is not None:
+        # Time-aware evidence goes before the caveat that ordinary tests were
+        # withheld; the caveat stays, since the other tests still are.
+        priorities.insert(len(temporal_priorities), segment_priority)
     significant = [
         test
         for test in statistics.get("tests") or []
@@ -201,7 +206,7 @@ def build_decision_brief(
         # dataset-wide anomaly ranking, which has no task-specific fit.
         # Time-series findings have already passed the task-relevance filter.
         priorities.sort(key=lambda item: (
-            -1 if item["category"] in TEMPORAL_CATEGORIES
+            -1 if item["category"] in TEMPORAL_CATEGORIES or item["category"] == "segment-gap"
             else 0 if item["category"] in {"assumption-review", "data-readiness", "evidence-limitation", "evidence-structural-dependency"}
             else 2 if item["category"] == "anomaly-review" else 1
         ))
@@ -232,6 +237,51 @@ def build_decision_brief(
         "guardrail": (
             "Confirm business definitions, source-system accuracy, and decision costs with a domain owner."
         ),
+    }
+
+
+def _segment_gap_priority(segments: Mapping[str, Any], context: Mapping[str, Any]) -> Dict[str, Any] | None:
+    """The largest reliable, non-negligible difference between segments over time."""
+    if segments.get("status") != "ok":
+        return None
+    candidates = [
+        test
+        for test in segments.get("tests") or []
+        if isinstance(test, Mapping)
+        and test.get("significant") is True
+        and test.get("magnitude") != "negligible"
+        and is_relevant({"columns": [test.get("measure"), test.get("segment_column")]}, context)
+    ]
+    if not candidates:
+        return None
+    test = min(candidates, key=lambda item: (
+        _MAGNITUDE_RANK.get(item.get("magnitude"), len(_MAGNITUDE_RANK)),
+        _sortable_number(item.get("adjusted_p_value")),
+    ))
+    grain = str(test.get("grain") or "period")
+    periods = int(test.get("periods_compared") or 0)
+    consistency = test.get("consistency")
+    share = f"; higher in {float(consistency):.0%} of them" if isinstance(consistency, (int, float)) else ""
+    measure, segment = str(test.get("measure")), str(test.get("segment_column"))
+    interval = test.get("gap_ci") or [None, None]
+    return {
+        "category": "segment-gap",
+        "title": f"Segment gap over time: {measure} by {segment}",
+        "finding": (
+            f"Across {periods} {grain}s compared side by side, {test.get('highest_segment')} averaged "
+            f"{_number(test.get('highest_average'))} and {test.get('lowest_segment')} {_number(test.get('lowest_average'))}"
+            f"{share}."
+        ),
+        "evidence": [
+            f"FDR-adjusted p-value: {_probability(test.get('adjusted_p_value'))}",
+            f"Gap 95% CI (simultaneous): [{_number(interval[0])}, {_number(interval[1])}]",
+            f"Method: {test.get('method')}; {int(test.get('batches') or 0)} batches",
+        ],
+        "risk": "Segments can differ in customers, prices or mix; the gap shows where results differ, not why.",
+        "action": "Look for what sets the leading segment apart and check whether it can be applied to the others.",
+        "confidence": "high" if periods >= 52 else "medium",
+        "source": "segment_analysis",
+        "columns": [measure, segment],
     }
 
 

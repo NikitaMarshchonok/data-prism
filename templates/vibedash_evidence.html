@@ -396,6 +396,23 @@
                 </article>
                 {% endfor %}
             </div>
+            {% set segments = dashboard_data.segment_analysis %}
+            {% if segments and segments.status == 'ok' and segments.tests %}
+            <div class="method-note">Segments compared over time: rows averaged per period and segment, compared within the same period, batch-means test for dependence between periods, {{ segments.correction }}.</div>
+            <div class="validation-list">
+                {% for test in segments.tests[:6] %}
+                <article class="validation-card {% if test.significant %}is-significant{% endif %}">
+                    <div class="card-heading"><h3>{{ test.measure }}{% if test.kind == 'rate' %} = {{ test.positive_level }}{% endif %} by {{ test.segment_column }}</h3><span>{% if test.significant %}Reliable gap{% else %}No reliable gap{% endif %}</span></div>
+                    <div class="stat-grid">
+                        <div><small>Highest</small><strong>{{ test.highest_segment }}: {{ "%.4g"|format(test.highest_average) }}</strong></div>
+                        <div><small>Lowest</small><strong>{{ test.lowest_segment }}: {{ "%.4g"|format(test.lowest_average) }}</strong></div>
+                        <div><small>FDR-adjusted p</small><strong>{{ "%.4g"|format(test.adjusted_p_value) }}</strong></div>
+                    </div>
+                    <p class="test-meta">{{ test.periods_compared }} {{ test.grain }}s side by side · {{ test.batches }} batches · gap 95% CI [{{ "%.4g"|format(test.gap_ci[0]) }}, {{ "%.4g"|format(test.gap_ci[1]) }}] · ahead in {{ "%.0f%%"|format(test.consistency * 100) }} of periods</p>
+                </article>
+                {% endfor %}
+            </div>
+            {% endif %}
             {% else %}
             <div class="readiness-issue issue-warning" role="note">
                 <h3>Not enough history for trend tests</h3>
