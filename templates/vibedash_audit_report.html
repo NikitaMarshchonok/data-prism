@@ -182,6 +182,22 @@
             </tbody>
         </table>
         {% endif %}
+        {% if report.segments.shown %}
+        <h3>Segments compared over time</h3>
+        {% if report.segments.plain %}<p>{{ report.segments.plain.headline }} {{ report.segments.plain.meaning }}</p>{% endif %}
+        {% for item in report.segments.tests %}
+        <div class="card">
+            {% if item.plain %}
+            <h3>{{ item.plain.headline }}</h3>
+            <p>{{ item.plain.meaning }}</p>
+            {% if item.significant %}<div class="action"><small>Next step</small>{{ item.plain.action }}</div>{% endif %}
+            {% else %}
+            <h3>{{ item.title }}</h3>
+            {% endif %}
+            {{ technical([item.title ~ " · " ~ item.method, item.detail]) }}
+        </div>
+        {% endfor %}
+        {% endif %}
     </section>
 
     <section class="appendix">
@@ -190,6 +206,7 @@
         {% if report.statistics.correction %}<p>Multiple-comparison correction: {{ report.statistics.correction }}{% if report.statistics.alpha is not none %} at {{ (report.statistics.alpha * 100) | round(1) }}%{% endif %}. Hypotheses evaluated: {{ report.statistics.candidate_test_count }}.</p>{% endif %}
         {% if report.statistics.methodology_notes %}<ul>{% for note in report.statistics.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
         {% if report.drivers.methodology_notes %}<p>What changed recently:</p><ul>{% for note in report.drivers.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
+        {% if report.segments.shown and report.segments.methodology_notes %}<p>Segments compared over time:</p><ul>{% for note in report.segments.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
         {% if report.temporal.methodology_notes %}<p>Trends over time ({{ report.temporal.correction or "no correction stated" }} across measures):</p><ul>{% for note in report.temporal.methodology_notes %}<li>{{ note }}</li>{% endfor %}</ul>{% endif %}
         {% if report.summary.guardrail %}<p class="guardrail">{{ report.summary.guardrail }}</p>{% endif %}
         <h3 class="audit-heading">Audit trail</h3>

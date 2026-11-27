@@ -410,7 +410,12 @@ def _explain_rate_comparison(test: Mapping[str, Any], significant: bool) -> Opti
     return sentence + _small_effect_note(test)
 
 
-def explain_statistics(validation: Mapping[str, Any], *, temporal_checked: bool = False) -> Optional[Explanation]:
+def explain_statistics(
+    validation: Mapping[str, Any],
+    *,
+    temporal_checked: bool = False,
+    segments_checked: bool = False,
+) -> Optional[Explanation]:
     """Explain why statistics were run or withheld, or ``None`` if unknown.
 
     ``temporal_checked`` states that time-aware trend tests did run, so the
@@ -420,6 +425,14 @@ def explain_statistics(validation: Mapping[str, Any], *, temporal_checked: bool 
         return None
     status = validation.get("status")
     if status == "inference_withheld" and validation.get("reason") == "temporal_design_unverified":
+        if segments_checked:
+            return _explanation(
+                "Segments were compared with a method built for data over time; other links were not tested.",
+                "Values on neighbouring days or weeks depend on each other, and standard tests then report far more "
+                "“discoveries” than are real. Segment differences below compare groups within the same period and "
+                "allow for that dependence. Links between two numeric columns are still not tested.",
+                "Treat the segment gaps below as reliable signals of where to look, not proof of cause.",
+            )
         if temporal_checked:
             return _explanation(
                 "Links between columns were not tested, because the data runs over time.",
@@ -872,6 +885,63 @@ def explain_drivers(analysis: Mapping[str, Any]) -> Optional[Explanation]:
 
 
 # --------------------------------------------------------------------------
+# Segments compared over time
+# --------------------------------------------------------------------------
+
+def explain_segment_gap(test: Mapping[str, Any]) -> Optional[Explanation]:
+    """Explain one time-aware segment comparison, or ``None`` if incomplete."""
+    if not isinstance(test, Mapping):
+        return None
+    measure, segment = _name(test.get("measure")), _name(test.get("segment_column"))
+    top, bottom = _name(test.get("highest_segment")), _name(test.get("lowest_segment"))
+    unit = test.get("unit")
+    grain = _GRAIN_WORDS.get(test.get("grain"))
+    periods = _count(test.get("periods_compared"))
+    high, low = _format_value(test.get("highest_average"), unit), _format_value(test.get("lowest_average"), unit)
+    if not all((measure, segment, top, bottom, grain, high, low)) or periods is None:
+        return None
+    rate = test.get("kind") == "rate"
+    level = _name(test.get("positive_level")) if rate else None
+    subject = f"The share of {measure} = {level}" if rate and level else measure
+    span = f"{periods} {grain[1] if periods != 1 else grain[0]}"
+    if test.get("significant") is not True:
+        return _explanation(
+            f"{subject} does not differ reliably between {segment} groups.",
+            f"We compared the {segment} groups side by side in {span}. The gaps we saw are within what changes "
+            "from period to period would produce by chance.",
+            f"Do not plan around a difference between {segment} groups for {measure}.",
+        )
+    consistency = _number(test.get("consistency"))
+    share = f", and it was ahead in {_percent(consistency)} of them" if consistency is not None else ""
+    small = test.get("magnitude") in {"negligible", "small"}
+    return _explanation(
+        f"{subject} is reliably higher for {top} ({high} on average) than for {bottom} ({low}).",
+        f"We compared the {segment} groups within the same {grain[0]} over {span}{share}. Comparing within each "
+        f"{grain[0]} removes shared ups and downs such as seasons and campaigns, and the test allows for one "
+        f"{grain[0]} depending on the previous one."
+        + (" The gap is real but small." if small else ""),
+        f"Find out what {top} does differently, such as its customers, prices or product mix, before acting on it.",
+    )
+
+
+def explain_segments(analysis: Mapping[str, Any]) -> Optional[Explanation]:
+    """Summarize the time-aware segment comparisons, or ``None`` when they did not run."""
+    if not isinstance(analysis, Mapping) or analysis.get("status") != "ok":
+        return None
+    tests = [test for test in analysis.get("tests") or [] if isinstance(test, Mapping)]
+    if not tests:
+        return None
+    reliable = sum(1 for test in tests if test.get("significant") is True)
+    found = "none differ reliably" if reliable == 0 else "1 differs reliably" if reliable == 1 else f"{reliable} differ reliably"
+    return _explanation(
+        f"We compared segments over time in {len(tests)} measure-and-segment pairs; {found}.",
+        "Each segment is compared with the others in the same period, which cancels shared seasons, trends and "
+        "campaigns, and the test allows for neighbouring periods depending on each other.",
+        "Use reliable gaps to decide where to look next; they show where results differ, not why.",
+    )
+
+
+# --------------------------------------------------------------------------
 # Decision-brief priorities
 # --------------------------------------------------------------------------
 
@@ -961,6 +1031,7 @@ KNOWN_PRIORITY_CATEGORIES = frozenset(
         "level-shift",
         "last-period-alert",
         "change-driver",
+        "segment-gap",
         "anomaly-review",
         "data-readiness",
     }
@@ -973,6 +1044,12 @@ def temporal_checked(dashboard: Mapping[str, Any]) -> bool:
     return isinstance(temporal, Mapping) and temporal.get("status") == "ok" and bool(temporal.get("series"))
 
 
+def segments_checked(dashboard: Mapping[str, Any]) -> bool:
+    """True when time-aware segment comparisons ran on at least one pair."""
+    segments = dashboard.get("segment_analysis") if isinstance(dashboard, Mapping) else None
+    return isinstance(segments, Mapping) and segments.get("status") == "ok" and bool(segments.get("tests"))
+
+
 def explain_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) -> Optional[Explanation]:
     """Explain one decision-brief priority, or ``None`` if it cannot be matched."""
     if not isinstance(priority, Mapping) or not isinstance(dashboard, Mapping):
@@ -980,7 +1057,11 @@ def explain_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) 
     category = priority.get("category")
     if category == "assumption-review":
         validation = dashboard.get("statistical_validation")
-        return explain_statistics(validation, temporal_checked=temporal_checked(dashboard)) if isinstance(validation, Mapping) else None
+        return explain_statistics(
+            validation,
+            temporal_checked=temporal_checked(dashboard),
+            segments_checked=segments_checked(dashboard),
+        ) if isinstance(validation, Mapping) else None
     if category == "validated-signal":
         return _signal_priority(priority, dashboard)
     if category == "validated-trend":
@@ -994,6 +1075,14 @@ def explain_priority(priority: Mapping[str, Any], dashboard: Mapping[str, Any]) 
         for measure in (drivers.get("measures") or []) if isinstance(drivers, Mapping) else ():
             if isinstance(measure, Mapping) and isinstance(columns, Sequence) and [measure.get("column")] == list(columns):
                 return explain_driver(measure)
+        return None
+    if category == "segment-gap":
+        segments = dashboard.get("segment_analysis")
+        columns = priority.get("columns")
+        for test in (segments.get("tests") or []) if isinstance(segments, Mapping) else ():
+            if (isinstance(test, Mapping) and isinstance(columns, Sequence)
+                    and [test.get("measure"), test.get("segment_column")] == list(columns)):
+                return explain_segment_gap(test)
         return None
     if category == "last-period-alert":
         item = _temporal_item(priority, dashboard)

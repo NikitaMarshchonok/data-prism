@@ -25,7 +25,10 @@ from .plain_language import (
     explain_temporal,
     explain_temporal_patterns,
     explain_temporal_series,
+    explain_segment_gap,
+    explain_segments,
     explain_test,
+    segments_checked,
     temporal_checked,
 )
 
@@ -40,6 +43,7 @@ MAX_TESTS = 8
 MAX_EVIDENCE_ITEMS = 4
 MAX_NOTES = 8
 MAX_TREND_SERIES = 5
+MAX_SEGMENT_TESTS = 4
 
 _READINESS_VERDICTS = {
     "ready": ("good", "Your data is ready for analysis."),
@@ -386,7 +390,41 @@ def _number_text(value: Any, *, signed: bool = False) -> str:
     return f"+{text}" if signed and value > 0 else text
 
 
-def _statistics_section(validation: Mapping[str, Any], *, temporal_ran: bool = False) -> dict[str, Any]:
+def _segment_section(segments: Mapping[str, Any]) -> dict[str, Any]:
+    tests = []
+    for test in _sequence(segments.get("tests")):
+        test = _mapping(test)
+        interval = _sequence(test.get("gap_ci"))
+        tests.append({
+            "plain": explain_segment_gap(test),
+            "significant": test.get("significant") is True,
+            "title": clean_text(f"{test.get('measure')} by {test.get('segment_column')}", maximum=MAX_LABEL_LENGTH * 2),
+            "method": clean_text(test.get("method"), maximum=MAX_LABEL_LENGTH),
+            "detail": clean_text(
+                f"{test.get('periods_compared')} {test.get('grain')}s compared side by side in "
+                f"{test.get('batches')} batches; gap {_number_text(test.get('gap'))}, simultaneous 95% CI "
+                f"[{_number_text(interval[0] if len(interval) == 2 else None)}, "
+                f"{_number_text(interval[1] if len(interval) == 2 else None)}]; adjusted p "
+                f"{_format_p_value(test.get('adjusted_p_value'))}."
+            ),
+        })
+    # Reliable gaps first, in engine order (largest practical gaps lead).
+    tests.sort(key=lambda entry: not entry["significant"])
+    return {
+        "shown": clean_text(segments.get("status"), maximum=40) == "ok" and bool(tests),
+        "plain": explain_segments(segments),
+        "summary": clean_text(segments.get("summary")),
+        "tests": tests[:MAX_SEGMENT_TESTS],
+        "methodology_notes": _text_list(segments.get("methodology_notes"), MAX_NOTES),
+    }
+
+
+def _statistics_section(
+    validation: Mapping[str, Any],
+    *,
+    temporal_ran: bool = False,
+    segments_ran: bool = False,
+) -> dict[str, Any]:
     tests = []
     for test in _sequence(validation.get("tests")):
         test = _mapping(test)
@@ -418,7 +456,7 @@ def _statistics_section(validation: Mapping[str, Any], *, temporal_ran: bool = F
         )
     status = clean_text(validation.get("status"), maximum=40) or "unavailable"
     return {
-        "plain": explain_statistics(validation, temporal_checked=temporal_ran),
+        "plain": explain_statistics(validation, temporal_checked=temporal_ran, segments_checked=segments_ran),
         "status": status,
         "withheld": status != "ok",
         "summary": clean_text(validation.get("summary")),
@@ -488,8 +526,11 @@ def build_audit_report_context(
         "temporal": _temporal_section(_mapping(dashboard.get("temporal_analysis"))),
         "drivers": _driver_section(_mapping(dashboard.get("driver_analysis"))),
         "statistics": _statistics_section(
-            _mapping(dashboard.get("statistical_validation")), temporal_ran=temporal_checked(dashboard)
+            _mapping(dashboard.get("statistical_validation")),
+            temporal_ran=temporal_checked(dashboard),
+            segments_ran=segments_checked(dashboard),
         ),
+        "segments": _segment_section(_mapping(dashboard.get("segment_analysis"))),
         "audit": {
             "analysis_contract": clean_text(manifest.get("analysis_contract"), maximum=80),
             "engine_version": clean_text(manifest.get("engine_version"), maximum=128),
