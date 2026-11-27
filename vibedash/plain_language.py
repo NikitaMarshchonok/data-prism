@@ -364,7 +364,50 @@ def explain_test(test: Mapping[str, Any]) -> Optional[str]:
             return f"No reliable difference in {value} between {a} and {b}."
         higher, lower = (a, b) if mean_a > mean_b else (b, a)
         return f"{value} is reliably higher for {higher} than for {lower} (by {group})."
+    if family == "multi-group-comparison":
+        return _explain_multi_group(test, significant)
+    if family == "rate-comparison":
+        return _explain_rate_comparison(test, significant)
     return None
+
+
+KNOWN_TEST_FAMILIES = frozenset({"correlation", "group-comparison", "multi-group-comparison", "rate-comparison"})
+
+
+def _small_effect_note(test: Mapping[str, Any]) -> str:
+    effect = test.get("effect_size") if isinstance(test.get("effect_size"), Mapping) else {}
+    if effect.get("magnitude") in {"negligible", "small"}:
+        return " The difference is real but small; check whether it matters for the business."
+    return ""
+
+
+def _explain_multi_group(test: Mapping[str, Any], significant: bool) -> Optional[str]:
+    estimates = test.get("estimates") if isinstance(test.get("estimates"), Mapping) else {}
+    value, group = _name(estimates.get("value_column")), _name(estimates.get("group_column"))
+    top, bottom = _name(estimates.get("highest_group")), _name(estimates.get("lowest_group"))
+    unit = estimates.get("unit")
+    high = _format_value(estimates.get("highest_mean"), unit)
+    low = _format_value(estimates.get("lowest_mean"), unit)
+    if not all((value, group, top, bottom, high, low)):
+        return None
+    if not significant:
+        return f"No reliable difference in {value} between the {group} groups."
+    sentence = f"{value} differs between {group} groups: highest for {top} (average {high}), lowest for {bottom} (average {low})."
+    return sentence + _small_effect_note(test)
+
+
+def _explain_rate_comparison(test: Mapping[str, Any], significant: bool) -> Optional[str]:
+    estimates = test.get("estimates") if isinstance(test.get("estimates"), Mapping) else {}
+    outcome, segment = _name(estimates.get("outcome_column")), _name(estimates.get("segment_column"))
+    level = _name(estimates.get("positive_level"))
+    top, bottom = _name(estimates.get("highest_segment")), _name(estimates.get("lowest_segment"))
+    high, low = _percent(estimates.get("highest_rate")), _percent(estimates.get("lowest_rate"))
+    if not all((outcome, segment, level, top, bottom, high, low)):
+        return None
+    if not significant:
+        return f"The share of {outcome} = {level} is about the same across {segment}; no reliable difference."
+    sentence = f"The share of {outcome} = {level} depends on {segment}: {high} for {top} versus {low} for {bottom}."
+    return sentence + _small_effect_note(test)
 
 
 def explain_statistics(validation: Mapping[str, Any], *, temporal_checked: bool = False) -> Optional[Explanation]:

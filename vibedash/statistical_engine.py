@@ -9,6 +9,13 @@ import pandas as pd
 from src.column_semantics import columns_for_role, profile_dataframe_columns
 from src.analysis_context import is_relevant
 from src.structural_dependencies import additive_pair_dependency, detect_additive_dependencies
+from src.semantic_contract import ALLOWED_UNITS, infer_column_unit
+from src.group_statistics import (
+    compare_group_means,
+    newcombe_difference,
+    rate_difference_test,
+    wilson_interval,
+)
 from src.statistical_primitives import (
     benjamini_hochberg as _benjamini_hochberg,
     pearson_summary,
@@ -21,6 +28,10 @@ MIN_PAIRED_SAMPLE = 8
 MIN_GROUP_SAMPLE = 8
 MAX_NUMERIC_COLUMNS = 8
 MAX_CATEGORICAL_COLUMNS = 5
+MAX_GROUP_LEVELS = 12
+MAX_REPORTED_PAIRS = 6
+MAGNITUDE_RANK = {"large": 0, "medium": 1, "small": 2, "negligible": 3}
+_POSITIVE_LABELS = frozenset({"yes", "y", "true", "t", "1", "1.0"})
 
 
 @dataclass
@@ -54,7 +65,10 @@ class StatisticalValidationEngine:
 
     Numeric pairs use Pearson correlation with a Fisher-z confidence interval.
     Numeric outcomes split by a binary categorical column use Welch's t-test,
-    a confidence interval for the mean difference and Hedges' g.
+    a confidence interval for the mean difference and Hedges' g.  Columns with
+    three to twelve adequately sized levels use Welch's ANOVA with
+    Holm-adjusted pairwise Welch comparisons.  A two-level outcome compared
+    across segments is tested as a difference in rates.
     """
 
     def __init__(
@@ -121,10 +135,14 @@ class StatisticalValidationEngine:
                 ],
             }
 
-        candidates = self._correlation_candidates() + self._group_candidates()
+        candidates = (
+            self._correlation_candidates()
+            + self._group_candidates()
+            + self._rate_candidates()
+        )
         if not candidates:
             return self._empty_report(
-                "No eligible hypotheses: more numeric variation or adequately sized binary groups are required."
+                "No eligible hypotheses: more numeric variation or adequately sized groups are required."
             )
 
         adjusted = _benjamini_hochberg([item.raw_p_value for item in candidates])
@@ -141,19 +159,28 @@ class StatisticalValidationEngine:
                     f"Observed arithmetic relationship: {dependency['equation']}. "
                     "The total/component correlation is not an independent discovery."
                 ))
+            if not result.significant and "pairwise" in result.estimates:
+                result.estimates["pairwise"] = []
             result.interpretation = self._interpret(result)
 
+        # Significant results lead, larger practical effects first. Ordering
+        # by tiny adjusted p-values alone would rank a negligible difference in
+        # a large file above a large one that is merely "very" significant.
+        # Magnitude classes are comparable across families; raw effect values
+        # are not (r, g, omega squared, V), so they only break remaining ties.
         candidates.sort(
             key=lambda item: (
                 not is_relevant({"columns": item.columns}, self.analysis_context),
                 bool(item.structural_dependency),
+                not item.significant,
+                MAGNITUDE_RANK.get(item.effect_size.get("magnitude"), len(MAGNITUDE_RANK)),
                 item.adjusted_p_value if item.adjusted_p_value is not None else 1.0,
                 -abs(float(item.effect_size["value"])),
                 item.test_id,
             )
         )
         significant_count = sum(bool(item.significant) for item in candidates)
-        displayed = candidates[:max_results]
+        displayed = _diversified(candidates, max_results)
         return {
             "status": "ok",
             "alpha": self.alpha,
@@ -171,8 +198,10 @@ class StatisticalValidationEngine:
                 "P-values are adjusted across every eligible hypothesis, not only displayed results.",
                 (
                     f"The automatic scan is bounded to the first {MAX_NUMERIC_COLUMNS} eligible numeric "
-                    f"and {MAX_CATEGORICAL_COLUMNS} categorical columns; group tests require exactly two levels."
+                    f"and {MAX_CATEGORICAL_COLUMNS} categorical columns; group comparisons use levels with at "
+                    f"least {MIN_GROUP_SAMPLE} rows and at most {MAX_GROUP_LEVELS} such levels."
                 ),
+                "Three or more groups use Welch's ANOVA (bootstrap-t p-value up to 5,000 rows) with family-wise adjusted pairwise differences and simultaneous intervals, reported only when the overall test survives FDR; a two-level outcome across segments is a rate comparison (chi-square when every expected count is at least 5, otherwise Fisher's exact or a seeded Monte Carlo exact test).",
                 "Identifiers and temporal fields are excluded; numeric category codes are tested as categories, not measures.",
                 "Confidence intervals quantify uncertainty; effect sizes quantify practical magnitude.",
                 "Statistical association alone does not establish causality or business importance.",
@@ -301,30 +330,263 @@ class StatisticalValidationEngine:
         categorical_columns = self._categorical_columns()[:MAX_CATEGORICAL_COLUMNS]
         results = []
         for category in categorical_columns:
-            levels = list(self.df[category].dropna().value_counts().index)
-            if len(levels) != 2:
+            counts = self.df[category].dropna().value_counts()
+            levels = list(counts.index)
+            if len(levels) == 2:
+                left_level, right_level = levels
+                for numeric in numeric_columns:
+                    left = _finite_numeric(
+                        self.df.loc[self.df[category] == left_level, numeric]
+                    )
+                    right = _finite_numeric(
+                        self.df.loc[self.df[category] == right_level, numeric]
+                    )
+                    if len(left) < MIN_GROUP_SAMPLE or len(right) < MIN_GROUP_SAMPLE:
+                        continue
+                    result = self._welch_result(
+                        numeric,
+                        category,
+                        left_level,
+                        right_level,
+                        left,
+                        right,
+                    )
+                    if result is not None:
+                        results.append(result)
                 continue
-            left_level, right_level = levels
+            sized = [level for level in levels if int(counts[level]) >= MIN_GROUP_SAMPLE]
+            if len(sized) < 3 or len(sized) > MAX_GROUP_LEVELS:
+                continue
+            excluded_rows = int(counts.sum() - counts[sized].sum())
             for numeric in numeric_columns:
-                left = _finite_numeric(
-                    self.df.loc[self.df[category] == left_level, numeric]
-                )
-                right = _finite_numeric(
-                    self.df.loc[self.df[category] == right_level, numeric]
-                )
-                if len(left) < MIN_GROUP_SAMPLE or len(right) < MIN_GROUP_SAMPLE:
+                values = _finite_numeric(self.df[numeric])
+                labels = self.df.loc[values.index, category]
+                groups = [
+                    (level, values[labels == level].to_numpy(dtype=float))
+                    for level in sized
+                ]
+                groups = [item for item in groups if len(item[1]) >= MIN_GROUP_SAMPLE]
+                if len(groups) < 3:
                     continue
-                result = self._welch_result(
-                    numeric,
-                    category,
-                    left_level,
-                    right_level,
-                    left,
-                    right,
-                )
+                result = self._anova_result(numeric, category, groups, excluded_rows)
                 if result is not None:
                     results.append(result)
         return results
+
+    def _anova_result(
+        self,
+        numeric: Any,
+        category: Any,
+        groups: List[Any],
+        excluded_rows: int,
+    ) -> Optional[StatisticalTestResult]:
+        names = [str(level) for level, _ in groups]
+        arrays = [values for _, values in groups]
+        comparison = compare_group_means(arrays)
+        if comparison is None:
+            return None
+        summary, pairs = comparison.anova, comparison.pairs
+        order = sorted(range(len(names)), key=lambda index: (-summary.means[index], names[index]))
+        top, bottom = order[0], order[-1]
+        extreme = next(
+            pair for pair in pairs if {pair.left, pair.right} == {top, bottom}
+        )
+        sign = 1.0 if extreme.left == top else -1.0
+        lower, upper = sorted(
+            (sign * extreme.confidence_interval[0], sign * extreme.confidence_interval[1])
+        )
+        pairwise = []
+        for pair in sorted(pairs, key=lambda item: (item.adjusted_p_value, -abs(item.difference))):
+            if pair.adjusted_p_value > self.alpha:
+                continue
+            low_ci, high_ci = pair.confidence_interval
+            if pair.difference > 0:
+                high, low = pair.left, pair.right
+            else:
+                high, low = pair.right, pair.left
+                low_ci, high_ci = -high_ci, -low_ci
+            pairwise.append({
+                "higher": names[high],
+                "lower": names[low],
+                "difference": round(abs(pair.difference), 6),
+                "adjusted_p_value": pair.adjusted_p_value,
+                "ci_lower": round(low_ci, 6),
+                "ci_upper": round(high_ci, 6),
+            })
+        limitations = [
+            "Welch's ANOVA compares group means without assuming equal variances; it assumes independent observations.",
+            "Means are sensitive to outliers; a few very large values can drive a group difference.",
+            "Pairwise differences are family-wise adjusted, and their intervals hold simultaneously across all pairs.",
+            "Association with a segment does not establish that the segment causes the difference.",
+        ]
+        if excluded_rows:
+            limitations.append(
+                f"{excluded_rows} rows in levels with fewer than {MIN_GROUP_SAMPLE} observations were not compared."
+            )
+        return StatisticalTestResult(
+            test_id=f"welch-anova-{numeric}-{category}",
+            family="multi-group-comparison",
+            title=f"Group differences: {numeric} across {category}",
+            method=comparison.method,
+            null_hypothesis=f"Mean {numeric} is equal in every {category} group.",
+            columns=[str(numeric), str(category)],
+            sample_size=int(sum(summary.sizes)),
+            statistic=round(summary.statistic, 6),
+            raw_p_value=comparison.p_value,
+            adjusted_p_value=None,
+            significant=None,
+            effect_size={
+                "name": "omega squared",
+                "value": round(summary.omega_squared, 6),
+                "magnitude": _variance_explained_magnitude(summary.omega_squared),
+            },
+            confidence_interval={
+                "level": 0.95,
+                "lower": round(lower, 6),
+                "upper": round(upper, 6),
+                "parameter": f"Mean difference ({names[top]} - {names[bottom]}), simultaneous",
+            },
+            estimates={
+                "group_column": str(category),
+                "value_column": str(numeric),
+                "unit": self._unit(numeric),
+                "group_count": len(names),
+                "groups": [
+                    {"group": names[index], "size": summary.sizes[index], "mean": round(summary.means[index], 6)}
+                    for index in order
+                ],
+                "highest_group": names[top],
+                "lowest_group": names[bottom],
+                "highest_mean": round(summary.means[top], 6),
+                "lowest_mean": round(summary.means[bottom], 6),
+                "mean_difference": round(summary.means[top] - summary.means[bottom], 6),
+                "df_between": round(summary.df_between, 3),
+                "df_within": round(summary.df_within, 3),
+                "pairs_tested": len(pairs),
+                "pairwise": pairwise[:MAX_REPORTED_PAIRS],
+                "excluded_rows": excluded_rows,
+            },
+            limitations=limitations,
+        )
+
+    def _unit(self, column: Any) -> str:
+        profile = self.column_profiles.get(column) or {}
+        confirmed = profile.get("unit")
+        if confirmed in ALLOWED_UNITS and confirmed != "none":
+            return str(confirmed)
+        inferred = infer_column_unit(self.df, column, profile)
+        return inferred if inferred != "none" else "number"
+
+    def _rate_candidates(self) -> List[StatisticalTestResult]:
+        categorical_columns = self._categorical_columns()[:MAX_CATEGORICAL_COLUMNS]
+        binary = {}
+        for column in categorical_columns:
+            counts = self.df[column].dropna().value_counts()
+            if len(counts) == 2 and int(counts.min()) >= MIN_GROUP_SAMPLE:
+                binary[column] = counts
+        focus = set(self.analysis_context.get("focus_columns") or [])
+        results = []
+        seen = set()
+        for outcome, outcome_counts in binary.items():
+            for segment in categorical_columns:
+                if segment == outcome:
+                    continue
+                pair = frozenset((str(outcome), str(segment)))
+                if segment in binary:
+                    if pair in seen:
+                        continue
+                    if _outcome_preference(segment, binary[segment], focus) < _outcome_preference(
+                        outcome, outcome_counts, focus
+                    ):
+                        continue
+                seen.add(pair)
+                result = self._rate_result(outcome, outcome_counts, segment)
+                if result is not None:
+                    results.append(result)
+        return results
+
+    def _rate_result(self, outcome: Any, outcome_counts: pd.Series, segment: Any) -> Optional[StatisticalTestResult]:
+        frame = self.df[[outcome, segment]].dropna()
+        segment_counts = frame[segment].value_counts()
+        sized = [level for level in segment_counts.index if int(segment_counts[level]) >= MIN_GROUP_SAMPLE]
+        if len(sized) < 2 or len(sized) > MAX_GROUP_LEVELS:
+            return None
+        positive = _positive_level(outcome_counts)
+        frame = frame[frame[segment].isin(sized)]
+        events = (frame[outcome] == positive).groupby(frame[segment]).sum()
+        sizes = frame[segment].value_counts()
+        names = [str(level) for level in sized]
+        successes = [int(events.get(level, 0)) for level in sized]
+        totals = [int(sizes[level]) for level in sized]
+        test = rate_difference_test(successes, totals)
+        if test is None:
+            return None
+        rates = [x / n for x, n in zip(successes, totals)]
+        order = sorted(range(len(names)), key=lambda index: (-rates[index], names[index]))
+        top, bottom = order[0], order[-1]
+        pair_count = len(names) * (len(names) - 1) // 2
+        level = 1.0 - (1.0 - 0.95) / pair_count
+        lower, upper = newcombe_difference(successes[top], totals[top], successes[bottom], totals[bottom], level)
+        segments = []
+        for index in order:
+            low, high = wilson_interval(successes[index], totals[index])
+            segments.append({
+                "segment": names[index],
+                "size": totals[index],
+                "events": successes[index],
+                "rate": round(rates[index], 6),
+                "ci_lower": round(low, 6),
+                "ci_upper": round(high, 6),
+            })
+        excluded_rows = int(segment_counts.sum() - sum(totals))
+        limitations = [
+            "Rows are assumed to be independent observations of the outcome.",
+            "Rate differences between segments are associations; other differences between the segments may explain them.",
+            f"The interval for the highest-minus-lowest rate is simultaneous across all {pair_count} segment pairs.",
+        ]
+        if excluded_rows:
+            limitations.append(
+                f"{excluded_rows} rows in segments with fewer than {MIN_GROUP_SAMPLE} observations were not compared."
+            )
+        return StatisticalTestResult(
+            test_id=f"rate-{outcome}-{segment}",
+            family="rate-comparison",
+            title=f"Rate differences: {outcome} = {positive} across {segment}",
+            method=test.method,
+            null_hypothesis=f"The share of {outcome} = {positive} is equal in every {segment} group.",
+            columns=[str(outcome), str(segment)],
+            sample_size=int(sum(totals)),
+            statistic=round(test.statistic, 6),
+            raw_p_value=test.p_value,
+            adjusted_p_value=None,
+            significant=None,
+            effect_size={
+                "name": "Cramer's V (bias-corrected)",
+                "value": round(test.cramers_v, 6),
+                "magnitude": _correlation_magnitude(test.cramers_v),
+            },
+            confidence_interval={
+                "level": 0.95,
+                "lower": round(lower, 6),
+                "upper": round(upper, 6),
+                "parameter": f"Rate difference ({names[top]} - {names[bottom]}), simultaneous",
+            },
+            estimates={
+                "outcome_column": str(outcome),
+                "positive_level": str(positive),
+                "segment_column": str(segment),
+                "overall_rate": round(sum(successes) / sum(totals), 6),
+                "segments": segments,
+                "highest_segment": names[top],
+                "lowest_segment": names[bottom],
+                "highest_rate": round(rates[top], 6),
+                "lowest_rate": round(rates[bottom], 6),
+                "rate_difference": round(rates[top] - rates[bottom], 6),
+                "min_expected_count": round(test.min_expected_count, 3),
+                "excluded_rows": excluded_rows,
+            },
+            limitations=limitations,
+        )
 
     def _welch_result(
         self,
@@ -408,6 +670,40 @@ class StatisticalValidationEngine:
             )
 
         estimates = result.estimates
+        if result.family == "multi-group-comparison":
+            if result.significant:
+                pairs = estimates.get("pairwise") or []
+                detail = (
+                    f" {len(pairs)} of {estimates['pairs_tested']} pairs differ after family-wise adjustment."
+                    if pairs else " No single pair is distinguishable after family-wise adjustment."
+                )
+                return (
+                    f"Mean {estimates['value_column']} differs across {estimates['group_column']} after FDR correction "
+                    f"(adjusted p={adjusted}, {effect['name']}={effect['value']:.3f}). Highest: "
+                    f"{estimates['highest_group']} ({estimates['highest_mean']:.4g}); lowest: "
+                    f"{estimates['lowest_group']} ({estimates['lowest_mean']:.4g}); simultaneous 95% CI for the gap "
+                    f"[{interval['lower']:.4g}, {interval['upper']:.4g}].{detail}"
+                )
+            return (
+                f"The scan did not find sufficient evidence that mean {estimates['value_column']} differs across "
+                f"{estimates['group_column']} after FDR correction (adjusted p={adjusted}). "
+                "This does not prove that the groups are equivalent."
+            )
+        if result.family == "rate-comparison":
+            label = f"{estimates['outcome_column']} = {estimates['positive_level']}"
+            if result.significant:
+                return (
+                    f"The share of {label} differs across {estimates['segment_column']} after FDR correction "
+                    f"(adjusted p={adjusted}, {effect['name']}={effect['value']:.3f}). Highest: "
+                    f"{estimates['highest_segment']} ({estimates['highest_rate']:.1%}); lowest: "
+                    f"{estimates['lowest_segment']} ({estimates['lowest_rate']:.1%}); simultaneous 95% CI for the gap "
+                    f"[{interval['lower']:.1%}, {interval['upper']:.1%}]."
+                )
+            return (
+                f"The scan did not find sufficient evidence that the share of {label} differs across "
+                f"{estimates['segment_column']} after FDR correction (adjusted p={adjusted}). "
+                "This does not prove that the rates are equal."
+            )
         if result.significant:
             return (
                 f"The mean difference remains statistically detectable after FDR correction "
@@ -469,13 +765,64 @@ class StatisticalValidationEngine:
             "methodology_notes": [
                 f"Correlation requires at least {MIN_PAIRED_SAMPLE} paired observations.",
                 f"Group comparison requires at least {MIN_GROUP_SAMPLE} observations per group.",
-                "Automatic group comparison currently supports categorical columns with exactly two levels.",
+                f"Group comparison uses categorical columns with 2 to {MAX_GROUP_LEVELS} levels of at least {MIN_GROUP_SAMPLE} rows.",
             ],
         }
 
 
 def _finite_numeric(values: pd.Series) -> pd.Series:
     return pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+
+
+def _diversified(ranked: List[StatisticalTestResult], limit: int) -> List[StatisticalTestResult]:
+    """Keep the ranking, but take one result per family in turn.
+
+    Otherwise a file with many strongly correlated measures fills every slot
+    with correlations and hides the segment comparisons a reader asks about.
+    Significant results still come before inconclusive ones.
+    """
+    selected: List[StatisticalTestResult] = []
+    for tier in (
+        [item for item in ranked if item.significant],
+        [item for item in ranked if not item.significant],
+    ):
+        queues: Dict[str, List[StatisticalTestResult]] = {}
+        for item in tier:
+            queues.setdefault(item.family, []).append(item)
+        while queues and len(selected) < limit:
+            for family in list(queues):
+                if len(selected) >= limit:
+                    break
+                selected.append(queues[family].pop(0))
+                if not queues[family]:
+                    del queues[family]
+    return selected
+
+
+def _positive_level(counts: pd.Series) -> Any:
+    """The level counted as the event: an explicit yes/true/1, else the rarer one."""
+    levels = list(counts.index)
+    explicit = [level for level in levels if str(level).strip().lower() in _POSITIVE_LABELS]
+    if len(explicit) == 1:
+        return explicit[0]
+    return sorted(levels, key=lambda level: (int(counts[level]), str(level)))[0]
+
+
+def _outcome_preference(column: Any, counts: pd.Series, focus: set) -> tuple:
+    """Lower sorts first: the focus column, then an explicit yes/no, then the rarer event."""
+    explicit = any(str(level).strip().lower() in _POSITIVE_LABELS for level in counts.index)
+    return (str(column) not in focus, not explicit, int(counts.min()) / int(counts.sum()), str(column))
+
+
+def _variance_explained_magnitude(value: float) -> str:
+    magnitude = float(value)
+    if magnitude >= 0.14:
+        return "large"
+    if magnitude >= 0.06:
+        return "medium"
+    if magnitude >= 0.01:
+        return "small"
+    return "negligible"
 
 
 def _correlation_magnitude(value: float) -> str:

@@ -12,6 +12,7 @@ from vibedash.plain_language import (
     KNOWN_CHECKS,
     KNOWN_INSIGHT_IDS,
     KNOWN_PRIORITY_CATEGORIES,
+    KNOWN_TEST_FAMILIES,
     explain_check,
     explain_insight,
     explain_priority,
@@ -51,7 +52,8 @@ class EngineVocabularyCoverageTests(unittest.TestCase):
 
     def test_every_statistical_family_has_an_explanation(self):
         emitted = set(re.findall(r'family="([a-z-]+)"', self.source("vibedash/statistical_engine.py")))
-        self.assertEqual(emitted, {"correlation", "group-comparison"})
+        self.assertGreaterEqual(len(emitted), 4)
+        self.assertEqual(emitted - KNOWN_TEST_FAMILIES, set())
 
 
 class CheckExplanationTests(unittest.TestCase):
