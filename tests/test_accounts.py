@@ -1857,7 +1857,7 @@ class AccountRouteIntegrationTests(unittest.TestCase):
             AnalysisJobStore(self.job_path).erase_scope_if_idle(scope_id)
             return create_saas_growth_demo()
 
-        with patch('vibedash.routes._load_vibedash_csv', side_effect=validation_that_deletes_account), \
+        with patch('vibedash.routes._load_vibedash_table', side_effect=validation_that_deletes_account), \
              patch('vibedash.routes.DatasetReadinessEngine') as readiness:
             readiness.return_value.assess.return_value = {
                 'analysis_allowed': True,

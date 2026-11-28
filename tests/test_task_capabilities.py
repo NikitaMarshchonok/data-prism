@@ -92,7 +92,7 @@ class TaskCapabilityRouteTests(unittest.TestCase):
     request_data = forecast_fixture.VibeDashForecastRouteTests.request_data
 
     def test_public_catalogue_and_guidance_do_not_load_data_or_queue_work(self):
-        with patch('vibedash.routes._load_vibedash_csv') as load, \
+        with patch('vibedash.routes._load_vibedash_table') as load, \
                 patch('vibedash.routes.analysis_job_dispatcher.submit') as submit:
             with web_app.app.test_client() as client:
                 catalog = client.get('/vibedash/task-capabilities')
@@ -110,7 +110,7 @@ class TaskCapabilityRouteTests(unittest.TestCase):
         self.assertEqual(list(Path(web_app.app.config['UPLOAD_FOLDER']).iterdir()), [])
 
     def test_unsupported_or_conflicting_explicit_request_is_rejected_before_upload(self):
-        with patch('vibedash.routes._load_vibedash_csv') as load, \
+        with patch('vibedash.routes._load_vibedash_table') as load, \
                 patch('vibedash.routes.analysis_job_dispatcher.submit') as submit:
             with web_app.app.test_client() as client:
                 for fields in ({'task_type': 'classification'}, {'task_type': 'period_comparison'},
@@ -151,7 +151,7 @@ class TaskCapabilityRouteTests(unittest.TestCase):
         _, routing = resolve_analysis_task({'task_type': 'daily_forecast'})
         payload = {'task_routing': routing | {'task_type': 'descriptive_analysis'},
                    'analysis_kind': 'daily_forecast', 'forecast_task': {}}
-        with web_app.app.app_context(), patch('vibedash.routes._load_vibedash_csv') as load:
+        with web_app.app.app_context(), patch('vibedash.routes._load_vibedash_table') as load:
             with self.assertRaises(ValueError): routes._build_dashboard_session(payload)
             load.assert_not_called()
 

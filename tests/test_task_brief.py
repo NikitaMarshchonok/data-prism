@@ -115,7 +115,7 @@ class TaskBriefRouteTests(unittest.TestCase):
             return browser['vibedash_decision_csrf_token']
 
     def test_review_is_bounded_csrf_protected_metadata_only_and_does_not_train_store_or_echo(self):
-        with patch('vibedash.routes._load_vibedash_csv') as load, \
+        with patch('vibedash.routes._load_vibedash_table') as load, \
                 patch('vibedash.routes.analysis_job_dispatcher.submit') as submit:
             with web_app.app.test_client() as client:
                 self.assertEqual(client.post('/vibedash/task-brief', json=BRIEF).status_code, 400)
@@ -140,7 +140,7 @@ class TaskBriefRouteTests(unittest.TestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM analysis_jobs').fetchone()[0], 0)
 
     def test_partial_job_brief_is_rejected_before_loading_or_copying_source(self):
-        with patch('vibedash.routes._load_vibedash_csv') as load, \
+        with patch('vibedash.routes._load_vibedash_table') as load, \
                 patch('vibedash.routes.analysis_job_dispatcher.submit') as submit:
             with web_app.app.test_client() as client:
                 data = self.request_data(client, task_observation_unit='One day')

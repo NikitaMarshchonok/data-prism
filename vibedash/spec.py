@@ -5,6 +5,7 @@ Pydantic модели для спецификации визуализации �
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Literal, Mapping, Optional, Union
 import json
+import keyword
 import re
 
 import pandas as pd
@@ -231,6 +232,16 @@ def parse_prompt_to_viz_spec(
 
 def _column_terms(column: str) -> set[str]:
     return _shared_column_terms(column)
+
+
+def _column_reference(column: Any) -> str:
+    """Name a column in the metric DSL; names that are not identifiers need backticks.
+
+    ``sum(Temperatur °C)`` or ``mean(Время на поле, мин)`` are not valid
+    expressions, so such KPIs used to show "Unavailable".
+    """
+    name = str(column)
+    return name if name.isidentifier() and not keyword.iskeyword(name) else f"`{name}`"
 
 
 def _humanize_column(column: str) -> str:
@@ -531,12 +542,12 @@ def _parse_heuristics(
             revenue_label = _humanize_column(revenue)
             metrics.append(Metric(
                 title=f"Total {revenue_label}",
-                expr=f"sum({revenue})",
+                expr=f"sum({_column_reference(revenue)})",
                 fmt="currency",
             ))
             metrics.append(Metric(
                 title=f"Average {revenue_label}",
-                expr=f"mean({revenue})",
+                expr=f"mean({_column_reference(revenue)})",
                 fmt="currency",
             ))
         
@@ -548,7 +559,7 @@ def _parse_heuristics(
         for column in additive_cols[:2]:
             metrics.append(Metric(
                 title=f"Total {_humanize_column(column)}",
-                expr=f"sum({column})",
+                expr=f"sum({_column_reference(column)})",
                 fmt=_metric_format_for_column(column, profiles),
             ))
 
@@ -556,7 +567,7 @@ def _parse_heuristics(
 
         represented_expressions = {metric.expr for metric in metrics}
         for col in metric_columns:
-            expression = f"mean({col})"
+            expression = f"mean({_column_reference(col)})"
             if expression in represented_expressions:
                 continue
             metrics.append(Metric(

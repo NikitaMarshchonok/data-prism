@@ -1,13 +1,13 @@
 """
 VibeDash Flask routes
 """
-import csv
 import io
 import json
 import os
 import re
 import secrets
 import threading
+import unicodedata
 import uuid
 from collections.abc import Mapping
 from datetime import date, datetime, timezone
@@ -27,7 +27,6 @@ try:
         url_for,
     )
     from werkzeug.exceptions import RequestEntityTooLarge
-    from werkzeug.utils import secure_filename
     import pandas as pd
     from src.demo_data import (
         DEMO_DATASET_ID,
@@ -43,6 +42,13 @@ try:
         validate_semantic_contract,
     )
     from src.forecast_artifact import ForecastHistoryError, create_artifact
+    from src.table_reader import (
+        SUPPORTED_ACCEPT,
+        describe_read,
+        is_supported_upload,
+        read_table,
+    )
+    from src.row_selection import select_rows
     from src.forecasting import validate_forecast_date
     from .spec import create_saas_demo_viz_spec, parse_prompt_to_viz_spec
     from .generator_bridge import generate_dashboard_data as bridge_generate_dashboard_data
@@ -163,9 +169,15 @@ except ImportError:
 
 if vibedash_bp:
     analysis_job_dispatcher = AnalysisJobDispatcher(max_workers=1)
-    _CSV_HEADER_LOCK = threading.Lock()
     _ACCOUNT_STORE_INIT_LOCK = threading.Lock()
     _UNSET_SCOPE = object()
+    UNSUPPORTED_UPLOAD_MESSAGE = (
+        'Upload a table as CSV, TSV, TXT, Excel (.xlsx, .xlsm, .xls) or Parquet.'
+    )
+    UNREADABLE_UPLOAD_MESSAGE = (
+        'The file could not be read as a table. Check that it has one header row '
+        'and is not password-protected.'
+    )
     _ACCOUNT_SESSION_KEY = 'vibedash_account_id'
     _ACCOUNT_CREDENTIAL_SESSION_KEY = 'vibedash_account_credential'
     _VIBEDASH_IDENTITY_SESSION_KEYS = (
@@ -547,32 +559,29 @@ if vibedash_bp:
         return response
 
 
-    def _load_vibedash_csv(source, *, nrows=None, max_columns=None):
-        last_error = None
-        for encoding in ('utf-8', 'latin-1', 'cp1252'):
-            try:
-                if hasattr(source, 'seek'):
-                    source.seek(0)
-                if max_columns is not None:
-                    header = _read_original_csv_header(source, encoding)
-                    if len(header) > max_columns:
-                        raise ValueError('The CSV exceeds the column limit.')
-                read_options = {'encoding': encoding}
-                if nrows is not None:
-                    read_options['nrows'] = nrows
-                dataframe = pd.read_csv(source, **read_options)
-                header = _read_original_csv_header(source, encoding)
-                normalized = [str(column).strip() for column in header]
-                if len(normalized) == len(dataframe.columns) and (
-                    len(normalized) != len(set(normalized))
-                ):
-                    dataframe.columns = normalized
-                return dataframe
-            except UnicodeDecodeError as error:
-                last_error = error
-            except csv.Error as error:
-                raise ValueError('The CSV header could not be read.') from error
-        raise ValueError('The CSV encoding is not supported.') from last_error
+    def _safe_upload_name(raw):
+        """Return a display name in any script, without paths or control characters.
+
+        ``secure_filename`` keeps ASCII only, so ``матчи.csv`` became ``csv``
+        and lost its extension. The stored file always gets a generated name;
+        this one is only shown back to the person.
+        """
+        if not isinstance(raw, str):
+            return ''
+        name = unicodedata.normalize('NFC', re.split(r'[\\/]', raw)[-1])
+        name = re.sub(r'[^\w.\- ()]+', '_', name).lstrip('. ').rstrip()
+        return name[:255] if Path(name).stem and Path(name).suffix else ''
+
+
+    def _read_vibedash_table(source, *, nrows=None, max_columns=None):
+        """Read any supported upload and report how it was interpreted."""
+        result = read_table(source, nrows=nrows, max_columns=max_columns)
+        result.report['summary'] = describe_read(result.report)
+        return result
+
+
+    def _load_vibedash_table(source, *, nrows=None, max_columns=None):
+        return _read_vibedash_table(source, nrows=nrows, max_columns=max_columns).frame
 
 
     def _comparison_label(value, field):
@@ -590,7 +599,7 @@ if vibedash_bp:
 
     def _load_comparison_frames(baseline_source, current_source):
         """Apply identical bounded reads to preflight, queue, and worker inputs."""
-        baseline_df = _load_vibedash_csv(
+        baseline_df = _load_vibedash_table(
             baseline_source,
             nrows=min(COMPARISON_MAX_ROWS, COMPARISON_MAX_TOTAL_ROWS) + 1,
             max_columns=COMPARISON_MAX_COLUMNS,
@@ -601,7 +610,7 @@ if vibedash_bp:
         remaining_columns = COMPARISON_MAX_TOTAL_COLUMNS - baseline_df.shape[1]
         if remaining_columns < 1:
             raise PeriodComparisonError('The comparison inputs exceed the combined column limit.')
-        current_df = _load_vibedash_csv(
+        current_df = _load_vibedash_table(
             current_source,
             nrows=min(COMPARISON_MAX_ROWS, remaining_rows) + 1,
             max_columns=min(COMPARISON_MAX_COLUMNS, remaining_columns),
@@ -622,12 +631,12 @@ if vibedash_bp:
     def _comparison_filename(value, field):
         if not isinstance(value, str):
             raise ValueError(f'{field} is invalid.')
-        normalized = secure_filename(value)
+        normalized = _safe_upload_name(value)
         if (
             not normalized
             or normalized != value
             or len(value) > 255
-            or Path(value).suffix.lower() != '.csv'
+            or not is_supported_upload(value)
         ):
             raise ValueError(f'{field} is invalid.')
         return value
@@ -805,42 +814,6 @@ if vibedash_bp:
             _cleanup_comparison_inputs(paths)
 
 
-    def _read_original_csv_header(source, encoding):
-        # ``read(64 KiB)`` is not a valid CSV-header parser: a single quoted
-        # field or a wide header can legally exceed that buffer and would make
-        # the column-limit check see only a partial row. Parse the complete
-        # first record instead, while bounding csv's field parser to the same
-        # request-size contract used by comparison uploads.
-        # ``csv.field_size_limit`` is process-global. Keep the enlarged limit
-        # scoped to this parser call and serialize callers so another request
-        # never observes a permanently changed parser setting.
-        with _CSV_HEADER_LOCK:
-            previous_limit = csv.field_size_limit()
-            csv.field_size_limit(
-                max(previous_limit, COMPARISON_MAX_REQUEST_BYTES)
-            )
-            try:
-                if hasattr(source, 'seek'):
-                    source.seek(0)
-                    if isinstance(source, io.TextIOBase):
-                        try:
-                            return next(csv.reader(source), [])
-                        finally:
-                            source.seek(0)
-                    wrapper = io.TextIOWrapper(source, encoding=encoding, newline='')
-                    try:
-                        return next(csv.reader(wrapper), [])
-                    finally:
-                        # Keep the caller's file object usable; callers seek it
-                        # before handing it to pandas and after this returns.
-                        wrapper.detach()
-                        source.seek(0)
-                with Path(source).open('r', encoding=encoding, newline='') as handle:
-                    return next(csv.reader(handle), [])
-            finally:
-                csv.field_size_limit(previous_limit)
-
-
     def _build_dashboard_session(
         payload, *, run_id=None, scope_id=_UNSET_SCOPE
     ):
@@ -872,13 +845,14 @@ if vibedash_bp:
         if not isinstance(filename, str) or not filename:
             raise ValueError('The dataset name is invalid.')
 
-        source_df = _load_vibedash_csv(upload_path)
+        table = _read_vibedash_table(upload_path)
+        source_df = table.frame
         if source_df.empty:
             raise ValueError('The dataset does not contain any rows.')
         source_row_count = len(source_df)
         max_rows = current_app.config['MAX_ROWS_PREVIEW']
         truncated = source_row_count > max_rows
-        df = source_df.head(max_rows) if truncated else source_df
+        df, row_selection = select_rows(source_df, max_rows)
         readiness = DatasetReadinessEngine(df).assess()
         if not readiness['analysis_allowed']:
             raise DatasetReadinessBlocked(readiness)
@@ -928,6 +902,7 @@ if vibedash_bp:
             semantic_contract_prevalidated=True,
         )
         dashboard_data['readiness'] = readiness
+        dashboard_data['input_report'] = dict(table.report, row_selection=row_selection)
         if task_brief is not None:
             dashboard_data['task_brief'] = task_brief
         if payload.get('analysis_kind') == 'daily_forecast' or payload.get('forecast_task') is not None:
@@ -961,6 +936,8 @@ if vibedash_bp:
             engine_version=current_app.config['SERVICE_VERSION'],
             retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
             semantic_contract=semantic_contract,
+            input_report=table.report,
+            row_selection=row_selection,
         )
         if dashboard_data.get('forecast'):
             audit_manifest['forecast'] = forecast_audit_view(dashboard_data['forecast'])
@@ -1246,6 +1223,7 @@ if vibedash_bp:
                              preset_prompts=preset_prompts,
                              demo_prompt=DEMO_PROMPT,
                              retention_hours=current_app.config['VIBEDASH_RETENTION_HOURS'],
+                             upload_accept=SUPPORTED_ACCEPT,
                              pilot_csrf_token=_decision_csrf_token(),
                              auth_csrf_token=_auth_csrf_token(),
                              account=account,
@@ -2276,10 +2254,10 @@ if vibedash_bp:
             return reply(422, error='Upload one confirmed daily CSV for the forecast review.')
         uploads = request.files.getlist('datafile')
         if len(uploads) != 1 or not uploads[0].filename:
-            return reply(400, error='One CSV file is required.')
+            return reply(400, error='One data file is required.')
         uploaded = uploads[0]
-        if Path(secure_filename(uploaded.filename)).suffix.lower() != '.csv':
-            return reply(400, error='VibeDash currently accepts CSV files only.')
+        if not is_supported_upload(_safe_upload_name(uploaded.filename)):
+            return reply(400, error=UNSUPPORTED_UPLOAD_MESSAGE)
         for field in request.form:
             if len(request.form.getlist(field)) != 1:
                 return reply(422, error='Provide each forecast review field once.')
@@ -2287,7 +2265,7 @@ if vibedash_bp:
         if len(raw) > FORECAST_PLAN_MAX_BYTES:
             return reply(413, error='Forecast review accepts requests up to 16 MiB.')
         try:
-            frame = _load_vibedash_csv(io.BytesIO(raw), nrows=FORECAST_MAX_ROWS + 1,
+            frame = _load_vibedash_table(io.BytesIO(raw), nrows=FORECAST_MAX_ROWS + 1,
                                       max_columns=FORECAST_PLAN_MAX_COLUMNS)
         except Exception:
             return reply(422, error='Use a readable CSV with at most 512 columns for forecast review.')
@@ -2309,15 +2287,16 @@ if vibedash_bp:
 
     @vibedash_bp.post('/readiness')
     def dataset_readiness():
-        """Assess an uploaded CSV without retaining its rows."""
+        """Assess an uploaded table without retaining its rows."""
         uploaded_file = request.files.get('datafile')
         if uploaded_file is None or not uploaded_file.filename:
-            return jsonify({'error': 'A CSV file is required.'}), 400
-        filename = secure_filename(uploaded_file.filename)
-        if not filename or Path(filename).suffix.lower() != '.csv':
-            return jsonify({'error': 'VibeDash currently accepts CSV files only.'}), 400
+            return jsonify({'error': 'A data file is required.'}), 400
+        filename = _safe_upload_name(uploaded_file.filename)
+        if not filename or not is_supported_upload(filename):
+            return jsonify({'error': UNSUPPORTED_UPLOAD_MESSAGE}), 400
         try:
-            dataframe = _load_vibedash_csv(uploaded_file.stream)
+            table = _read_vibedash_table(uploaded_file.stream)
+            dataframe = table.frame
             report = DatasetReadinessEngine(dataframe).assess()
             semantic_contract = (
                 infer_semantic_contract(dataframe)
@@ -2332,7 +2311,7 @@ if vibedash_bp:
                 extra={"event": "vibedash_readiness_rejected"},
             )
             return jsonify({
-                'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'
+                'error': UNREADABLE_UPLOAD_MESSAGE
             }), 422
 
         current_app.logger.info(
@@ -2342,6 +2321,7 @@ if vibedash_bp:
         return jsonify({
             'readiness': report,
             'semantic_contract': semantic_contract,
+            'input': table.report,
         })
 
 
@@ -2407,9 +2387,9 @@ if vibedash_bp:
                     flash('No file selected!', 'error')
                     return redirect(url_for('vibedash.index'))
 
-                filename = secure_filename(file.filename)
-                if not filename or Path(filename).suffix.lower() != '.csv':
-                    flash('VibeDash currently accepts CSV files only.', 'error')
+                filename = _safe_upload_name(file.filename)
+                if not filename or not is_supported_upload(filename):
+                    flash(UNSUPPORTED_UPLOAD_MESSAGE, 'error')
                     return redirect(url_for('vibedash.index'))
                 file.save(upload_path)
             current_app.logger.info(
@@ -2432,7 +2412,13 @@ if vibedash_bp:
             }, scope_id=request_scope)
             if analysis_result['truncated']:
                 max_rows = current_app.config['MAX_ROWS_PREVIEW']
-                flash(f'Data limited to {max_rows:,} rows for preview', 'info')
+                selection = analysis_result['session_data']['dashboard_data']['input_report']['row_selection']
+                chosen = (
+                    f"the most recent rows by “{selection['time_column']}”"
+                    if selection['method'] == 'latest_rows_by_time'
+                    else 'a fixed random sample of rows'
+                )
+                flash(f'Data limited to {max_rows:,} rows for preview: {chosen}.', 'info')
                 current_app.logger.info(
                     "VibeDash dataset truncated to preview limit",
                     extra={"event": "vibedash_dataset_truncated"},
@@ -2556,10 +2542,10 @@ if vibedash_bp:
         else:
             uploaded_file = request.files.get('datafile')
             if uploaded_file is None or not uploaded_file.filename:
-                return jsonify({'error': 'A CSV file is required.'}), 400
-            filename = secure_filename(uploaded_file.filename)
-            if not filename or Path(filename).suffix.lower() != '.csv':
-                return jsonify({'error': 'VibeDash currently accepts CSV files only.'}), 400
+                return jsonify({'error': 'A data file is required.'}), 400
+            filename = _safe_upload_name(uploaded_file.filename)
+            if not filename or not is_supported_upload(filename):
+                return jsonify({'error': UNSUPPORTED_UPLOAD_MESSAGE}), 400
             try:
                 uploaded_file.save(upload_path)
             except Exception:
@@ -2571,12 +2557,12 @@ if vibedash_bp:
                 return jsonify({'error': 'The uploaded file could not be stored.'}), 500
 
         try:
-            dataframe = _load_vibedash_csv(upload_path)
+            dataframe = _load_vibedash_table(upload_path)
             readiness = DatasetReadinessEngine(dataframe).assess()
         except Exception:
             upload_path.unlink(missing_ok=True)
             return jsonify({
-                'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'
+                'error': UNREADABLE_UPLOAD_MESSAGE
             }), 422
         if not readiness['analysis_allowed']:
             upload_path.unlink(missing_ok=True)
@@ -2710,9 +2696,9 @@ if vibedash_bp:
             return jsonify({'error': 'The comparison request exceeds the upload limit.'}), 413
         uploads = [request.files.get(name) for name in ('baseline_file', 'current_file')]
         if any(upload is None or not upload.filename for upload in uploads):
-            return jsonify({'error': 'Two CSV files are required.'}), 400
-        if any(Path(secure_filename(upload.filename)).suffix.lower() != '.csv' for upload in uploads):
-            return jsonify({'error': 'VibeDash currently accepts CSV files only.'}), 400
+            return jsonify({'error': 'Two data files are required.'}), 400
+        if any(not is_supported_upload(_safe_upload_name(upload.filename)) for upload in uploads):
+            return jsonify({'error': UNSUPPORTED_UPLOAD_MESSAGE}), 400
         try:
             before_df, after_df = _load_comparison_frames(uploads[0].stream, uploads[1].stream)
             readiness = {
@@ -2731,7 +2717,7 @@ if vibedash_bp:
         except (SemanticContractError, PeriodComparisonError) as error:
             return jsonify({'error': str(error)}), 422
         except (pd.errors.ParserError, UnicodeDecodeError, ValueError):
-            return jsonify({'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'}), 422
+            return jsonify({'error': UNREADABLE_UPLOAD_MESSAGE}), 422
 
 
     @vibedash_bp.post('/comparisons/jobs')
@@ -2756,7 +2742,7 @@ if vibedash_bp:
             or current_upload is None
             or not current_upload.filename
         ):
-            return jsonify({'error': 'Two CSV files are required.'}), 400
+            return jsonify({'error': 'Two data files are required.'}), 400
 
         try:
             baseline_label = _comparison_label(
@@ -2771,16 +2757,16 @@ if vibedash_bp:
             return jsonify({'error': 'Comparison labels must be distinct, non-empty, and at most 80 characters.'}), 400
 
         filenames = [
-            secure_filename(baseline_upload.filename),
-            secure_filename(current_upload.filename),
+            _safe_upload_name(baseline_upload.filename),
+            _safe_upload_name(current_upload.filename),
         ]
         if any(
             not name
             or len(name) > 255
-            or Path(name).suffix.lower() != '.csv'
+            or not is_supported_upload(name)
             for name in filenames
         ):
-            return jsonify({'error': 'VibeDash currently accepts CSV files only.'}), 400
+            return jsonify({'error': UNSUPPORTED_UPLOAD_MESSAGE}), 400
 
         upload_directory = Path(current_app.config['UPLOAD_FOLDER'])
         upload_directory.mkdir(parents=True, exist_ok=True)
@@ -2860,7 +2846,7 @@ if vibedash_bp:
                 extra={'event': 'vibedash_comparison_input_rejected'},
             )
             return jsonify({
-                'error': 'The CSV could not be read. Check its delimiter, header, and encoding.'
+                'error': UNREADABLE_UPLOAD_MESSAGE
             }), 422
         except Exception:
             current_app.logger.exception(
@@ -3457,16 +3443,7 @@ if vibedash_bp:
             if not file_path.is_file():
                 return jsonify({'error': 'Data file not found'}), 400
             
-            import pandas as pd
-            # Загружаем данные с правильной кодировкой
-            try:
-                df = pd.read_csv(file_path, encoding='utf-8')
-            except UnicodeDecodeError:
-                # Пробуем другие кодировки
-                try:
-                    df = pd.read_csv(file_path, encoding='latin-1')
-                except:
-                    df = pd.read_csv(file_path, encoding='cp1252')
+            df = _load_vibedash_table(file_path)
             
             if df.empty:
                 return jsonify({'error': 'No data available'}), 400

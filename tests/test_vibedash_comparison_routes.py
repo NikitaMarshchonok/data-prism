@@ -8,6 +8,7 @@ from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from src.table_reader import first_record
 
 import web_app
 import pandas as pd
@@ -330,7 +331,7 @@ class VibeDashComparisonRouteTests(unittest.TestCase):
         previous_limit = csv.field_size_limit(12345)
         try:
             self.assertEqual(
-                routes._read_original_csv_header(BytesIO(b'value\n1\n'), 'utf-8'),
+                first_record(b'value\n1\n', 'utf-8', ','),
                 ['value'],
             )
             self.assertEqual(csv.field_size_limit(), 12345)

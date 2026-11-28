@@ -143,7 +143,7 @@
                 <div class="eyebrow"><span></span> Start with one weekly review</div>
                 <h2 id="pilot-guide-heading">What changed in our SaaS metrics—and what should we investigate?</h2>
                 <ol>
-                    <li><strong>Prepare comparable periods.</strong> Use a CSV with one consistent row unit, a date, and numeric business metrics such as revenue, customer count, or an already calculated churn rate. Include plan or region only if available.</li>
+                    <li><strong>Prepare comparable periods.</strong> Use a table with one consistent row unit, a date, and numeric business metrics such as revenue, customer count, or an already calculated churn rate. Include plan or region only if available.</li>
                     <li><strong>Check the evidence.</strong> Review data-quality warnings, trends, and supporting numbers. A relationship is not proof of its cause; metric definitions and denominators still need your review.</li>
                     <li><strong>Choose one next action.</strong> In the result, track a priority with an owner, a success metric, and a review date. Return to Decisions to record what actually happened.</li>
                 </ol>
@@ -152,7 +152,7 @@
             <div class="section-heading">
                 <div>
                     <div class="eyebrow"><span></span> Interactive workspace</div>
-                    <h2>Bring a question and a CSV.</h2>
+                    <h2>Bring a question and a table.</h2>
                 </div>
                 <p>Describe the decision you need to support. Data Prism creates the initial specification, then calculates the evidence locally.</p>
             </div>
@@ -165,9 +165,9 @@
                 <div class="field-card upload-card">
                     <label for="datafile">
                         <span class="field-number">1</span>
-                        <span><strong>Select a CSV file</strong><small>Temporary storage · {{ retention_hours }}-hour retention window.</small></span>
+                        <span><strong>Select a data file</strong><small>CSV, Excel or Parquet · Temporary storage · {{ retention_hours }}-hour retention window.</small></span>
                     </label>
-                    <input type="file" name="datafile" id="datafile" accept=".csv,text/csv" required>
+                    <input type="file" name="datafile" id="datafile" accept="{{ upload_accept }}" required>
                     <p id="file-selected-name">No file selected</p>
                 </div>
 
@@ -249,7 +249,7 @@
                         <label for="forecast-minimum-improvement"><span>Required weighted-error reduction (%)</span><input id="forecast-minimum-improvement" name="forecast_minimum_improvement" type="number" min="0" max="99.999" step="any" value="10" required><small>Compared with the validation-selected baseline. Strict improvement is always required.</small></label>
                         <label for="forecast-maximum-mae"><span>Maximum acceptable MAE (optional)</span><input id="forecast-maximum-mae" name="forecast_maximum_mae" type="number" min="0" step="any"><small>In the target’s stored units per day. Empty means no absolute error limit was supplied.</small></label>
                         <label for="forecast-policy-confirmed"><input id="forecast-policy-confirmed" name="forecast_policy_confirmed" type="checkbox" value="yes" required><span>I set these criteria before evaluation. Meeting them on one historical holdout does not approve operational use.</span></label>
-                        <p id="forecast-guidance">Select a numeric measure target and a time column above. Use one complete observation per day, without gaps. Only past target values are used; all other columns are ignored. First review the data and date plan, then start evaluation. Forecast review accepts CSV requests up to 16 MiB, 5,000 rows and 512 columns.</p>
+                        <p id="forecast-guidance">Select a numeric measure target and a time column above. Use one complete observation per day, without gaps. Only past target values are used; all other columns are ignored. First review the data and date plan, then start evaluation. Forecast review accepts files up to 16 MiB, 5,000 rows and 512 columns.</p>
                         <label for="forecast-available"><input id="forecast-available" name="forecast_available" type="checkbox" value="yes" required><span>I reviewed the issue date, history mode and fixed reporting delay. Targets through origin minus this delay are available and final at each origin. Variable delays, later revisions and historical data vintages are not supported or independently verified.</span></label>
                         <div class="forecast-model-choice">
                             {% if forecast_model_storage_available %}
@@ -261,7 +261,7 @@
                                 <option value="14">Save for 14 days</option>
                                 <option value="30">Save for 30 days</option>
                             </select>
-                            <p id="forecast-model-storage-help">For number or count targets. The saved JSON contains fitted parameters, recent target values and decision settings, not the full CSV. It is available in Account settings until expiry. Your forecast report has a separate retention period.</p>
+                            <p id="forecast-model-storage-help">For number or count targets. The saved JSON contains fitted parameters, recent target values and decision settings, not the full dataset. It is available in Account settings until expiry. Your forecast report has a separate retention period.</p>
                             {% elif account %}
                             <p>Model saving is unavailable on this deployment. You can still evaluate the forecast without saving a model.</p>
                             {% else %}
@@ -310,7 +310,7 @@
                         <div class="eyebrow"><span></span> Separate workflow</div>
                         <h2 id="period-comparison-heading">Compare two periods.</h2>
                     </div>
-                    <p>Run an independent observational comparison against two CSV snapshots. Keep the same row unit and metric definitions in both files; inputs are CSV-only and processing is temporary.</p>
+                    <p>Run an independent observational comparison against two table snapshots (CSV, Excel or Parquet). Keep the same row unit and metric definitions in both files; processing is temporary.</p>
                 </div>
                 <form class="period-comparison-form" id="period-comparison-form" method="POST" action="{{ url_for('vibedash.create_period_comparison_job') }}" enctype="multipart/form-data" novalidate>
                     <input type="hidden" name="csrf_token" value="{{ pilot_csrf_token }}">
@@ -320,9 +320,9 @@
                         <div class="field-card period-file-card">
                             <label for="baseline-file">
                                 <span class="field-number">A</span>
-                                <span><strong>Baseline CSV</strong><small>Earlier period · CSV only</small></span>
+                                <span><strong>Baseline file</strong><small>Earlier period</small></span>
                             </label>
-                            <input type="file" name="baseline_file" id="baseline-file" accept=".csv,text/csv" required>
+                            <input type="file" name="baseline_file" id="baseline-file" accept="{{ upload_accept }}" required>
                             <p class="period-file-name" id="baseline-file-name">No file selected</p>
                             <label class="period-label" for="baseline-label">Period label</label>
                             <input class="text-input" type="text" name="baseline_label" id="baseline-label" value="Baseline" maxlength="80" required>
@@ -330,9 +330,9 @@
                         <div class="field-card period-file-card">
                             <label for="current-file">
                                 <span class="field-number">B</span>
-                                <span><strong>Current CSV</strong><small>Later period · CSV only</small></span>
+                                <span><strong>Current file</strong><small>Later period</small></span>
                             </label>
-                            <input type="file" name="current_file" id="current-file" accept=".csv,text/csv" required>
+                            <input type="file" name="current_file" id="current-file" accept="{{ upload_accept }}" required>
                             <p class="period-file-name" id="current-file-name">No file selected</p>
                             <label class="period-label" for="current-label">Period label</label>
                             <input class="text-input" type="text" name="current_label" id="current-label" value="Current" maxlength="80" required>
@@ -348,7 +348,7 @@
                             <span>I reviewed both files: each row represents the same unit of observation, and shared metrics use matching definitions, scales, and currency.</span>
                         </label>
                     </fieldset>
-                    <p class="period-comparison-note">Use the same row unit and metric definitions in both files. This is an independent observational comparison, not a causal estimate. Source CSVs are removed after worker processing; the aggregate report and session are retained for up to {{ retention_hours }} hours.</p>
+                    <p class="period-comparison-note">Use the same row unit and metric definitions in both files. This is an independent observational comparison, not a causal estimate. Source files are removed after worker processing; the aggregate report and session are retained for up to {{ retention_hours }} hours.</p>
                     <div class="period-comparison-actions">
                         <button class="button button-primary" id="period-comparison-submit" type="submit"><span id="period-comparison-submit-label">Review both files</span> <span aria-hidden="true">→</span></button>
                         <div class="period-comparison-status" id="period-comparison-status" role="status" aria-live="polite" hidden></div>
@@ -820,7 +820,18 @@
             readinessChecks.append(article);
         }
 
-        function renderReadiness(report) {
+        function addInputReport(input) {
+            if (!input || !input.summary) return;
+            const warnings = Array.isArray(input.warnings) ? input.warnings : [];
+            addReadinessCheck({
+                status: warnings.length ? 'warning' : 'info',
+                title: 'How the file was read',
+                description: [input.summary, ...warnings].join(' '),
+                recommendation: 'check that the column names and numbers look right; if not, save the file as CSV UTF-8 and upload it again.',
+            });
+        }
+
+        function renderReadiness(report, input) {
             readinessState = report.analysis_allowed ? 'allowed' : 'blocked';
             readinessPanel.hidden = false;
             readinessPanel.className = `readiness-panel status-${report.status}`;
@@ -828,6 +839,7 @@
             readinessScore.textContent = `${report.score}/100`;
             readinessSummary.textContent = report.summary;
             readinessChecks.replaceChildren();
+            addInputReport(input);
             report.checks
                 .filter((check) => check.status !== 'passed')
                 .forEach(addReadinessCheck);
@@ -875,7 +887,7 @@
                 if (!response.ok) {
                     throw new Error(payload.error || 'The dataset preflight could not be completed.');
                 }
-                renderReadiness(payload.readiness);
+                renderReadiness(payload.readiness, payload.input);
                 if (payload.readiness.analysis_allowed) {
                     renderSemanticContract(payload.semantic_contract);
                 }
@@ -1178,7 +1190,7 @@
             comparisonError.hidden = true;
             comparisonError.textContent = '';
             if (!baselineFile || !currentFile) {
-                comparisonError.textContent = 'Select both a baseline CSV and a current CSV.';
+                comparisonError.textContent = 'Select both a baseline file and a current file.';
                 comparisonError.hidden = false;
                 return;
             }
@@ -1197,7 +1209,7 @@
             comparisonSubmit.disabled = true;
             comparisonSubmitLabel.textContent = comparisonProposal ? 'Starting comparison…' : 'Checking both files…';
             comparisonStatus.hidden = false;
-            comparisonStatus.textContent = 'Uploading both CSVs and checking the comparison request…';
+            comparisonStatus.textContent = 'Uploading both files and checking the comparison request…';
             let queued = false;
             try {
                 if (!comparisonProposal) {
