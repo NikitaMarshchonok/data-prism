@@ -111,7 +111,7 @@ class ForecastPlanRouteTests(unittest.TestCase):
         submit.assert_not_called()
 
     def test_routing_and_csrf_are_checked_before_csv_read(self):
-        with web_app.app.test_client() as client, patch('vibedash.routes._load_vibedash_csv') as read:
+        with web_app.app.test_client() as client, patch('vibedash.routes._load_vibedash_table') as read:
             for changes, code in [({'csrf_token': ''}, 400), ({'task_type': 'classification'}, 422),
                                   ({'task_type': 'descriptive_analysis', 'analysis_mode': 'evidence'}, 422),
                                   ({'demo_dataset': 'saas_growth'}, 422)]:

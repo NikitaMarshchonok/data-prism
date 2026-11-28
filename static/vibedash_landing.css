@@ -249,6 +249,7 @@ textarea::placeholder { color: #61736d; }
 .readiness-check > div { display: flex; align-items: center; gap: 10px; }
 .readiness-check span { color: var(--warm); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .readiness-check-blocked span { color: #f0a7a7; }
+.readiness-check-info span { color: var(--accent); }
 .readiness-check strong { font: 600 13px var(--display); }
 .readiness-check p { margin: 10px 0 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .readiness-check small { color: #c1d2cc; font-size: 11px; line-height: 1.45; }

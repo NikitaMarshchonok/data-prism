@@ -78,6 +78,15 @@ def infer_column_unit(
     return _inferred_unit(dataframe, column, profile)
 
 
+def _near_unique_category(role: str, profile: Mapping[str, Any]) -> bool:
+    """A label that is different on (almost) every row, such as a sample or player name."""
+    return (
+        role == "category"
+        and float(profile.get("unique_ratio", 0.0)) >= 0.95
+        and int(profile.get("non_missing_count", 0)) >= 20
+    )
+
+
 def infer_semantic_contract(
     dataframe: pd.DataFrame,
     *,
@@ -105,7 +114,9 @@ def infer_semantic_contract(
             "unit": _inferred_unit(dataframe, column, profile),
             "is_target": False,
             "is_time": is_time,
-            "exclude_from_predictors": role in {"identifier", "temporal"},
+            "exclude_from_predictors": (
+                role in {"identifier", "temporal"} or _near_unique_category(role, profile)
+            ),
         })
     proposal = {
         "contract": SEMANTIC_CONTRACT_VERSION,
@@ -286,12 +297,7 @@ def validate_semantic_contract(
             )
         if role == "temporal" and profile.get("role") != "temporal":
             raise SemanticContractError(f"Column '{name}' is not compatible with the temporal role.")
-        if (
-            role == "category"
-            and float(profile.get("unique_ratio", 0.0)) >= 0.95
-            and int(profile.get("non_missing_count", 0)) >= 20
-            and not item["exclude_from_predictors"]
-        ):
+        if _near_unique_category(role, profile) and not item["exclude_from_predictors"]:
             raise SemanticContractError(
                 f"Near-unique category '{name}' must be excluded from predictive features."
             )

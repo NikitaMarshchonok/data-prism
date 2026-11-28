@@ -56,6 +56,8 @@ def build_audit_manifest(
     retention_hours: int,
     semantic_contract: Mapping[str, Any] | None = None,
     generated_at: datetime | None = None,
+    input_report: Mapping[str, Any] | None = None,
+    row_selection: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return reproducibility metadata without including source row values."""
     if source_row_count < len(dataframe):
@@ -107,6 +109,8 @@ def build_audit_manifest(
             "truncated": bool(truncated),
             "schema_preview": schema_preview,
             "schema_preview_truncated": len(schema) > len(schema_preview),
+            "read": _input_read_view(input_report),
+            "row_selection": _row_selection_view(row_selection),
         },
         "request": {
             "prompt": prompt,
@@ -309,3 +313,38 @@ def build_period_comparison_manifest(
     # infinity, or an unserializable object in the audit record.
     json.dumps(manifest, ensure_ascii=False, sort_keys=True, allow_nan=False)
     return manifest
+
+
+def _input_read_view(report: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """How the upload was parsed: format decisions only, never cell values."""
+    if not isinstance(report, Mapping):
+        return None
+    view: dict[str, Any] = {}
+    for key in ("format", "encoding", "encoding_detection", "delimiter", "sheet"):
+        value = report.get(key)
+        if isinstance(value, str):
+            view[key] = value[:120]
+    for key in ("header_row", "sheet_count"):
+        value = report.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            view[key] = value
+    formats = report.get("number_formats")
+    view["converted_number_columns"] = len(formats) if isinstance(formats, Mapping) else 0
+    warnings = report.get("warnings")
+    view["warning_count"] = len(warnings) if isinstance(warnings, list) else 0
+    return view
+
+
+def _row_selection_view(selection: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(selection, Mapping):
+        return None
+    view: dict[str, Any] = {}
+    for key in ("method", "time_column", "kept_from", "kept_to"):
+        value = selection.get(key)
+        if isinstance(value, str):
+            view[key] = value[:255]
+    for key in ("seed", "source_rows", "analyzed_rows"):
+        value = selection.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            view[key] = value
+    return view
